@@ -221,13 +221,16 @@ MODULE_INFO = ModuleInfo(
                 "Copy files or folders into a destination folder; a folder is copied with "
                 "everything in it, and the sources stay in place. To move instead, use "
                 "move_files. `dest_folder` must already exist; it isn't created. With "
-                "`overwrite=false` (default), items already at the destination are skipped and "
+                "`overwrite=false` (default), items whose name is already at the destination are "
+                "skipped and "
                 "listed, and the rest are copied. With `overwrite=true`, two sources that would "
                 "replace each other are refused, and a replaced file may not be in the recycle "
                 "bin. If any source is missing, nothing is copied. A long copy keeps running on "
                 "the NAS and returns a handle for file_task. "
-                "While a running task is landing the same name there, the call is refused if "
-                "either one replaces."
+                "While this user's running task is landing the same name there, the call is "
+                "refused if either one replaces. That can miss another account's task or a start "
+                "at the same moment from another server process, and is skipped if DSM's task "
+                "list fails; overwrite=false never replaces."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -238,15 +241,18 @@ MODULE_INFO = ModuleInfo(
                 "Move files or folders into a destination folder; a folder moves with everything "
                 "in it, and the sources are removed. To keep the sources, use copy_files. "
                 "`dest_folder` must already exist; it isn't created. With `overwrite=false` "
-                "(default), items already at the destination are skipped, listed and left at the "
+                "(default), items whose name is already at the destination are skipped, listed and "
+                "left at the "
                 "source. With `overwrite=true`, two sources that would replace each other are "
                 "refused, and a replaced file may not be in the recycle bin. If any source is "
                 "missing, nothing is moved. A whole shared folder "
                 "(`/video`), recycle bin or user's home folder (`/homes/<user>`) is refused as a "
                 "source: move its items by path. A long move keeps "
                 "running on the NAS and returns a handle for file_task. "
-                "While a running task is landing the same name there, the call is refused if "
-                "either one replaces."
+                "While this user's running task is landing the same name there, the call is "
+                "refused if either one replaces. That can miss another account's task or a start "
+                "at the same moment from another server process, and is skipped if DSM's task "
+                "list fails; overwrite=false never replaces."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -286,13 +292,15 @@ MODULE_INFO = ModuleInfo(
                 "what's there first with list_recycle_bin: every path must be in that share's "
                 "bin, or nothing is restored; an empty item, naming the whole bin, is refused. "
                 "Without `dest_folder`, each item goes back to its "
-                "original folder, which is re-created if it's gone. An item already at the "
-                "destination is skipped and stays in the bin, unless `overwrite=true`, which "
-                "replaces the existing one, which may then not be in the recycle bin; two items "
-                "that would replace each other are refused. A long restore keeps running on the "
-                "NAS and returns a handle for file_task. "
-                "While a running task is landing the same name there, the call is refused if "
-                "either one replaces."
+                "original folder, which is re-created if it's gone. An item whose name is already "
+                "at the destination is skipped and stays in the bin, unless `overwrite=true`, "
+                "which replaces the existing one, which may then not be in the recycle bin; two "
+                "items that would replace each other are refused. A long restore keeps running on "
+                "the NAS and returns a handle for file_task. "
+                "While this user's running task is landing the same name there, the call is "
+                "refused if either one replaces. That can miss another account's task or a start "
+                "at the same moment from another server process, and is skipped if DSM's task "
+                "list fails; overwrite=false never replaces."
             ),
             permission_tier=PermissionTier.WRITE,
             annotations=_ANNO_DESTRUCTIVE,
@@ -300,7 +308,7 @@ MODULE_INFO = ModuleInfo(
         ToolInfo(
             name="file_task",
             description=(
-                "Follow up on a delete, copy, move or restore that is still running on the "
+                "Follow up on a delete, copy, move or restore handed off to the "
                 "NAS. Those tools hand off long operations and return a handle such as "
                 "`delete:FileStation_…`, because the NAS keeps working after the reply. "
                 'With a handle: `action="status"` shows progress, or the final result if DSM '

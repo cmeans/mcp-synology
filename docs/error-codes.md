@@ -41,7 +41,10 @@ Common causes:
   for example because the trusted device was removed in **Personal → Security →
   Sign-in Activity**.
 - The account is disabled in DSM.
-- The IP has been auto-blocked after too many failed attempts.
+- The IP has been auto-blocked after too many failed attempts (DSM's 407, for every
+  account from that address).
+- The password has expired (408, 409) or must be changed (410). DSM says so only to
+  the right password; a wrong one gets 400.
 
 Fix:
 
@@ -54,14 +57,22 @@ Fix:
    token in the keyring so subsequent runs do not need the OTP code. A `device_id`
    set in the environment or the config file overrides the keyring: remove it there
    first (the error's suggestion says where it comes from).
-3. If the IP is auto-blocked, sign in to DSM directly and clear the entry at
+3. If the IP is auto-blocked, sign in to DSM from another address and clear the entry at
    **Control Panel → Security → Account → Auto Block → Allow / Block List**.
-4. Verify the account has access to FileStation: **Control Panel → User & Group
+4. If the password has expired or must be changed, sign in to DSM in a browser to
+   change it, and store the new one with `mcp-synology setup --config <your config file>`. With 408, DSM doesn't
+   let the account do that: an administrator sets a new one, or allows a reset after
+   expiry in **Control Panel → User & Group → Advanced → Password Settings**, and the
+   account's user can then sign in to change it. The policy covers administrators too: if
+   none can sign in, see "How to reset my Synology NAS" in Synology's Knowledge Center.
+5. Verify the account has access to FileStation: **Control Panel → User & Group
    → [account] → Edit → Applications**. The account must be allowed to use
    File Station.
 
 When DSM refuses the credentials, the server doesn't send them again: every later
-tool call gets the same error, so a model's tool retries can't trip DSM's Auto Block. `setup` and
+tool call gets the same error, so a model's tool retries can't trip DSM's Auto Block.
+(An expired or must-change password doesn't count toward it, but DSM's answer won't change on
+its own.) `setup` and
 `check` do send each attempt; `setup` says so.
 The server tries again once the credentials change or it restarts. `mcp-synology
 setup` stores new ones in the keyring, and the running server picks them up; a
@@ -69,7 +80,10 @@ value set in `SYNOLOGY_USERNAME`, `SYNOLOGY_PASSWORD` or `SYNOLOGY_DEVICE_ID`, o
 in the config file's `auth:` section, overrides the keyring and must be changed
 there (then restart the server). The error's suggestion names where the refused
 credential comes from: the password for a wrong one (400), the device token for a
-2FA refusal (403, 404, 406); a disabled account (401) needs an administrator.
+2FA refusal (403, 404, 406), an expired or must-change password (408, 409, 410); a
+disabled account (401) needs an administrator. A blocked IP address (407) isn't
+remembered, since clearing the block, or its expiry where DSM is set to expire
+blocks, ends it. It arrives as [`dsm_error`](#dsm_error).
 
 `auth_failed` is **not** retryable. mcp-synology will not auto-retry on this
 code — fix the underlying credential or 2FA state before re-running.
@@ -277,9 +291,12 @@ Common causes:
   the same name inside them), and a replaced file may not be in the recycle bin. Use different
   destinations or rename one first. To merge two folders without replacing anything, use
   `overwrite=false`: items already there are skipped and listed. Separate calls with
-  `overwrite=true` don't avoid this: a call is refused too while another call's task is
-  landing the same name there (naming its handle), but what a finished call put there can't
-  be known.
+  `overwrite=true` don't avoid this: a call is refused too while this user's running task is
+  landing the same name there (naming its handle). Parallel calls through one server process
+  take turns, and the second finds what the first started even if it has already finished. That check isn't a guarantee: what a finished
+  call put there can't be known, another account's task isn't listed, a start at the same moment
+  from a second server process can get through, and a failed task list skips the check (logged as
+  a warning). `overwrite=false` is the safe route: it never replaces.
 - `delete_files` on a whole shared folder (`/video`): a shared folder isn't deleted or
   emptied this way (#451; emptying one with the user's confirmation is #484). Delete a
   shared folder's items by path, or the shared folder itself in DSM's Control Panel.
@@ -445,10 +462,20 @@ runs out (`delete_timeout` or `copy_move_timeout`, default 30 s, capped at
 returns a normal result: "Still deleting on the NAS: … This operation keeps
 running after this reply", with the progress and a handle such as
 `delete:FileStation_179219158016597225`. In a multi-path call, the paths after
-it are listed as "Not started". Follow up with `file_task`: `action="status"`
+it are listed as "Not started", and any DSM skipped before it get their own line:
+they aren't all done. Follow up with `file_task`: `action="status"`
 shows progress or the final result, `action="stop"` stops it (it may then be
 partly done), and no handle lists the running operations. Only a canceled
 call (the user, or a client's own timeout) or a DSM error stops the task.
+
+DSM's `599` (no such task) on a status read isn't such an error (#521). The
+status is read up to three times in all, fewer if a read returns after about
+10 s or the wait ends. After that a delete whose path is gone
+counts as done. Otherwise the reply says how it ended isn't known, and gives a
+handle: `file_task` reads it again, and listing the path, or for a copy the
+destination and for a move or restore the source and destination too, shows
+what's there, though a folder there may be only partly done. `file_task` with no handle lists what's running. A `401` from a
+stop is File Station's "no such task", not an account problem.
 
 The same goes for a NAS that stops answering status requests during the wait
 (a network timeout or dropped connection), that answers one with an HTTP error
@@ -463,9 +490,10 @@ with the handle.
 Check on it with `file_task` rather than starting it again.
 
 `file_task` answers a handle DSM no longer knows with a normal reply, not an
-error: the final result if this server remembers it, otherwise "No running
-task with this handle. It finished, was stopped, or was started by a
-different DSM user. List the path to see what's left." DSM forgets a finished
+error: the final result if this server remembers it, otherwise "DSM has no
+task with this handle: it may have finished, failed, been stopped or still be
+running, or have been started by a different DSM user. Call file_task with no
+handle to see what's running. List the path to see what's left." DSM forgets a finished
 task after its final status has been read once, and never shows one user's
 tasks to another.
 
@@ -497,8 +525,13 @@ Common causes:
   Other tools name the DSM call, e.g. "DSM didn't answer
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
+- A path's start in a multi-path `copy_files`, `move_files` or
+  `restore_from_recycle_bin` got no answer: the message says what was done, that
+  this one may have started, what DSM skipped and what wasn't started, so check
+  before running it again. (Alone, it's the usual timeout or connection error.)
 - `file_task` didn't get an answer to its status or stop request for a
-  handle. For the status read, the message says nothing was stopped; for the
+  handle. For the status read, the message says nothing was stopped, or after a
+  stop DSM refused, that it wasn't accepted; for the
   stop, that it may or may not have taken effect. Stop requests wait up to
   90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
   only after about 60 s, although the stop takes effect at once.
@@ -545,8 +578,9 @@ Otherwise:
    `file_task` instead.
 6. `timeout` is marked `retryable=true`, but only retry after addressing the
    root cause. Blind retry on an overloaded NAS makes the situation worse.
-   The exception is a `create_download` timeout, which is marked
-   `retryable=false` because DSM may already have created the task.
+   The exceptions are marked `retryable=false`, because DSM may already have
+   started the work: a `create_download` timeout, and a path's start in a
+   multi-path copy, move, restore or delete.
 
 ## unavailable
 
@@ -556,7 +590,9 @@ HTTP error status, or the answer wasn't a DSM reply at all.**
 
 The connection case (the message starts "Can't reach the NAS at …") means no
 DSM answer arrived at all: the connection was refused or the host couldn't be
-resolved or routed to. See **Can't reach the NAS?** under Fix. If the
+resolved or routed to. See **Can't reach the NAS?** under Fix. In a multi-path
+copy, move or restore, a start the connection dropped is listed under
+[`timeout`](#timeout), with what was done and what wasn't started. If the
 message starts "The NAS at … accepted the connection but dropped it" instead,
 the NAS answered and then closed the connection: it's reachable but busy or
 restarting, so retry shortly (#254).
@@ -582,7 +618,7 @@ file as `text/html` or `application/xhtml+xml`, so such a page isn't saved, and
 nothing is written; neither is JSON that isn't DSM's error envelope (#292).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
-read failed) or "… The stop may or may not have taken effect." (the stop
+read failed; "… The stop wasn't accepted." after a stop DSM refused) or "… The stop may or may not have taken effect." (the stop
 request itself failed), with `retryable` set as above: a 4xx isn't retryable.
 `photo_task` reports either case as "Photo task failed for `photos:<id>`: …",
 ending "The stop was requested; its status couldn't be read." after a stop that
@@ -672,7 +708,9 @@ Fix:
 **A DSM error that does not map to one of the specific codes above.**
 
 Typically a background-task failure with a non-standard error structure, or a
-DSM error code mcp-synology does not recognize yet.
+DSM error code mcp-synology does not recognize yet. A login answered 407 arrives
+this way too: this computer's IP address is blocked, as under
+[`auth_failed`](#auth_failed).
 
 Fix:
 

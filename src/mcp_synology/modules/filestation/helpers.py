@@ -15,7 +15,7 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import ErrorCode, SynologyError
+from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import error_response
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
@@ -886,7 +886,7 @@ async def probe_recycle_status(client: DsmClient, share_name: str) -> tuple[bool
             params={"folder_path": f"/{share_name}/#recycle", "limit": 1},
         )
     except SynologyError as e:
-        if e.code == 408:
+        if e.code == 408 and not isinstance(e, AuthenticationError):
             setting = await _share_recycle_setting(client, share_name)
             if setting is not None:
                 logger.debug(
@@ -977,7 +977,7 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
     DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
     than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
     path proves nothing either way, so that path isn't reported. A failed request raises
-    ``SynologyError`` for the caller to map.
+    ``SynologyError``, or a transport error with no answer, for the caller to map.
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     missing: list[tuple[str, int]] = []
@@ -1013,7 +1013,8 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     """Return ``{path: isdir}`` for each path whose type ``getinfo`` reports.
 
     A path DSM gives no ``isdir`` for (missing, or an unexpected shape) is left out. A
-    failed request raises ``SynologyError`` for the caller to handle.
+    failed request raises ``SynologyError``, or a transport error with no answer, for the caller
+    to handle.
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     kinds: dict[str, bool] = {}

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
 import json
 import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
+import anyio
 import httpx
 import pytest
 import respx
@@ -20,7 +23,7 @@ from mcp_synology.modules.filestation.operations import (
     rename,
     restore_from_recycle_bin,
 )
-from mcp_synology.modules.filestation.tasks import Handle, TaskRecords
+from mcp_synology.modules.filestation.tasks import Handle, HandleKind, TaskRecords
 from tests.conftest import BASE_URL
 
 if TYPE_CHECKING:
@@ -1782,8 +1785,8 @@ class TestCopyMoveSkippedItems:
         result = await copy_files(mock_client, paths=["/w/a"], dest_folder="/w/dst")
         # #189: a skipped file was skipped, full stop; folder wording would only confuse.
         assert result.startswith(
-            "[!] Copied 0 of 1 item(s) to /w/dst/; 1 skipped (already at the destination, "
-            "overwrite=false):"
+            "[!] Copied 0 of 1 item(s) to /w/dst/; 1 skipped (that name is already at the "
+            "destination, overwrite=false):"
         ), result
         assert "Skipped:\n  /w/a" in result
         assert "in whole or in part" not in result
@@ -1803,7 +1806,7 @@ class TestCopyMoveSkippedItems:
         # a skipped folder's children that weren't at the destination.
         assert result.startswith(
             "[!] Copied 0 of 1 item(s) in full to /w/dst/; 1 folder with items skipped "
-            "(already at the destination, overwrite=false):"
+            "(that name is already at the destination, overwrite=false):"
         ), result
         # Not "the rest were copied": DSM doesn't say whether anything was left to copy.
         assert (
@@ -1870,7 +1873,7 @@ class TestCopyMoveSkippedItems:
         )
         assert result.startswith(
             "[!] Copied 1 of 5 item(s) in full to /x/; 2 skipped, 2 folders with items skipped "
-            "(already at the destination, overwrite=false):"
+            "(that name is already at the destination, overwrite=false):"
         ), result
         assert "Copied:\n  c\n" in result
         assert "Skipped:\n  /w/a\n  /w/b\n" in result
@@ -1966,7 +1969,7 @@ class TestCopyMoveSkippedItems:
         # so the two never disagree (QA R1 on #190).
         assert result.startswith(
             "[!] Restored 1 of 2 item(s) from /video recycle bin; 1 with skips "
-            "(already at the destination, overwrite=false; details below):"
+            "(that name is already at the destination, overwrite=false; details below):"
         ), result
         assert "Skipped:\n  /video/#recycle/S2/b.mkv" in result
         assert "in whole or in part" not in result
@@ -2234,7 +2237,7 @@ class TestStallHandoff:
             if params.get("method") == "start":
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "T1"}})
             if params.get("method") == "status":
-                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+                return httpx.Response(200, json={"success": False, "error": {"code": 400}})
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
@@ -2727,12 +2730,12 @@ class TestCopyMoveHandoff:
         records = TaskRecords()
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
-        real = operations._copy_move_one_path
+        real = operations._finish_copy_move
 
-        async def skips_a(client: DsmClient, path: str, **kwargs: Any) -> Any:
-            return (0, True) if path == "/s/a" else await real(client, path, **kwargs)
+        async def skips_a(client: DsmClient, path: str, taskid: str, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else await real(client, path, taskid, **kwargs)
 
-        monkeypatch.setattr(operations, "_copy_move_one_path", skips_a)
+        monkeypatch.setattr(operations, "_finish_copy_move", skips_a)
         await copy_files(
             mock_client, paths=["/s/a", "/s/b"], dest_folder="/s/dst", timeout=1, records=records
         )
@@ -2761,14 +2764,14 @@ class TestCopyMoveHandoff:
         """Pre-QA on #575: the warning spoke of a folder this task never reached."""
         from mcp_synology.modules.filestation import operations
 
-        async def running(_client: DsmClient, *, path: str, **_kwargs: Any) -> Any:
+        def running(_tasks: Any, *, path: str, **_kwargs: Any) -> Any:
             if path != "/s/b":
                 return None
             return {"taskid": "T", "params": {"dest_folder_path": "/s/OTHER", "overwrite": False}}
 
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
-        monkeypatch.setattr(operations, "running_task", running)
+        monkeypatch.setattr(operations, "find_running", running)
         records = TaskRecords()
         result = await copy_files(
             mock_client,
@@ -2790,12 +2793,12 @@ class TestCopyMoveHandoff:
 
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
-        real = operations._copy_move_one_path
+        real = operations._finish_copy_move
 
-        async def skips_a(client: DsmClient, path: str, **kwargs: Any) -> Any:
-            return (0, True) if path == "/s/a" else await real(client, path, **kwargs)
+        async def skips_a(client: DsmClient, path: str, taskid: str, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else await real(client, path, taskid, **kwargs)
 
-        monkeypatch.setattr(operations, "_copy_move_one_path", skips_a)
+        monkeypatch.setattr(operations, "_finish_copy_move", skips_a)
         result = await copy_files(
             mock_client, paths=["/s/a", "/s/b", "/s/x/a"], dest_folder="/s/dst", timeout=1
         )
@@ -3557,7 +3560,7 @@ class TestDeleteFailurePartway:
         self, mock_client: DsmClient, fail_on: int
     ) -> None:
         """A DSM error on a status request names no path either (QA round 5 on #480)."""
-        self._route(fail_on, status_code=599)
+        self._route(fail_on, status_code=400)
         paths = ["/video/a", "/video/b", "/video/c"]
         with pytest.raises(ToolError) as exc:
             await delete_files(mock_client, paths=paths, timeout=5)
@@ -3703,6 +3706,169 @@ class TestDeleteFailurePartway:
         error = ToolError("plain text")
         assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
         assert _with_progress_so_far(error, "/video/x", [], []) is error
+
+
+@pytest.fixture
+def no_poll_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    import mcp_synology.modules.filestation.tasks as tasks
+
+    monkeypatch.setattr(tasks.asyncio, "sleep", AsyncMock())
+
+
+def _skipping_dsm(lookup: Any) -> Any:
+    """Each copy finishes, /s/b's with a skip, and the lookup behind its report answers this."""
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        method = params.get("method")
+        if method == "start":
+            started.append(params["path"])
+            taskid = f"T_{params['path'].rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status: dict[str, Any] = {"finished": True, "path": "/s/x", "processed_size": 1}
+            if "T_b" in params["taskid"]:
+                status["skipstatus"] = {"status": "all"}
+            return httpx.Response(200, json={"success": True, "data": status})
+        if method == "getinfo" and started:
+            if isinstance(lookup, Exception):
+                raise lookup
+            return lookup
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        httpx.ReadTimeout(""),
+        httpx.ConnectError(""),
+        httpx.Response(502, text="bad gateway"),
+        httpx.Response(200, text="<html>"),
+        httpx.Response(200, json={"success": False, "error": {"code": 408}}),
+        httpx.Response(200, json={"success": True, "data": {"files": ["x"]}}),
+    ],
+    ids=["timeout", "connection", "proxy", "not DSM", "DSM error", "odd shape"],
+)
+async def test_a_failed_lookup_keeps_a_finished_copys_result(
+    mock_client: DsmClient,
+    no_poll_wait: None,
+    lookup: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#588: finished work was reported as a failed call."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skipping_dsm(lookup))
+    result = await copy_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    assert "skipped in whole or in part" in result
+    assert "Couldn't read the type of skipped sources ['/s/b']" in caplog.text
+    if isinstance(lookup, httpx.ReadTimeout):
+        assert "ReadTimeout (DSM code None)" in caplog.text
+    if isinstance(lookup, httpx.Response) and b"408" in lookup.content:
+        assert "(DSM code 408)" in caplog.text
+
+
+@respx.mock
+async def test_file_task_keeps_a_finished_copys_result_when_the_lookup_fails(
+    mock_client: DsmClient,
+) -> None:
+    """#588: the same lookup, from a follow-up."""
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("copy", "T_b")
+    records.add(TaskRecord(handle=handle, paths=["/s/b"], dest="/d"))
+    finished = {"finished": True, "path": "/s/b", "skipstatus": 1}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": finished})
+        raise httpx.ReadTimeout("")
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "skipped in whole or in part" in text
+
+
+def _unanswered_start(calls: list[dict[str, str]], at: str, error: Exception | None = None) -> Any:
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        method = params.get("method")
+        if method == "start":
+            if params["path"] == at:
+                raise error or httpx.ReadTimeout("")
+            taskid = f"T_{params['path'].rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status = {"finished": True, "path": "/s/x", "processed_size": 1}
+            return httpx.Response(200, json={"success": True, "data": status})
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [(httpx.ReadTimeout(""), "timeout"), (httpx.ConnectError(""), "unavailable")],
+    ids=["timeout", "connection"],
+)
+async def test_an_unanswered_start_partway_says_what_happened(
+    mock_client: DsmClient, no_poll_wait: None, error: Exception, code: str
+) -> None:
+    """#588: a raw timeout left out what moved, what may have started and what didn't."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_unanswered_start(calls, "/s/b", error)
+    )
+    with pytest.raises(ToolError) as refused:
+        await move_files(mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    assert body["code"] == code
+    assert body["retryable"] is False
+    assert body["param"] == "paths"
+    assert body["value"] == "/s/b"
+    assert body["suggestion"] == (
+        "Check with list_files, or file_task with no handle, before running it again, and leave "
+        "out what's already done."
+    )
+    assert body["message"].startswith(
+        f"Move files failed: DSM didn't answer for /s/b ({type(error).__name__}"
+    )
+    assert body["message"].endswith(
+        "its move may have started. Already moved before this failure: /s/a. Not started: /s/c."
+    )
+    assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/a", "/s/b"]
+
+
+@respx.mock
+async def test_an_unanswered_start_on_the_last_path_names_what_was_done(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/b"))
+    with pytest.raises(ToolError, match=r"Already copied before this failure: /s/a\.") as refused:
+        await copy_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    assert "Not started" not in str(refused.value)
+
+
+@respx.mock
+async def test_an_unanswered_only_start_stays_the_servers_timeout(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/a"))
+    with pytest.raises(httpx.ReadTimeout):
+        await copy_files(mock_client, paths=["/s/a"], dest_folder="/d")
 
 
 async def _report_for(
@@ -3853,6 +4019,890 @@ async def test_skip_report_escapes_the_paths_in_its_warning(
     assert warning.count("\\u3164") == 2
 
 
+@respx.mock
+async def test_an_unanswered_first_start_has_nothing_to_leave_out(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/a"))
+    with pytest.raises(ToolError) as refused:
+        await copy_files(mock_client, paths=["/s/a", "/s/b "], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    assert body["message"].endswith(f"Not started: {'/s/b '!r}.")
+    assert body["suggestion"].endswith("before running it again.")
+
+
+def _restoring_dsm(*, fail_start: str | None = None, fail_check: str | None = None) -> Any:
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        method = params.get("method")
+        path = params.get("path", "")
+        if method == "start":
+            if path == fail_start:
+                raise httpx.ReadTimeout("")
+            started.append(path)
+            taskid = f"T_{path.rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            status = {"finished": True, "path": "/s/x", "processed_size": 1}
+            return httpx.Response(200, json={"success": True, "data": status})
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if path == fail_check and started:
+            raise httpx.ReadTimeout("")
+        data = {"files": [{"path": path, "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+async def test_a_restores_later_destination_check_with_no_answer_goes_on(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """#588: a restore to several places re-checks each destination after finishing items."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_restoring_dsm(fail_check="/s/y"))
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    assert "/s/x" in result
+    assert "/s/y" in result
+
+
+@respx.mock
+async def test_a_restores_unanswered_start_lists_a_later_item(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_restoring_dsm(fail_start="/s/#recycle/y/b")
+    )
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b", "z/c"])
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "Already restored before this failure: /s/#recycle/x/a." in message
+    assert message.endswith("Not started: /s/#recycle/z/c.")
+
+
+@respx.mock
+async def test_an_unanswered_start_shows_an_odd_path_safely(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    odd = "/s/b\u200bx"
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, odd))
+    with pytest.raises(ToolError) as refused:
+        await copy_files(mock_client, paths=["/s/a", odd], dest_folder="/d")
+    assert f"DSM didn't answer for {odd!r} (" in json.loads(str(refused.value))["error"]["message"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"success": True, "data": [1]},
+        {"success": True, "data": {"files": [1]}},
+        {"success": True, "data": {"files": [{"code": "x"}]}},
+    ],
+    ids=["list", "item", "code"],
+)
+async def test_a_malformed_destination_check_keeps_a_restores_finished_items(
+    mock_client: DsmClient,
+    no_poll_wait: None,
+    answer: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """QA round 1 on #594: the check caught less than the skip lookup, so a restore was lost."""
+    base = _restoring_dsm()
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("path") == "/s/y" and started:
+            return httpx.Response(200, json=answer)
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    assert "/s/y" in result
+    assert "destination check for /s/y failed (" in caplog.text
+    assert "DSM code None); starting anyway" in caplog.text
+
+
+@respx.mock
+async def test_a_skipped_move_of_unknown_type_doesnt_guess_where_its_leftovers_are(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skipping_dsm(httpx.ReadTimeout("")))
+    result = await move_files(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    assert "/s/b (skipped items are still at this path or under it)" in result
+
+
+@respx.mock
+async def test_a_first_destination_check_with_no_answer_starts_nothing(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Pre-QA on #594: starting then would be with the duplicate-task guard down too."""
+    calls: list[dict[str, str]] = []
+    base = _unanswered_start(calls, "/none")
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("path") == "/d":
+            raise httpx.ReadTimeout("")
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with pytest.raises(httpx.ReadTimeout):
+        await move_files(mock_client, paths=["/s/a"], dest_folder="/d")
+    assert not [c for c in calls if c.get("method") == "start"]
+
+
+def _lost_task_dsm(calls: list[dict[str, str]], info: Any, *, lost: str = "") -> Any:
+    """A DSM whose status answers 599 (for ``lost`` only, if given; others finish at once), with
+    this getinfo answer once a task has started. Task IDs follow the path's last part."""
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        calls.append(params)
+        method = params.get("method")
+        if method == "start":
+            taskid = f"T_{params.get('path', '').rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            if not lost or lost in params.get("taskid", ""):
+                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+            return httpx.Response(
+                200, json={"success": True, "data": {"finished": True, "path": "/s/x", "total": 1}}
+            )
+        if method == "getinfo" and any(call.get("method") == "start" for call in calls):
+            if isinstance(info, Exception):
+                raise info
+            if isinstance(info, httpx.Response):
+                return info
+            return httpx.Response(200, json={"success": True, "data": info})
+        return httpx.Response(
+            200, json={"success": True, "data": {"files": [{"path": "/s/a", "isdir": False}]}}
+        )
+
+    return side_effect
+
+
+@respx.mock
+async def test_a_lost_delete_whose_path_is_gone_is_done(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """#521: the reply said it failed, though it may have gone through."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/a", "code": 408}]})
+    )
+    result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert "failed" not in result.lower()
+    assert "isn't known" not in result
+    assert "/s/a" in result
+    assert not [call for call in calls if call.get("method") == "stop"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"files": [{"path": "/s/a", "isdir": False}]},
+        {"files": []},
+        {"files": ["x"]},
+        {"files": [{"path": "/s/a", "code": 407}]},
+        httpx.ReadTimeout(""),
+        httpx.Response(502, text="bad gateway"),
+        httpx.Response(200, json={"success": False, "error": {"code": 407}}),
+    ],
+    ids=["still there", "neither", "unreadable", "denied", "no answer", "proxy", "DSM error"],
+)
+async def test_a_lost_delete_not_known_gone_hands_off(
+    mock_client: DsmClient, no_poll_wait: None, info: Any
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_lost_task_dsm(calls, info))
+    records = TaskRecords()
+    result = await delete_files(
+        mock_client, paths=["/s/a"], recycle_bin_status={"s": True}, records=records
+    )
+    assert "DSM answered that it has no task deleting /s/a (error 599)" in result
+    assert "how it ended isn't known" in result
+    assert "It wasn't stopped" in result
+    assert "Handle: `delete:T_a`" in result
+    assert records.get(Handle("delete", "T_a")) is not None
+    assert not [call for call in calls if call.get("method") == "stop"]
+
+
+@respx.mock
+async def test_a_lost_delete_partway_says_whats_done_and_not_started(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/b", "isdir": False}]}, lost="T_b")
+    )
+    result = await delete_files(
+        mock_client, paths=["/s/a", "/s/b", "/s/c"], recycle_bin_status={"s": True}
+    )
+    assert "Already deleted: /s/a." in result
+    assert "Not started: /s/c. Check this one first by listing its path, then run them." in result
+    assert "Call file_task with no handle to see what's running." in result
+
+
+@respx.mock
+async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": [{"path": "/s/b", "isdir": False}]}, lost="T_b")
+    )
+    records = TaskRecords()
+    result = await copy_files(
+        mock_client,
+        paths=["/s/a", "/s/b", "/s/c"],
+        dest_folder="/s/dst",
+        records=records,
+    )
+    assert "DSM answered that it has no task copying /s/b (error 599)" in result
+    assert "Already copied: /s/a." in result
+    assert (
+        "Not started: /s/c. First: List /s/dst to see what's there; a folder there may be only "
+        "partly copied. Then run them." in result
+    )
+    assert records.get(Handle("copy", "T_b")) is not None
+    assert not [call for call in calls if call.get("method") == "stop"]
+
+
+@respx.mock
+async def test_a_lost_task_reply_keeps_the_last_progress(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    running = {"finished": False, "progress": 0.5, "total": 100, "processed_num": 50}
+    replies = iter([running])
+    base = _lost_task_dsm([], {"files": [{"path": "/s/a", "isdir": False}]})
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            reply = next(replies, None)
+            if reply is not None:
+                return httpx.Response(200, json={"success": True, "data": reply})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert "Last progress: 50 of 100 items, 50%." in result
+
+
+@respx.mock
+async def test_a_stalled_path_check_is_bounded(
+    mock_client: DsmClient, no_poll_wait: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA round 1 on #590: a stalled DSM mustn't hold the reply and its handle."""
+    from mcp_synology.modules.filestation import operations
+
+    assert operations._LOST_DELETE_CHECK == 5.0
+    monkeypatch.setattr(operations, "_LOST_DELETE_CHECK", 0.05)
+    calls: list[dict[str, str]] = []
+    base = _lost_task_dsm(calls, {"files": []})
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        if _stalls(request, calls):
+            await asyncio.Event().wait()
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with anyio.fail_after(5):
+        result = await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert "how it ended isn't known" in result
+    assert "Handle: `delete:T_a`" in result
+
+
+@respx.mock
+async def test_a_cancel_during_the_path_check_stops_the_task(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Level-triggered, as the MCP SDK cancels: the stop is canceled too unless it's shielded."""
+    calls: list[dict[str, str]] = []
+    stops: list[str] = []
+    base = _lost_task_dsm(calls, {"files": []})
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        if _stalls(request, calls):
+            await asyncio.Event().wait()
+        if dict(request.url.params).get("method") == "stop":
+            await anyio.sleep(0)
+            stops.append(dict(request.url.params)["taskid"])
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with anyio.move_on_after(0.2):
+        await delete_files(mock_client, paths=["/s/a"], recycle_bin_status={"s": True})
+    assert stops == ['"T_a"']
+
+
+def _stalls(request: httpx.Request, calls: list[dict[str, str]]) -> bool:
+    """The path check's getinfo: one after the task started."""
+    method = dict(request.url.params).get("method")
+    return method == "getinfo" and any(call.get("method") == "start" for call in calls)
+
+
+@respx.mock
+async def test_a_lost_copys_next_step_shows_its_destination_safely(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    odd = "/s/d\u200bst"
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_lost_task_dsm(calls, {"files": []}, lost="T_b")
+    )
+    result = await copy_files(mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder=odd)
+    assert f"First: List {odd!r} to see" in result
+    assert "\u200b" not in result
+
+
+def _skip_then(after: str, *, skipped: str = "/s/a", fail_start: bool = False) -> Any:
+    """``skipped`` finishes with a skip. ``after``'s start gets no answer, or its task keeps
+    running; others finish."""
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        method = params.get("method")
+        if method == "start":
+            if params["path"] == after and fail_start:
+                raise httpx.ReadTimeout("")
+            taskid = f"T_{params['path'].rsplit('/', 1)[-1]}"
+            return httpx.Response(200, json={"success": True, "data": {"taskid": taskid}})
+        if method == "status":
+            taskid = params["taskid"]
+            if f"T_{after.rsplit('/', 1)[-1]}" in taskid:
+                data: dict[str, Any] = {"finished": False, "progress": 0.5, "total": 2}
+                return httpx.Response(200, json={"success": True, "data": data})
+            data = {"finished": True, "path": "/s/x", "processed_size": 1}
+            if f"T_{skipped.rsplit('/', 1)[-1]}" in taskid:
+                data["skipstatus"] = {"status": "all"}
+            return httpx.Response(200, json={"success": True, "data": data})
+        if method == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        data = {"files": [{"path": params.get("path", "/s/a"), "isdir": False}]}
+        return httpx.Response(200, json={"success": True, "data": data})
+
+    return side_effect
+
+
+@respx.mock
+async def test_a_skipped_source_isnt_already_moved_at_a_handoff(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """#585: it was listed as moved, though it's still at the source, and the skip was lost."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skip_then("/s/big"))
+    records = TaskRecords()
+    reply = await move_files(
+        mock_client, paths=["/s/a", "/s/ok", "/s/big"], dest_folder="/d", timeout=1, records=records
+    )
+    assert "Already moved: /s/ok." in reply
+    assert "/s/a" not in reply.split("Skipped in whole")[0]
+    assert (
+        "Skipped in whole or in part, as an item of that name is already at the destination "
+        "(not compared): /s/a." in reply
+    )
+    assert (
+        "A skipped file is still at the source; a skipped folder keeps the items skipped." in reply
+    )
+    record = records.get(Handle("move", "T_big"))
+    assert record is not None
+    assert record.skipped_earlier == ["/s/a"]
+
+
+@respx.mock
+async def test_a_skipped_copy_doesnt_say_still_at_the_source(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skip_then("/s/big"))
+    reply = await copy_files(
+        mock_client, paths=["/s/a", "/s/big"], dest_folder="/d", timeout=1, records=TaskRecords()
+    )
+    assert (
+        "Skipped in whole or in part, as an item of that name is already at the destination "
+        "(not compared): /s/a." in reply
+    )
+    assert "still at the source" not in reply
+    assert "Already copied" not in reply
+
+
+@respx.mock
+async def test_file_task_final_result_names_what_was_skipped_earlier(
+    mock_client: DsmClient,
+) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", skipped_earlier=["/s/a"]))
+    finished = {"finished": True, "path": "/s/big", "processed_size": 1}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    text = await file_task(mock_client, records=records, handle=str(handle))
+    assert "Before this task: Skipped in whole or in part" in text
+    assert "/s/a." in text
+    assert "Source files have been removed" not in text
+    assert "Moved sources removed from /s/: big" in text
+
+
+@respx.mock
+async def test_a_skipped_source_isnt_already_moved_when_a_later_start_fails(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skip_then("/s/b", fail_start=True))
+    with pytest.raises(ToolError) as refused:
+        await move_files(mock_client, paths=["/s/a", "/s/ok", "/s/b"], dest_folder="/d")
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert message.endswith(
+        "Already moved before this failure: /s/ok. Skipped in whole or in part, as an item of "
+        "that name is already at the destination (not compared): /s/a. A skipped file is still "
+        "at the source; a skipped folder keeps the items skipped."
+    )
+
+
+@respx.mock
+async def test_a_restores_skipped_item_isnt_already_restored(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """A restore to several places keeps the lists across its per-destination runs."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then("/s/#recycle/y/b", fail_start=True)
+    )
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "Already restored" not in message
+    assert "(not compared): /s/#recycle/x/a." in message
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("data", "operation"),
+    [
+        ({"finished": True, "error": {"code": 1002}, "path": "/s/b"}, "move"),
+        ({"finished": True, "errors": [{"code": 408, "path": "/s/b"}]}, "move"),
+        ({"finished": True, "error": {"code": 1002}, "path": "/s/b"}, "copy"),
+    ],
+    ids=["move error", "move errors", "copy error"],
+)
+async def test_a_task_failing_after_a_skip_names_the_skip(
+    mock_client: DsmClient, no_poll_wait: None, data: dict[str, Any], operation: str
+) -> None:
+    base = _skip_then("/none")
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "status" and "T_b" in params["taskid"]:
+            return httpx.Response(200, json={"success": True, "data": data})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    tool = move_files if operation == "move" else copy_files
+    with pytest.raises(ToolError) as refused:
+        await tool(mock_client, paths=["/s/a", "/s/b"], dest_folder="/d")
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "(not compared): /s/a" in message
+    assert ("still at the source" in message) is (operation == "move")
+
+
+@respx.mock
+async def test_a_hand_off_doesnt_offer_to_replace_what_this_call_landed(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """#580's route: `/v/b/x` was skipped because `/v/a/x` had just landed there."""
+    # Task IDs follow the path's last part: T_x's first task lands, and its second is skipped.
+    base = _skip_then("/v/big", skipped="/v/none")
+    reads: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            reads.append(params["path"])
+        if params.get("method") == "status" and "T_x" in params["taskid"] and "/v/b/x" in reads:
+            data = {"finished": True, "path": "/v/x", "skipstatus": {"status": "all"}}
+            return httpx.Response(200, json={"success": True, "data": data})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    reply = await move_files(
+        mock_client, paths=["/v/a/x", "/v/b/x", "/v/big"], dest_folder="/d", timeout=1
+    )
+    assert "Don't retry /v/b/x with overwrite=true" in reply
+    assert "Pass overwrite=true" not in reply
+
+
+@respx.mock
+async def test_a_skip_with_nothing_landed_offers_overwrite(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_skip_then("/s/big"))
+    reply = await move_files(mock_client, paths=["/s/a", "/s/big"], dest_folder="/d", timeout=1)
+    assert "Pass overwrite=true to replace them, unless what's there" in reply
+
+
+@respx.mock
+async def test_a_stop_and_a_failed_final_keep_the_skip(mock_client: DsmClient) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", skipped_earlier=["/s/a"]))
+    running = {"finished": False, "progress": 0.5, "total": 2}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": running})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    text = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert text.startswith("Stopped move of /s/big")
+    assert "(not compared): /s/a." in text
+
+    gone_records = TaskRecords()
+    gone_records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", skipped_earlier=["/s/a"]))
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": False, "error": {"code": 599}})
+    )
+    gone = await file_task(mock_client, records=gone_records, handle=str(handle))
+    assert "(not compared): /s/a." in gone
+
+    failed = {"finished": True, "error": {"code": 1002}, "path": "/s/big"}
+    records.set_final(handle, failed)
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": failed})
+    )
+    with pytest.raises(ToolError, match="not compared"):
+        await file_task(mock_client, records=records, handle=str(handle))
+
+
+@respx.mock
+async def test_a_later_destination_check_after_only_a_skip_goes_on(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Something's already happened in the call, so no answer mustn't lose it."""
+    base = _skip_then("/none", skipped="/s/#recycle/x/a")
+    started: list[str] = []
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("path") == "/s/y" and started:
+            raise httpx.ReadTimeout("")
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "y/b"])
+    assert started == ["/s/#recycle/x/a", "/s/#recycle/y/b"]
+
+
+async def _final_with_skip(
+    mock_client: DsmClient, kind: HandleKind, *, landed: list[str], skipped: list[str]
+) -> str:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle(kind, "T_big")
+    records.add(
+        TaskRecord(
+            handle,
+            paths=["/s/big"],
+            dest="/d",
+            skipped_earlier=skipped,
+            landed_earlier=landed,
+        )
+    )
+    finished = {"finished": True, "path": "/s/big", "processed_size": 1}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": finished})
+    )
+    return await file_task(mock_client, records=records, handle=str(handle))
+
+
+@respx.mock
+async def test_a_final_keeps_the_warning_about_what_this_call_landed(
+    mock_client: DsmClient,
+) -> None:
+    text = await _final_with_skip(
+        mock_client, "move", landed=["/v/a/x"], skipped=["/v/b/x", "/v/c"]
+    )
+    assert "Don't retry /v/b/x with overwrite=true" in text
+    assert "For the others, pass overwrite=true to replace them" in text
+
+
+@respx.mock
+async def test_a_copys_final_doesnt_say_still_at_the_source(mock_client: DsmClient) -> None:
+    text = await _final_with_skip(mock_client, "copy", landed=[], skipped=["/s/a"])
+    assert "(not compared): /s/a." in text
+    assert "still at the source" not in text
+
+
+def test_two_skipped_sources_of_one_name_get_the_warning() -> None:
+    """A partly skipped folder landed some items, as `_skip_report` counts it."""
+    from mcp_synology.modules.filestation.tasks import skipped_line
+
+    line = skipped_line(True, ["/v/a/n", "/v/b/n"])
+    assert "Don't retry /v/b/n with overwrite=true" in line
+    assert "For the others, pass" in line
+
+
+def test_a_later_call_on_the_same_task_keeps_the_record_s_lists() -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(
+        TaskRecord(handle, paths=["/s/big"], skipped_earlier=["/s/a"], landed_earlier=["/s/b"])
+    )
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d"))
+    record = records.get(handle)
+    assert record is not None
+    assert (record.dest, record.skipped_earlier, record.landed_earlier) == (
+        "/d",
+        ["/s/a"],
+        ["/s/b"],
+    )
+
+
+@respx.mock
+async def test_a_restores_hand_off_says_still_at_the_source(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then("/s/#recycle/y/b", skipped="/s/#recycle/x/a")
+    )
+    reply = await restore_from_recycle_bin(
+        mock_client, share="/s", paths=["x/a", "y/b"], timeout=1, records=TaskRecords()
+    )
+    assert "(not compared): /s/#recycle/x/a." in reply
+    assert "A skipped file is still at the source" in reply
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("replies", "says"),
+    [
+        (["running", "refuse", "running"], "DSM didn't accept the stop"),
+        (["running", "refuse", "gone", "gone", "gone"], "A stop was sent"),
+        (["gone", "gone", "gone", "stopped"], "A stop was sent"),
+    ],
+    ids=["refused, still running", "refused, then gone", "sent blind"],
+)
+async def test_every_stop_reply_keeps_the_skip(
+    mock_client: DsmClient,
+    monkeypatch: pytest.MonkeyPatch,
+    replies: list[str],
+    says: str,
+) -> None:
+    import mcp_synology.modules.filestation.tasks as tasks
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+    answers = {
+        "running": httpx.Response(
+            200, json={"success": True, "data": {"finished": False, "progress": 0.5, "total": 2}}
+        ),
+        "refuse": httpx.Response(200, json={"success": False, "error": {"code": 401}}),
+        "gone": httpx.Response(200, json={"success": False, "error": {"code": 599}}),
+        "stopped": httpx.Response(200, json={"success": True, "data": {}}),
+    }
+    queue = iter(replies)
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda _: answers[next(queue)])
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", skipped_earlier=["/s/a"]))
+    text = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert says in text
+    assert "(not compared): /s/a." in text
+
+
+@respx.mock
+@pytest.mark.parametrize("skip", [{"state": "all"}, {}, {"status": None}, ["x"], True], ids=str)
+async def test_an_unseen_skipstatus_shape_counts_as_skipped(
+    mock_client: DsmClient, no_poll_wait: None, skip: Any
+) -> None:
+    """The safe direction, as the comment says: an unseen dict read as `Already moved`."""
+    base = _skip_then("/s/big", skipped="/none")
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "status" and "T_a" in params["taskid"]:
+            data = {"finished": True, "path": "/s/a", "skipstatus": skip}
+            return httpx.Response(200, json={"success": True, "data": data})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    reply = await move_files(mock_client, paths=["/s/a", "/s/big"], dest_folder="/d", timeout=1)
+    assert "Already moved" not in reply
+    assert "(not compared): /s/a." in reply
+
+
+def test_a_later_call_adds_to_the_record_s_lists() -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], earlier=["/s/e"], skipped_earlier=["/s/a"]))
+    records.add(TaskRecord(handle, paths=["/s/big"], earlier=["/s/f"], skipped_earlier=["/s/q"]))
+    record = records.get(handle)
+    assert record is not None
+    assert record.skipped_earlier == ["/s/a", "/s/q"]
+    assert record.earlier == ["/s/e", "/s/f"]
+
+
+@respx.mock
+async def test_a_restore_with_a_skip_doesnt_say_the_folder_was_emptied(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """QA round 1 on #601: each item is its own run, so the flag has to come from the list."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then("/none", skipped="/s/#recycle/x/a")
+    )
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=["x/a", "x/c", "y/b"])
+    assert "Source files have been removed from /s/#recycle/x/" not in result
+
+
+@respx.mock
+async def test_a_final_with_no_record_of_a_skip_names_what_it_removed(
+    mock_client: DsmClient,
+) -> None:
+    """A record can't know what else its call, or a restart, left in that folder."""
+    text = await _final_with_skip(mock_client, "move", landed=[], skipped=[])
+    assert "Source files have been removed" not in text
+    assert "Moved sources removed from /s/: big" in text
+
+
+@respx.mock
+async def test_a_stop_says_what_landed_too(mock_client: DsmClient) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(
+        TaskRecord(
+            handle,
+            paths=["/s/big"],
+            dest="/d",
+            skipped_earlier=["/s/a\u200bb"],
+            done_earlier=["/s/ok"],
+            landed_earlier=["/s/ok"],
+        )
+    )
+    running = {"finished": False, "progress": 0.5, "total": 2}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": running})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    text = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert "Already moved before this task: /s/ok." in text
+    assert "\u200b" not in text
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("paths", "later"),
+    [
+        (["a/x", "b/y", "a/z"], "skip"),
+        (["a/x", "b/y", "a/big"], "running"),
+        (["a/x", "b/big", "a/z"], "not started"),
+    ],
+    ids=["a later skip", "a later hand-off", "not started"],
+)
+async def test_a_restore_never_says_a_folder_was_emptied(
+    mock_client: DsmClient, no_poll_wait: None, paths: list[str], later: str
+) -> None:
+    """Pre-QA on #601: the flag knew only earlier skips, and the rest come later."""
+    skipped = "/s/#recycle/a/z" if later == "skip" else "/none"
+    running = {"skip": "/none", "running": "/s/#recycle/a/big", "not started": "/s/#recycle/b/big"}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_skip_then(running[later], skipped=skipped)
+    )
+    result = await restore_from_recycle_bin(mock_client, share="/s", paths=paths, timeout=1)
+    assert "Source files have been removed" not in result
+
+
+@respx.mock
+async def test_a_stop_and_a_failed_final_say_what_was_done_with_no_skip(
+    mock_client: DsmClient,
+) -> None:
+    from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+    records = TaskRecords()
+    handle = Handle("move", "T_big")
+    records.add(TaskRecord(handle, paths=["/s/big"], dest="/d", done_earlier=["/s/ok"]))
+    running = {"finished": False, "progress": 0.5, "total": 2}
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if dict(request.url.params).get("method") == "status":
+            return httpx.Response(200, json={"success": True, "data": running})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    still = await file_task(mock_client, records=records, handle=str(handle))
+    assert "Already moved before this task: /s/ok." in still
+    stopped = await file_task(mock_client, records=records, handle=str(handle), action="stop")
+    assert "Already moved before this task: /s/ok." in stopped
+
+    failed = {"finished": True, "error": {"code": 1002}, "path": "/s/big"}
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": failed})
+    )
+    with pytest.raises(ToolError, match="Already moved before this failure: /s/ok"):
+        await file_task(mock_client, records=records, handle=str(handle))
+
+
+@respx.mock
+async def test_a_hand_off_counts_the_task_it_hands_off_as_landing(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """Pre-QA on #601: `/a/n` skipped, then `/b/n` handed off: no `Pass overwrite=true` for it."""
+    base = _skip_then("/none")
+    records = TaskRecords()
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "status":
+            if "/b/n" in starts:
+                data: dict[str, Any] = {"finished": False, "progress": 0.5, "total": 2}
+            else:
+                data = {"finished": True, "path": "/a/n", "skipstatus": {"status": "all"}}
+            return httpx.Response(200, json={"success": True, "data": data})
+        return base(request)
+
+    starts: list[str] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    reply = await move_files(
+        mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", timeout=1, records=records
+    )
+    assert "Don't retry /a/n with overwrite=true" in reply
+    record = records.get(Handle("move", "T_n"))
+    assert record is not None
+    assert record.landed_earlier == ["/b/n"]
+
+
+def test_a_skip_is_listed_once_and_shows_odd_paths_safely() -> None:
+    from mcp_synology.modules.filestation.tasks import skipped_line
+
+    line = skipped_line(True, ["/a/x", "/a/x", "/b/q\u200br"], ["/c/q\u200br"])
+    assert "(not compared): /a/x, " in line
+    assert "/a/x, /a/x" not in line
+    assert "\u200b" not in line
+    assert "Don't retry" in line
+
+
 def _a_task_landing(path: str, dest: str = "/d", *, overwrite: bool = True) -> dict[str, Any]:
     return {
         "api": "SYNO.FileStation.CopyMove",
@@ -3913,13 +4963,15 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
         await move_files(mock_client, paths=[ours], dest_folder="/d", overwrite=True)
     body = json.loads(str(refused.value))["error"]
     assert body["message"] == (
-        f"Move files refused: a running move of {theirs} is landing in /d with {names} as {ours}, "
+        f"Move files refused: a running move of {theirs!r} is landing in '/d' with {names} as "
+        f"{ours!r}, "
         "so one could replace the other (for folders, items of the same name inside them). "
         "Nothing was moved."
     )
     assert body["param"] == "paths"
     assert body["value"] == ours
     assert "`move:FileStation_RUN`" in body["suggestion"]
+    assert "Leave out" not in body["suggestion"]
     assert not [call for call in calls if call.get("method") == "start"]
 
 
@@ -3981,10 +5033,21 @@ async def test_a_failed_task_list_doesnt_refuse(mock_client: DsmClient) -> None:
 
 @respx.mock
 async def test_a_restore_refused_partway_says_what_was_done(mock_client: DsmClient) -> None:
-    """A restore to several places reaches the check after earlier items finished."""
+    """A restore to several places reaches the check after earlier items finished: here the task
+    starts during the first item's wait, so the check up front can't see it."""
     calls: list[dict[str, str]] = []
-    task = _a_task_landing("/a/b", dest="/s/y")
-    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    started: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/a/b", dest="/s/y"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("method") == "list" and not started:
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     with pytest.raises(ToolError) as refused:
         await restore_from_recycle_bin(
             mock_client, share="/s", paths=["x/a", "y/b", "z/c"], overwrite=True
@@ -3992,7 +5055,7 @@ async def test_a_restore_refused_partway_says_what_was_done(mock_client: DsmClie
     message = json.loads(str(refused.value))["error"]["message"]
     assert "Nothing was" not in message
     assert "Already restored before this failure: /s/#recycle/x/a." in message
-    assert message.endswith("Not started: /s/#recycle/z/c.")
+    assert message.endswith("Not started: '/s/#recycle/z/c'.")
     assert "Leave out what's already done." in body_suggestion(refused)
 
 
@@ -4062,13 +5125,223 @@ async def test_a_restore_refused_on_its_last_item_lists_none_as_not_started(
     mock_client: DsmClient,
 ) -> None:
     calls: list[dict[str, str]] = []
+    started: list[str] = []
     task = _a_task_landing("/a/b", dest="/s/y")
-    task["params"]["remove_src"] = True
-    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    base = _dsm_with_running(task, calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("method") == "list" and not started:
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
     with pytest.raises(ToolError) as refused:
         await restore_from_recycle_bin(
             mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True
         )
     message = json.loads(str(refused.value))["error"]["message"]
-    assert "a running move of /a/b is landing in /s/y" in message
+    assert "a running move of '/a/b' is landing in '/s/y'" in message
     assert "Not started" not in message
+
+
+@respx.mock
+async def test_a_clash_visible_up_front_refuses_a_whole_restore_to_several_places(
+    mock_client: DsmClient,
+) -> None:
+    """QA round 1 on #597: it restored `x/a`, then refused `y/b`, though the clash was listed."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing("/a/b", dest="/s/y"), calls)
+    )
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(
+            mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True
+        )
+    assert json.loads(str(refused.value))["error"]["message"].endswith("Nothing was restored.")
+    assert not [call for call in calls if call.get("method") == "start"]
+
+
+@respx.mock
+async def test_two_parallel_calls_give_one_start_and_one_refusal(mock_client: DsmClient) -> None:
+    """QA round 1 on #597, the maintainer's decision: both passed the check, and one replaced the
+    other. The lock holds the second until the first's task is listed."""
+    calls: list[dict[str, str]] = []
+    started: list[dict[str, Any]] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(_a_task_landing(params["path"]))
+        if params.get("method") == "list":
+            tasks = list(started)
+            await asyncio.sleep(0.01)  # a real answer takes a while: the other call runs meanwhile
+            return httpx.Response(200, json={"success": True, "data": {"tasks": tasks}})
+        if params.get("method") == "status":
+            running = {"finished": False, "progress": 0.5, "total": 2}
+            return httpx.Response(200, json={"success": True, "data": running})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    results = await asyncio.gather(
+        move_files(mock_client, paths=["/a/x"], dest_folder="/d", overwrite=True, timeout=0.01),
+        move_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True, timeout=0.01),
+        return_exceptions=True,
+    )
+    assert len(started) == 1
+    assert sum(isinstance(r, ToolError) and "is landing in" in str(r) for r in results) == 1
+
+
+@respx.mock
+async def test_two_parallel_calls_give_one_start_when_the_first_is_already_finished(
+    mock_client: DsmClient,
+) -> None:
+    """The maintainer's option A on #597: a small move has usually finished by the second call's
+    list, on all four DSM versions, and a finished task isn't running."""
+    calls: list[dict[str, str]] = []
+    starts: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        await asyncio.sleep(0.001)  # a real answer takes a while: the other call runs meanwhile
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    results = await asyncio.gather(
+        move_files(mock_client, paths=["/a/x"], dest_folder="/d", overwrite=True),
+        move_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True),
+        return_exceptions=True,
+    )
+    assert len(starts) == 1
+    assert sum(isinstance(r, ToolError) and "is landing in" in str(r) for r in results) == 1
+
+
+async def test_a_calls_tasks_are_forgotten_when_it_returns(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    from mcp_synology.modules.filestation.tasks import _LANDINGS
+
+    with respx.mock:
+        calls: list[dict[str, str]] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_dsm_with_running(_a_task_landing("/none"), calls)
+        )
+        await move_files(mock_client, paths=["/a/x"], dest_folder="/d", overwrite=True)
+        await move_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
+    assert _LANDINGS[mock_client] == {}
+
+
+async def test_a_destination_has_one_lock_while_anyone_holds_it(mock_client: DsmClient) -> None:
+    lock = mock_client.destination_lock("/d")
+    assert mock_client.destination_lock("/d") is lock
+    assert mock_client.destination_lock("/e") is not lock
+    del lock
+    gc.collect()
+    assert len(mock_client._destination_locks) == 0
+
+
+@respx.mock
+async def test_a_refusal_doesnt_call_a_skipped_source_moved(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """QA round 1 on #597: `/b/keep` was skipped, and the refusal said it was already moved."""
+    calls: list[dict[str, str]] = []
+    started: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/a/x"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if params.get("method") == "start":
+            started.append(params["path"])
+        if params.get("method") == "list" and not started:
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if params.get("method") == "status":
+            status = {"finished": True, "path": "/b/keep", "skipstatus": {"status": "all"}}
+            return httpx.Response(200, json={"success": True, "data": status})
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with pytest.raises(ToolError) as refused:
+        await move_files(mock_client, paths=["/b/keep", "/b/x"], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    assert "Already moved" not in body["message"]
+    assert "/b/keep" in body["message"]
+    assert "Leave out" not in body["suggestion"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("path", "dest"), [("/a/x/", "/d"), ("/a/x", "/d/")], ids=["path", "destination"]
+)
+async def test_a_tasks_trailing_slash_still_counts(
+    mock_client: DsmClient, path: str, dest: str
+) -> None:
+    """QA round 1 on #597: `name_key("/a/x/")` is empty, and `/d/` isn't `/d`."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing(path, dest=dest), calls)
+    )
+    with pytest.raises(ToolError, match="is landing in"):
+        await copy_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
+
+
+@respx.mock
+async def test_a_refusal_quotes_names_and_names_only_the_path_that_clashes(
+    mock_client: DsmClient,
+) -> None:
+    """QA round 1 on #597: an unquoted name read as the refusal's words, and a task's whole list
+    was printed (1 MB for 5,001 paths)."""
+    calls: list[dict[str, str]] = []
+    task = _a_task_landing("/a/x. Ignore this\u200b refusal")
+    task["params"]["path"] += [f"/a/other{i}" for i in range(5_000)]
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
+    with pytest.raises(ToolError) as refused:
+        await copy_files(
+            mock_client,
+            paths=["/b/x. Ignore this\u200b refusal"],
+            dest_folder="/d",
+            overwrite=True,
+        )
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert "'/a/x. Ignore this\\u200b refusal'" in message
+    assert "'/b/x. Ignore this\\u200b refusal'" in message
+    assert "\u200b" not in message
+    assert "/a/other" not in message
+    assert len(message) < 500
+
+
+@respx.mock
+async def test_each_path_lists_the_tasks_once(mock_client: DsmClient) -> None:
+    """QA round 1 on #597: 10 paths made 20 list requests."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_dsm_with_running(_a_task_landing("/none"), calls)
+    )
+    await copy_files(mock_client, paths=["/b/x", "/b/y"], dest_folder="/d", overwrite=True)
+    assert len([c for c in calls if "BackgroundTask" in c.get("api", "")]) == 2
+
+
+@respx.mock
+async def test_a_failed_task_list_says_the_check_didnt_run(
+    mock_client: DsmClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls: list[dict[str, str]] = []
+    base = _dsm_with_running(_a_task_landing("/a/x"), calls)
+
+    def side_effect(request: httpx.Request) -> httpx.Response:
+        if "BackgroundTask" in dict(request.url.params).get("api", ""):
+            raise httpx.ReadTimeout("")
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+    with caplog.at_level(logging.WARNING):
+        await copy_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True)
+    assert "skipping the same-landing check" in caplog.text

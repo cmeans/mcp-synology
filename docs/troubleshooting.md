@@ -106,19 +106,33 @@ each item took about 15 minutes for a while, and then 179 items cleared in 16 mi
 **What to do:** wait, and check with `file_task`. Don't stop and restart it because progress
 looks slow.
 
-### `file_task` says it's "no longer running on the NAS … DSM no longer has its result"
+### "DSM answered that it has no task …", or `file_task` says "DSM has no task for …" or "… with this handle"
 
 **Why:** DSM can forget a finished delete before any status check sees it finish (on a real NAS,
 after a 36-hour delete, it was gone within 16 minutes of the last check). It forgets a finished
 copy or move after one status read, but `file_task` keeps the result of a read it makes itself,
-so a copy or move ends this way only when something else read it first (another session for the
-same DSM user). Then `file_task` has no result left to give: the task finished or was stopped,
-and the reply can't say which. #302 tracks checking the path automatically.
+so a copy or move ends this way when something else read it first (another session for the
+same DSM user). DSM can also answer that it has no such task while one runs (error 599): that's
+been seen twice, on a delete, and a copy or move could get the same.
+Then `file_task` has no result left to give: the task finished, failed, was stopped or is still
+running, and the reply can't say which. Without a record of the task, the reply can't name it, and
+it may also be another DSM user's. #302 tracks checking the path automatically.
 
-**What to do:** list the path. For a delete, DSM removes a folder's contents before the folder,
+**What to do:** call `file_task` with no handle: it lists what's still running. Then list the
+path. For a delete, DSM removes a folder's contents before the folder,
 so a missing top-level folder means the delete finished; a folder that's still there means it
-was stopped or only partly done. For a copy or move, list the destination (and, for a move, the
-source).
+was stopped, only partly done or still going, and one large file can take many minutes. For a
+copy, list the destination; for a move or restore, the source and the destination: a folder appears there as soon as
+the task starts, so compare it with the source before relying on it.
+
+### `file_task` says "A stop was sent, but DSM can't confirm it" or "DSM didn't accept the stop"
+
+**Why:** DSM answered that it has no such task (error 599, or 401, File Station's code for it; that
+401 isn't an account problem), and that answer can be wrong while a task runs. So the stop goes
+anyway, and the reply says only what a new read shows.
+
+**What to do:** call `file_task` with no handle to see if it's still running. If it is, try the
+stop again. If DSM keeps refusing, stop it in DSM's File Station.
 
 ### "DSM lost the search task … so this is not a 0-result answer"
 

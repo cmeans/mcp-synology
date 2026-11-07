@@ -75,9 +75,9 @@ class TestErrorFromCode:
         assert "Unknown" not in str(err) and err.suggestion
 
     def test_auth_407_is_not_filestation(self) -> None:
-        """Auth API 407 stays the lockout, not File Station's permission refusal."""
+        """Auth API 407 stays the blocked address, not File Station's permission refusal."""
         err = error_from_code(407, api_name="SYNO.API.Auth")
-        assert "login attempts" in str(err)
+        assert "IP address is blocked" in str(err)
 
     def test_auth_402_is_not_filestation(self) -> None:
         """Auth API code 402 must NOT map to FileStation 'System too busy'."""

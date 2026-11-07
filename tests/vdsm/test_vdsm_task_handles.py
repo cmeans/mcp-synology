@@ -41,6 +41,7 @@ from mcp_synology.modules.filestation.operations import (
 )
 from mcp_synology.modules.filestation.tasks import (
     TaskRecords,
+    _list_running,
     discover_running_tasks,
     file_task,
     taskid_started,
@@ -65,9 +66,8 @@ COPY_FILES = COPY_DIRS * PER_DIR
 WAIT = 2  # seconds before a handoff; every tree here takes far longer
 FINISH_WITHIN = 300  # seconds a handed-off task gets to finish
 _HANDLE = re.compile(r"Handle: `((?:delete|copy|move|restore):FileStation_\w+)`")
-_NO_RUNNING = "No running task with this handle."
-_NOT_RUNNING = "is no longer running on the NAS: it finished or was stopped"
-_ALREADY_FINISHED = "That task had already finished or isn't running."
+_NO_RUNNING = "DSM has no task with this handle:"
+_NOT_RUNNING = "it may have finished, failed, been stopped or still be running"
 _NOT_STOPPED = "That task had already finished, so nothing was stopped."
 
 
@@ -327,8 +327,10 @@ async def test_delete_handoff_then_stop(admin_client: Any, admin_session: Any, n
 
             await _gone(other, records, handle)
             again = await file_task(other, records=records, handle=handle, action="stop")
-            # The record still names the path, so not the bare "no running task".
-            assert again.startswith(f"The delete of {path} {_NOT_RUNNING}"), again
+            # The record still names the path, so not the reply with no record.
+            assert again.startswith(f"DSM has no task for the delete of {path}: {_NOT_RUNNING}"), (
+                again
+            )
 
 
 async def test_file_task_list_shows_running_delete(admin_client: Any, nas: Nas) -> None:
@@ -493,10 +495,49 @@ async def test_copy_handoff_then_stop(admin_client: Any, admin_session: Any, nas
             await _gone(other, records, handle)
 
 
-async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
-    admin_client: Any, nas: Nas
+async def test_a_stop_after_599s_touches_no_one_elses_task(
+    admin_client: Any, nas_client: Any, nas: Nas
 ) -> None:
-    """file_task never says "Stopped" for a copy that had finished or that DSM doesn't know.
+    """The blind stop depends on this: an admin's stop of a regular user's task leaves it alone."""
+    client = _admin(admin_client)
+    user_client: DsmClient = nas_client[0]
+    path = nas.tree("/writable/del521o")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(user_client, records) as handles:
+        reply = await delete_files(
+            user_client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        stop = await file_task(client, records=TaskRecords(), handle=handle, action="stop")
+        assert stop.startswith(_NO_RUNNING), stop
+        assert "A stop was sent" in stop
+        mine = await file_task(user_client, records=records, handle=handle)
+        assert mine.startswith("Still deleting on the NAS"), mine
+
+
+async def test_a_handle_of_the_wrong_kind_stops_the_task(admin_client: Any, nas: Nas) -> None:
+    """A task ID isn't tied to its API: CopyMove's status and stop act on a Delete (#593)."""
+    client = _admin(admin_client)
+    path = nas.tree("/writable/del521k")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await delete_files(
+            client, paths=[path], recycle_bin_status={}, timeout=WAIT, records=records
+        )
+        handle = _handle(reply)
+        handles.append(handle)
+        wrong = "copy:" + handle.partition(":")[2]
+        stop = await file_task(client, records=TaskRecords(), handle=wrong, action="stop")
+        assert stop.startswith("Stopped copy of"), stop
+        await _gone(client, records, handle)
+
+
+async def test_stop_of_a_finished_or_unknown_copy_says_so(admin_client: Any, nas: Nas) -> None:
+    """file_task never says "Stopped" for a copy that had finished or that DSM doesn't know;
+    for one DSM doesn't know, a stop goes anyway and the reply says it can't be confirmed.
 
     DSM behavior (7.1 and 7.2.2) this guards against, pinned at the raw API level:
     CopyMove ``stop`` answers success for any task ID (finished and unread, forgotten,
@@ -558,10 +599,53 @@ async def test_stop_of_a_finished_or_unknown_copy_stops_nothing(
     # Forgotten by DSM now; the record still has the result.
     again = await file_task(client, records=records, handle=f"copy:{taskid}", action="stop")
     assert again == stop
-    # Forgotten, with no record (a new server process), and made up: no running task.
+    # Forgotten, with no record (a new server process), and made up: a stop goes, unconfirmed.
     for handle in (f"copy:{taskid}", f"copy:{made_up}", f"delete:{made_up}"):
         reply = await file_task(client, records=TaskRecords(), handle=handle, action="stop")
         assert reply.startswith(_NO_RUNNING), (handle, reply)
+        assert "A stop was sent" in reply, (handle, reply)
+
+
+async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas: Nas) -> None:
+    """#585: a skipped file and a partly skipped folder, then a task that outlives the wait."""
+    client = _admin(admin_client)
+    base = nas.folder("/writable/p585")
+    nas.run(
+        "cd /volume1/writable/p585 && mkdir -p f/n d/n && echo s > f/x.txt && echo d > d/x.txt "
+        "&& echo s > f/n/same.txt && echo d > d/n/same.txt && echo o > f/n/only.txt "
+        "&& chmod -R 777 /volume1/writable/p585"
+    )
+    src = nas.tree("/writable/p585big", dirs=COPY_DIRS)
+    dest = f"{base}/d"
+    records = TaskRecords()
+    async with _stopped_at_exit(client, records) as handles:
+        reply = await copy_files(
+            client,
+            paths=[f"{base}/f/x.txt", f"{base}/f/n", src],
+            dest_folder=dest,
+            timeout=WAIT,
+            records=records,
+        )
+        handles.append(_handle(reply))
+        assert (
+            "Skipped in whole or in part, as an item of that name is already at the destination "
+            f"(not compared): {base}/f/x.txt, {base}/f/n." in reply
+        )
+        assert "Already copied" not in reply
+        # DSM's skip on a folder means only some of its items: the rest landed.
+        assert nas.exists(f"{dest}/n/only.txt")
+
+    # A move's skip leaves a file at its source, and only the skipped items of a folder. The copy
+    # above landed only.txt, so it goes first, or it's skipped too.
+    nas.run("rm -f /volume1/writable/p585/d/n/only.txt")
+    moved = await move_files(
+        client, paths=[f"{base}/f/x.txt", f"{base}/f/n"], dest_folder=dest, records=records
+    )
+    assert "x.txt" in moved, moved
+    assert "/n" in moved, moved
+    assert nas.exists(f"{base}/f/x.txt")
+    assert nas.exists(f"{base}/f/n/same.txt")
+    assert not nas.exists(f"{base}/f/n/only.txt")
 
 
 async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
@@ -584,11 +668,98 @@ async def test_overwrite_is_refused_while_a_task_lands_the_same_name(
         with pytest.raises(ToolError) as refused:
             await copy_files(client, paths=[other], dest_folder=dest, overwrite=True)
         body = json.loads(str(refused.value))["error"]
-        assert f"a running copy of {src} is landing in {dest}" in body["message"]
+        assert f"a running copy of {src!r} is landing in {dest!r}" in body["message"]
         assert f"`{handle}`" in body["suggestion"]
         # Theirs replaces, so ours is refused without replacing: DSM's list says `overwrite` too.
         with pytest.raises(ToolError, match="is landing in"):
             await copy_files(client, paths=[other], dest_folder=dest, overwrite=False)
+
+
+async def test_a_started_task_is_listed_straight_away(admin_client: Any, nas: Nas) -> None:
+    """The destination lock (#587) relies on this: a task is in DSM's list once its start returns,
+    with what the check reads. The lock holds a parallel call only that long."""
+    client = _admin(admin_client)
+    src = nas.tree("/writable/ls587", dirs=COPY_DIRS)
+    dest = nas.folder("/writable/ls587_dst")
+    data = await client.request(
+        "SYNO.FileStation.CopyMove",
+        "start",
+        version=2,
+        params={"path": src, "dest_folder_path": dest, "overwrite": "true", "remove_src": "false"},
+    )
+    taskid = data["taskid"]
+    try:
+        tasks = await _list_running(client)
+        listed = [t for t in tasks if t.handle.taskid == taskid]
+        assert listed, "the task wasn't in the first list after its start"
+        assert listed[0].paths == [src]
+        assert listed[0].dest == dest
+        assert listed[0].params.get("overwrite") is True
+    finally:
+        await client.request(
+            "SYNO.FileStation.CopyMove", "stop", version=2, params={"taskid": dsm_str(taskid)}
+        )
+
+
+async def test_two_parallel_calls_give_one_task_and_one_refusal(
+    admin_client: Any, nas: Nas
+) -> None:
+    """QA round 1 on #597: both started, and one replaced the other."""
+    client = _admin(admin_client)
+    nas.folder("/writable/par587")
+    first = nas.tree("/writable/par587/a/x", dirs=COPY_DIRS)
+    second = nas.tree("/writable/par587/b/x", dirs=COPY_DIRS)
+    dest = nas.folder("/writable/par587_dst")
+    records = TaskRecords()
+
+    async with _stopped_at_exit(client, records) as handles:
+        results = await asyncio.gather(
+            *(
+                copy_files(
+                    client,
+                    paths=[src],
+                    dest_folder=dest,
+                    overwrite=True,
+                    timeout=WAIT,
+                    records=records,
+                )
+                for src in (first, second)
+            ),
+            return_exceptions=True,
+        )
+        refused = [r for r in results if isinstance(r, ToolError)]
+        replies = [r for r in results if isinstance(r, str)]
+        assert len(refused) == 1, results
+        assert "is landing in" in str(refused[0])
+        assert len(replies) == 1, results
+        handles.append(_handle(replies[0]))
+
+
+async def test_two_parallel_small_moves_give_one_move_and_one_refusal(
+    admin_client: Any, nas: Nas
+) -> None:
+    """The maintainer's option A on #597: a small move has usually finished by the second call's
+    list, so it took the server's own record of what parallel calls started. Without it both ran,
+    both said Moved, and one file was gone (38 of 40 on these four versions)."""
+    client = _admin(admin_client)
+    for i in range(3):
+        base = f"/writable/small587{i}"
+        dest = nas.folder(f"{base}/d")
+        vol = f"/volume1{base}"
+        nas.run(
+            f"mkdir -p {vol}/a {vol}/b && echo A > {vol}/a/x && echo B > {vol}/b/x && "
+            f"chmod -R 777 {vol} && sync"
+        )
+        results = await asyncio.gather(
+            move_files(client, paths=[f"{base}/a/x"], dest_folder=dest, overwrite=True),
+            move_files(client, paths=[f"{base}/b/x"], dest_folder=dest, overwrite=True),
+            return_exceptions=True,
+        )
+        refused = [r for r in results if isinstance(r, ToolError)]
+        assert len(refused) == 1, results
+        assert "is landing in" in str(refused[0])
+        assert nas.exists(f"{base}/d/x")
+        assert nas.exists(f"{base}/a/x") != nas.exists(f"{base}/b/x")
 
 
 # --- Move and restore -----------------------------------------------------
@@ -623,7 +794,7 @@ async def test_move_handoff_then_status_until_finished(
                 still="Still moving",
             )
             assert f"Moved 1 item(s) to {dest}/:" in final, final
-            assert "Source files have been removed from /writable/." in final
+            assert "Moved sources removed from /writable/:" in final
 
     assert not nas.exists(src)
     assert nas.count("/testshare/mv245") == COPY_FILES
