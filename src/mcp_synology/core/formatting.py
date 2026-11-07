@@ -19,9 +19,22 @@ if TYPE_CHECKING:
 # sheet). One class, so it doesn't depend on the running Python's Unicode version; a tab is
 # left out, as it can't start a line and DSM keeps it in names, which are taken exactly (#488).
 # A lone surrogate is in it too: a reply holding one can't be sent at all.
+# As code-point ranges, written into the pattern as the regex engine's own escapes: a
+# literal class here held lone surrogates in the source, which CodeQL read as U+FFFD.
+FORGING_RANGES = (
+    (0x00, 0x08),  # C0 controls before the tab
+    (0x0A, 0x1F),  # C0 controls after it: line feed, vertical tab, form feed, return, ...
+    (0x7F, 0x9F),  # DEL and the C1 controls (NEL among them)
+    (0x061C, 0x061C),  # Arabic letter mark
+    (0x200E, 0x200F),  # left-to-right and right-to-left marks
+    (0x2028, 0x2029),  # line and paragraph separators
+    (0x202A, 0x202E),  # bidi embeddings and overrides
+    (0x2066, 0x2069),  # bidi isolates
+    (0xD800, 0xDFFF),  # surrogates: only a lone one can be in a str
+    (0xE0000, 0xE007F),  # tag characters
+)
 _FORGES = re.compile(
-    "[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e"
-    "\u2066-\u2069\ud800-\udfff\U000e0000-\U000e007f]"
+    "[" + "".join(f"\\U{low:08x}-\\U{high:08x}" for low, high in FORGING_RANGES) + "]"
 )
 # The same characters as JSON writes them escaped, so a reply with none of them (most) skips
 # the walk: a lone surrogate (`\ud800`) is one too, as the reply couldn't be sent with it.
