@@ -5768,8 +5768,11 @@ async def test_what_counts_as_landing_on_a_running_task(
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_with_running(task, calls))
     if refused:
-        with pytest.raises(ToolError, match="is landing in"):
+        with pytest.raises(ToolError, match="is landing in") as exc:
             await copy_files(mock_client, paths=paths, dest_folder="/d", overwrite=overwrite)
+        # Advice to use overwrite=false goes only to a call that passed overwrite=true.
+        suggestion = json.loads(str(exc.value))["error"]["suggestion"]
+        assert ("overwrite=false" in suggestion) is overwrite
     else:
         await copy_files(mock_client, paths=paths, dest_folder="/d", overwrite=overwrite)
         assert [call for call in calls if call.get("method") == "start"]
@@ -6273,3 +6276,72 @@ async def test_a_refused_restore_recreates_nothing(mock_client: DsmClient) -> No
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=dsm([]))
     await restore_from_recycle_bin(mock_client, share="/s", paths=["y/b"], overwrite=True)
     assert [c for c in calls if c.get("method") == "create"]
+
+
+async def _a_parallel_call_during(
+    mock_client: DsmClient, first: Any, *, hold: str, second: Any
+) -> tuple[Any, list[str]]:
+    """Run ``first`` until the task whose ID ends ``hold`` starts, then ``second``; ``hold``
+    finishes only once ``second`` is done. What ``second`` returned, and every start sent."""
+    calls: list[dict[str, str]] = []
+    starts: list[str] = []
+    base = _dsm_with_running(_a_task_landing("/none"), calls)
+    release = asyncio.Event()
+
+    async def side_effect(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        await asyncio.sleep(0.001)
+        if params.get("method") == "start":
+            starts.append(params["path"])
+        if params.get("method") == "list":
+            return httpx.Response(200, json={"success": True, "data": {"tasks": []}})
+        if params.get("method") == "status" and params.get("taskid", "").endswith(hold + '"'):
+            await release.wait()
+        return base(request)
+
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+
+    async def run_second() -> Any:
+        while not any(p.endswith("/" + hold) for p in starts):
+            await asyncio.sleep(0.001)
+        try:
+            return await second()
+        except ToolError as e:
+            return e
+        finally:
+            release.set()
+
+    _, result = await asyncio.gather(first(), run_second())
+    return result, starts
+
+
+@respx.mock
+async def test_a_parallel_call_sees_a_restores_later_item(mock_client: DsmClient) -> None:
+    """QA round 2 on #597: `/m/b` landed in `/s/y` while `x/a` ran, then `y/b` replaced it."""
+    moved, starts = await _a_parallel_call_during(
+        mock_client,
+        lambda: restore_from_recycle_bin(
+            mock_client, share="/s", paths=["x/a", "y/b"], overwrite=True, timeout=5
+        ),
+        hold="a",
+        second=lambda: move_files(mock_client, paths=["/m/b"], dest_folder="/s/y"),
+    )
+    assert isinstance(moved, ToolError), moved
+    assert "/m/b" not in starts
+
+
+@respx.mock
+async def test_a_clash_with_another_calls_finished_task_says_so(mock_client: DsmClient) -> None:
+    """QA round 2 on #597: it said to check the task with file_task, which said it was done."""
+    refused, _ = await _a_parallel_call_during(
+        mock_client,
+        lambda: move_files(
+            mock_client, paths=["/a/x", "/a/big"], dest_folder="/d", overwrite=True, timeout=5
+        ),
+        hold="big",
+        second=lambda: move_files(mock_client, paths=["/b/x"], dest_folder="/d", overwrite=True),
+    )
+    assert isinstance(refused, ToolError), refused
+    body = json.loads(str(refused))["error"]
+    assert "another move call through this server is landing in '/d'" in body["message"]
+    assert "file_task" not in body["suggestion"]

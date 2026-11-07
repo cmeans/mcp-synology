@@ -472,7 +472,7 @@ def _refuse_landing_on_a_running_task(
         else "a name that matches ignoring case, which some file systems treat as one,"
     )
     leave_out = " Leave out what's already done." if done else ""
-    keep = "" if not overwrite else " To keep what's there, use overwrite=false."
+    keep = "" if not overwrite else " Once it's done, overwrite=false keeps what's there."
     if task.task.get("local"):
         # Another call through this server, started or about to start: it counts until that
         # call returns, though DSM may show its task finished (QA round 2 on #597).

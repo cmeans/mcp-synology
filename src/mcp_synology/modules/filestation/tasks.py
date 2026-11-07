@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import itertools
 import logging
 import re
 import time
@@ -787,6 +788,9 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
             landings.pop(taskid, None)
 
 
+_PENDING_IDS = itertools.count(1)
+
+
 def pending_landing(
     kind: HandleKind, path: str, dest: str, *, overwrite: bool, remove_src: bool
 ) -> RunningTask:
@@ -794,10 +798,10 @@ def pending_landing(
     a parallel call that starts first must not land the same name where this one will. Its
     handle names no DSM task."""
     return RunningTask(
-        Handle(kind, f"pending-{id(object())}"),
+        Handle(kind, f"pending-{next(_PENDING_IDS)}"),
         [path],
         {"dest_folder_path": dest, "overwrite": overwrite, "remove_src": remove_src},
-        {"local": True, "pending": True},
+        {"local": True},
     )
 
 

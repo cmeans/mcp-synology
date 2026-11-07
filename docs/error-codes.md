@@ -292,7 +292,7 @@ Common causes:
   destinations or rename one first. To merge two folders without replacing anything, use
   `overwrite=false`: items whose name is already there are skipped and listed. Separate calls with
   `overwrite=true` don't avoid this: a call is refused too while this user's running task is
-  landing the same name there (naming its handle). Parallel calls through one server process
+  landing the same name there (naming its handle, or saying that another call through this server is landing there). Parallel calls through one server process
   take turns, and the second finds what the first started even if it has already finished, and
   what the first has yet to start (a later source, a restore's later items). A call with
   `overwrite=false` is refused too beside one with `overwrite=true`, which could replace what
