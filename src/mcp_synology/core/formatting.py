@@ -108,7 +108,10 @@ def holds_escape(text: str) -> bool:
     `\\n` and `\\r` can't be told from a real backslash before an `n` or `r` (`C:\\new`)."""
     for m in _ANY_ESCAPE.finditer(text):
         escape = m.group()
-        char = "\n" if escape == "\\n" else "\r" if escape == "\\r" else chr(int(escape[2:], 16))
+        code = 0x0A if escape == "\\n" else 0x0D if escape == "\\r" else int(escape[2:], 16)
+        if code > 0x10FFFF:  # no character, so no reply writes it (QA round 1 on #606)
+            continue
+        char = chr(code)
         if forges(char) and escape_controls(char) == escape:
             return True
     return False

@@ -1411,6 +1411,9 @@ class TestPathsTakenExactly:
         ("/s/a\\x41b", False),
         ("/s/a\\u0041", False),
         ("/s/a\\U0001f600", False),
+        # Past U+10FFFF: no character at all, so no match and no exception (QA round 1).
+        ("/s/a\\U00110000", False),
+        ("/s/a\\Uffffffff", False),
         # A real backslash before `n` can't be told from an escaped newline (accepted cost).
         ("/s/C:\\new folder", True),
     ],
