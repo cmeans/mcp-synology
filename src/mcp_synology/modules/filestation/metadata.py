@@ -125,7 +125,11 @@ async def get_file_info(
             retryable=False,
             param="paths",
             value=paths,
-            suggestion=mapped.suggestion or "Check the paths with list_files or search_files.",
+            # Every path missing (408): the shared suggestion, which leads with the escaped-name
+            # advice when the paths hold escapes instead of "check with list_files" (#606).
+            suggestion=missing_paths_suggestion(missing)
+            if all(code == 408 for _, code in missing)
+            else mapped.suggestion or "Check the paths with list_files or search_files.",
         )
 
     notes = "".join(

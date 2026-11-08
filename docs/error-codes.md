@@ -326,7 +326,11 @@ Common causes:
   local file name that isn't UTF-8), or is `#recycle` directly in a shared folder or a user's home folder
   (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
   upload or `create_folder` would create a missing parent folder under such a name. Give
-  a plain name. Paths themselves are taken exactly, so an existing item named with such
+  a plain name. An upload or `create_folder` also won't create a missing parent folder whose
+  name holds an escape as replies write one (`folder\u202efdp`, or a real `C:\new`, which
+  reads the same): it's most likely copied from a listing, and would make a look-alike. If
+  the name really holds that backslash, create that folder on its own with `create_folder`
+  first (#606). Paths themselves are taken exactly, so an existing item named with such
   whitespace is still reached by its exact path.
 - `create_folder` given a shared folder itself (`/video`) (#510): give the full path of a
   folder inside a shared folder.

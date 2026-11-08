@@ -1903,6 +1903,40 @@ async def test_an_unreadable_parent_answer_is_left_to_dsm() -> None:
     assert got == ["/video/Uploads "]
 
 
+async def test_an_unreadable_escaped_parent_answer_is_left_to_dsm() -> None:
+    """The escaped-part refusal (#606) is like the padded one: only a definite 408 refuses."""
+    got = await resolve_paths(
+        _FakeClient(codes={"/video/folder\\u202efdp": 407}),  # type: ignore[arg-type]
+        set(),
+        "upload_file",
+        "dest_folder",
+        ["/video/folder\\u202efdp/x"],
+        creates_parents=True,
+    )
+    assert got == ["/video/folder\\u202efdp/x"]
+
+
+async def test_a_settings_escaped_parent_gets_the_callers_advice() -> None:
+    """Pre-QA r3 on #606: a path from `default_upload_dir` gets the caller's advice (fix the
+    setting), as a padded part does, not the copied-from-a-listing advice."""
+    with pytest.raises(ToolError) as exc:
+        await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/C:\\new/x"],
+            error_param="default_upload_dir",
+            suggestion="Fix default_upload_dir in the filestation settings, or pass dest_folder.",
+            creates_parents=True,
+        )
+    error = _error(exc)
+    assert error["param"] == "default_upload_dir"
+    assert error["suggestion"] == (
+        "Fix default_upload_dir in the filestation settings, or pass dest_folder."
+    )
+
+
 @pytest.mark.parametrize("stall", [None, "timeout"])
 def test_handoff_lead_line_quotes_a_padded_path(stall: str | None) -> None:
     import httpx

@@ -656,7 +656,8 @@ async def _refuse_bad_created_parents(
     ``force_parent``) under a name `name_problem` refuses: padded (DSM makes
     ``/video/Uploads `` beside ``Uploads`` and reports success; vdsm DSM 7.1 and 7.4.1),
     with a control or invisible character, or ``#recycle`` where it would be a bin (pre-QA
-    on #510). Only such parts are looked up, so an ordinary path costs no request; the
+    on #510), or one holding an escape as replies write it, most likely copied from a listing
+    (#606). Only such parts are looked up, so an ordinary path costs no request; the
     parent is built as the walk goes, not re-joined for every part (pre-QA r4)."""
     parts = normalized.split("/")[1:]
     parent = "/" + parts[0] if parts else "/"
@@ -677,8 +678,10 @@ async def _refuse_bad_created_parents(
                     param,
                     raw,
                     # `C:\\new` can't be told from an escaped newline: give that name a way in
-                    # (create_folder doesn't check its last part this way; QA round 2).
-                    f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, "
+                    # (create_folder doesn't check its last part this way; QA round 2). A
+                    # caller's own advice (a config setting's) comes first, as below.
+                    suggestion
+                    or f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, "
                     "create it on its own with create_folder first, then retry.",
                 )
             continue
