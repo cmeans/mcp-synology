@@ -443,11 +443,25 @@ def refuse_write_target(
                 if words.shared
                 else ""
             )
-            message = f"{head} {words.whose}. Deleting it would permanently remove {lost}."
-            suggestion = (
-                f"To delete items from the bin for good, list them with {words.lister} and "
-                f"delete each by its own path ({own_path}), after the user agrees{empty}."
-            )
+            if at == 2 and parts[0].casefold() == "homes":
+                # Through /homes, a user's home bin is a folder in the homes share: what's
+                # deleted there goes into /homes's own bin when that's on (#610).
+                kept = f"/homes/#recycle/{parts[1]}/#recycle"
+                message = (
+                    f"{head} {words.whose}. Deleting it would remove {lost}: into /homes's "
+                    "own recycle bin if that's on, otherwise permanently."
+                )
+                suggestion = (
+                    f"To delete items from the bin, list them with {words.lister} and delete "
+                    f"each by its own path ({own_path}), after the user agrees. With /homes's "
+                    f"own bin on, they go to {kept}; deleting them there removes them for good."
+                )
+            else:
+                message = f"{head} {words.whose}. Deleting it would permanently remove {lost}."
+                suggestion = (
+                    f"To delete items from the bin for good, list them with {words.lister} and "
+                    f"delete each by its own path ({own_path}), after the user agrees{empty}."
+                )
         else:
             message = f"{head} {words.whose}. {acting} it would take {words.items} out of the bin."
             if at == 2:
