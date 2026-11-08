@@ -1785,7 +1785,7 @@ class TestIdParameters:
                 assert adapter.validate_python(["43"] if listed else "43") == (
                     [43] if listed else 43
                 )
-                for wrong in (True, False, 4.5):
+                for wrong in (True, False, 4.5, 4.0, "4.0", "+4", "1_000", "-4", "x"):
                     with pytest.raises(ValidationError):
                         adapter.validate_python([wrong] if listed else wrong)
                 checked += 1

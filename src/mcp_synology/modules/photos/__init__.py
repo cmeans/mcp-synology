@@ -333,16 +333,18 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-# A Photos ID: a number, or its digits as text (the parameter says it's an ID, so there's
-# nothing to tell apart). True and False are refused: pydantic would read them as 1 and 0, and
-# `album_ids=[true]` would delete album 1.
-def _no_bool(value: object) -> object:
-    if isinstance(value, bool):
-        raise ValueError("an ID is a number, not true or false")
-    return value
+# A Photos ID: a whole number, or its digits as text (the parameter says it's an ID, so there's
+# nothing to tell apart). Anything else is refused: pydantic would read true and false as 1 and
+# 0 (`album_ids=[true]` would delete album 1), and 5.0, "5.0", "+5" or "1_000" as IDs too.
+def _photo_id(value: object) -> object:
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        return int(value.strip())
+    raise ValueError("an ID is a whole number, or its digits")
 
 
-PhotoId = Annotated[int, BeforeValidator(_no_bool)]
+PhotoId = Annotated[int, BeforeValidator(_photo_id)]
 # A name, never an ID (an album's, a person's or a tag's): a number is that name (`2024`), as
 # the smart-album condition already took it (#609).
 Name = Annotated[
@@ -515,7 +517,7 @@ def register(ctx: "RegisterContext") -> None:
                         "`album` (yours, with sharing status), `shared_with_me` (albums others "
                         "shared with you), `person` (face recognition), `tag`, `place`, `concept` "
                         "(things and scenes Photos recognized; 1.9.1+) or `folder` (subfolders of "
-                        "`parent`)."
+                        "a folder: `parent_id` or `parent_path`)."
                     )
                 ),
             ],
@@ -758,8 +760,8 @@ def register(ctx: "RegisterContext") -> None:
                 str,
                 Field(
                     description=(
-                        "`create` (`name` inside `parent`), `rename` (`folder` to `name`) or "
-                        "`set_cover` (`folder`, `item_id`)."
+                        "`create` (`name` inside the parent folder), `rename` (the folder to "
+                        "`name`) or `set_cover` (the folder, `item_id`)."
                     )
                 ),
             ],
@@ -1142,7 +1144,7 @@ def register(ctx: "RegisterContext") -> None:
                     str | None,
                     Field(
                         description=(
-                            "Space of `destination`, if not `space`: `personal` or `shared`."
+                            "Space of the destination, if not `space`: `personal` or `shared`."
                         )
                     ),
                 ] = None,

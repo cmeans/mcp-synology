@@ -263,6 +263,39 @@ class TestChange:
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(COND)
 
+    @pytest.mark.parametrize(
+        ("condition", "looked_up"),
+        [
+            ({"folder_paths": ["2024"]}, ("SYNO.Foto.Browse.Folder", "get", {"name": "/2024"})),
+            ({"folder_ids": ["2024"]}, ("SYNO.Foto.Browse.Folder", "get", {"id": 2024})),
+            ({"person_names": ["43"]}, ("SYNO.Foto.Browse.Person", "list", None)),
+            ({"person_ids": [43]}, ("SYNO.Foto.Browse.Person", "get", None)),
+        ],
+    )
+    @respx.mock
+    async def test_a_condition_takes_ids_and_names_or_paths_from_their_own_keys(
+        self, condition: dict[str, Any], looked_up: tuple[str, str, dict[str, Any] | None]
+    ) -> None:
+        """#616, #617 (pre-QA r4 on #615): digits in folder_paths are a path and in
+        person_names a name; only the *_ids keys take an ID."""
+        fake = self._fake(type="condition")
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on("SYNO.Foto.Browse.Folder", "get", 2, {"folder": {"id": 77, "name": "/2024"}})
+        fake.on("SYNO.Foto.Browse.Person", "get", 1, {"list": [{"id": 43, "name": "Holiday"}]})
+        fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 7, "name": "43"}]})
+        fake.on(COND, "peek_item_count", 2, {"count": 1})
+        fake.on(COND, "set_condition", 2, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            await photo_album(client, action="set_condition", album_id=4, condition=condition)
+        api, method, params = looked_up
+        call = fake.one(api, method)
+        if params is not None:
+            assert call.params == params
+        other = {"get": "list", "list": "get"}[method]
+        assert not fake.of(api, other), fake.calls
+
     @respx.mock
     async def test_unknown_tag_in_condition(self) -> None:
         fake = self._fake(type="condition")
