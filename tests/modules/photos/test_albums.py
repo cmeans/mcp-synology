@@ -15,6 +15,7 @@ from mcp_synology.modules.photos.albums import (
     photo_album,
     photo_share_link,
 )
+from mcp_synology.modules.photos.helpers import IdNumber
 from tests.modules.photos.dsm import FakePhotos, captured, install, make_client
 
 ALBUM = "SYNO.Foto.Browse.Album"
@@ -240,6 +241,24 @@ class TestChange:
         assert fake.one(COND, "set_condition").params == {"id": 4, "condition": cond}
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
         assert "Album 4's condition is replaced.\nMatches 3,456 item(s) now." in out
+
+    @respx.mock
+    async def test_a_numeric_person_in_a_condition_is_an_id_only(self) -> None:
+        """#609 pre-QA: condition people=[43] (a JSON number), with no person 43 but one named
+        "43", is not found rather than that person."""
+        fake = self._fake(type="condition")
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on("SYNO.Foto.Browse.Person", "get", 1, {"list": []})
+        fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 99, "name": "43"}]})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_album(
+                    client, action="set_condition", album="4", condition={"people": [43]}
+                )
+        assert _error(exc)["code"] == "not_found"
+        assert not fake.of(COND)
 
     @respx.mock
     async def test_unknown_tag_in_condition(self) -> None:
@@ -598,6 +617,27 @@ class TestDeleteAlbums:
             out = await delete_photo_albums(client, albums=[value])
         assert out.startswith("No albums deleted.")
         assert not fake.of(ALBUM, "delete")
+
+
+class TestNumericIds:
+    """#609 pre-QA: an ID sent as a JSON number is that ID only. Album 43 gone, with album 7
+    named "43": the number deletes nothing; the text "43" still finds the name, as before."""
+
+    @pytest.mark.parametrize(("value", "deleted"), [(IdNumber("43"), None), ("43", 7)])
+    @respx.mock
+    async def test_a_number_is_never_a_name(self, value: str, deleted: int | None) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": [{"id": 7, "name": "43"}]})
+        fake.on(ALBUM, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, albums=[value])
+        if deleted is None:
+            assert out.startswith("No albums deleted."), out
+            assert "Not found: 43" in out
+            assert not fake.of(ALBUM, "delete")
+        else:
+            assert fake.one(ALBUM, "delete").params == {"id": [deleted]}
 
 
 class TestDsmErrors:

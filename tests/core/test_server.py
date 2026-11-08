@@ -20,6 +20,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import TypeAdapter, ValidationError
 
 from mcp_synology.modules import PermissionTier
+from mcp_synology.modules.photos.helpers import IdNumber
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
     _MODULE_INSTRUCTIONS,
@@ -1738,12 +1739,37 @@ class TestIdParameters:
             )
             adapter: TypeAdapter[Any] = TypeAdapter(hint)
             listed = "array" in json.dumps(adapter.json_schema())
-            for given, wanted in ((43, "43"), ("trip", "trip")):
+            for given, wanted, kind in (
+                (43, "43", IdNumber),
+                ("43", "43", str),
+                ("trip", "trip", str),
+            ):
                 got = adapter.validate_python([given] if listed else given)
                 assert got == ([wanted] if listed else wanted), (tool_name, name, got)
+                # A number stays an IdNumber (an ID only, never a name) through validation.
+                assert type(got[0] if listed else got) is kind, (tool_name, name, given)
             for wrong in (True, 4.0):
                 with pytest.raises(ValidationError):
                     adapter.validate_python([wrong] if listed else wrong)
+
+    async def test_the_handler_gets_an_id_only(self) -> None:
+        """Through MCP's call path, a number reaches the handler as an IdNumber (looked up as
+        an ID only), and the text "43" as plain text (an ID, or else a name)."""
+        seen: list[object] = []
+
+        async def fake(_client: object, *, albums: list[str]) -> str:
+            seen.extend(albums)
+            return "ok"
+
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        with (
+            patch("mcp_synology.server.SharedClientManager.get_client", AsyncMock()),
+            patch("mcp_synology.modules.photos.albums.delete_photo_albums", fake),
+        ):
+            async with Client(server) as client:
+                result = await client.call_tool("delete_photo_albums", {"albums": [43, "43"]})
+        assert not result.is_error, result
+        assert [type(v) for v in seen] == [IdNumber, str], seen
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -1752,6 +1778,8 @@ class TestIdParameters:
             ("delete_photo_albums", {"albums": [43]}),
             ("list_photos", {"album": 43}),
             ("photo_share_link", {"album": 43, "action": "stop"}),
+            ("tag_photos", {"action": "add", "ids": [1], "tags": [2024]}),
+            ("list_photos", {"tag": 2024}),
         ],
     )
     async def test_a_numeric_id_gets_past_a_real_tool_call(
@@ -1955,8 +1983,9 @@ class TestInstructionComments:
 # +828 by #597: copy, move and restore say a call is refused while this user's running task lands
 # the same name there and either one replaces, what that can miss, and that overwrite=false never
 # replaces.
-# +244 by #609: the 19 Photos parameters that take an ID or a name say an ID can be a number.
-PAYLOAD_BUDGET_CHARS = 59_174
+# +270 by #609: the 19 Photos parameters that take an ID or a name, and the 2 tag names, say a
+# number is fine.
+PAYLOAD_BUDGET_CHARS = 59_200
 
 
 class TestPayloadBudget:

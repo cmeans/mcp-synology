@@ -12,7 +12,7 @@ switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
-from pydantic import BeforeValidator, Field, WithJsonSchema, field_validator
+from pydantic import BeforeValidator, Field, WithJsonSchema, WrapValidator, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -27,6 +27,7 @@ from mcp_synology.modules import (
     ToolInfo,
     default_annotations,
 )
+from mcp_synology.modules.photos.helpers import id_number
 
 if TYPE_CHECKING:
     from mcp_synology.modules import RegisterContext
@@ -332,21 +333,23 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-def _id_as_text(value: object) -> object:
-    """An ID sent as a JSON number, as list_photo_collections shows it, is that ID (#609).
-
-    True and False stay refused (``type(value) is int`` leaves out bool), as does a float.
-    """
-    return str(value) if type(value) is int else value
-
-
-# A Photos parameter that takes an ID or a name (or path): the schema says a number is fine,
-# and one arrives as its text, which the lookups read as that ID (#609, 0.11.0rc2 live test).
+# A Photos parameter that takes an ID or a name (or path): the schema says a number is fine.
+# A number arrives as an `IdNumber`, looked up as that ID only, never as a name (#609, found
+# in the 0.11.0rc2 live test); True, False and a decimal stay refused.
 IdOrName = Annotated[
     str,
-    BeforeValidator(_id_as_text),
+    # Wrap, not Before: pydantic would turn an IdNumber back into a plain str.
+    WrapValidator(lambda v, text: id_number(v) if type(v) is int else text(v)),
     WithJsonSchema({"type": ["integer", "string"]}),
 ]
+# A tag name, never an ID: a number is that name (`2024`), as the smart-album condition already
+# took it (#609).
+TagName = Annotated[
+    str,
+    BeforeValidator(lambda v: str(v) if type(v) is int else v),
+    WithJsonSchema({"type": ["integer", "string"]}),
+]
+
 
 # Parameter descriptions used by several tools (#247).
 _SPACE = "`personal` (default) or `shared` (Shared Space). IDs belong to one space."
@@ -411,7 +414,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             tag: Annotated[
-                str | None, Field(description=("Only items with this tag name."))
+                TagName | None, Field(description=("Only items with this tag name."))
             ] = None,
             keyword: Annotated[
                 str | None,
@@ -769,7 +772,8 @@ def register(ctx: "RegisterContext") -> None:
             ],
             ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
             tags: Annotated[
-                list[str], Field(description=('Tag names, any case, such as `["beach", "2024"]`.'))
+                list[TagName],
+                Field(description=('Tag names, any case, such as `["beach", "2024"]`.')),
             ],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:

@@ -162,6 +162,18 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
     return check_parts(value, param, advice)
 
 
+class IdNumber(str):
+    """An ID the caller sent as a JSON number (#609): looked up as that ID only, never as a
+    name, so a missing ID can't act on an album or person whose name is those digits."""
+
+    __slots__ = ()
+
+
+def id_number(value: int) -> IdNumber:
+    """A JSON integer as an `IdNumber`."""
+    return IdNumber(value)
+
+
 @dataclass
 class Photos:
     """One tool call's view of Photos: the client, the space and per-call caches."""
@@ -323,8 +335,13 @@ class Photos:
         personal: bool = False,
         hint: str,
     ) -> dict[str, Any]:
-        """Resolve an ID (digits; tried first) or a unique case-insensitive name."""
+        """Resolve an ID (digits; tried first) or a unique case-insensitive name. An
+        `IdNumber` (sent as a JSON number) is an ID only: not found is not found (#609)."""
         text = value.strip()
+        if isinstance(value, IdNumber) and not (text.isascii() and text.isdigit()):
+            not_found(
+                self.operation, f"no {kind} {text}.", param=param, value=value, suggestion=hint
+            )
         if text.isascii() and text.isdigit():
             suffix, version, extra = get
             try:
@@ -340,6 +357,10 @@ class Photos:
             found = data.get("list", [])
             if found:
                 return dict(found[0])
+            if isinstance(value, IdNumber):
+                not_found(
+                    self.operation, f"no {kind} {text}.", param=param, value=value, suggestion=hint
+                )
         suffix, version, extra = walk
         entries = await self.walk(suffix, params=extra, version=version, personal=personal)
         matches = [e for e in entries if str(e.get("name", "")).casefold() == text.casefold()]
