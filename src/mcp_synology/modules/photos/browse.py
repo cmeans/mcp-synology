@@ -132,11 +132,14 @@ async def list_photos(
         "favorite": True if want_favorite else None,
     }
     used_filters = [k for k, v in filters.items() if v is not None]
-    sources = {"folder": folder, "person": person, "tag": tag, "place": place}
+    # Each source by the parameter it came in (album_id or album_name, and so on).
+    album_param = album.param if album is not None else "album_id"
+    person_param = person.param if person is not None else "person_id"
+    sources = {"folder": folder, person_param: person, "tag": tag, "place": place}
     used_sources = [k for k, v in sources.items() if v is not None]
     if keyword is not None:
         others = used_sources + used_filters
-        others += [k for k, v in {"album": album, "concept": concept}.items() if v is not None]
+        others += [k for k, v in {album_param: album, "concept": concept}.items() if v is not None]
         if others:
             invalid(
                 op,
@@ -146,7 +149,7 @@ async def list_photos(
             )
     # Views that list_with_filter can't narrow: it has no album or concept key, and its
     # place IDs are address-tree nodes, not Geocoding.list's place IDs (verified, #258).
-    alone_views = {"album": album, "concept": concept, "place": place}
+    alone_views = {album_param: album, "concept": concept, "place": place}
     for alone, value in alone_views.items():
         if value is None:
             continue

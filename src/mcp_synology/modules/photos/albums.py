@@ -195,12 +195,17 @@ async def _photo_album(
         invalid(
             ph.operation,
             f"album {album_id} is a smart album; its items come from its condition.",
-            param="album",
-            value=album,
+            param=album.param,
+            value=album.given,
             suggestion="Change what it holds with action=set_condition.",
         )
     if action == "set_condition" and kind != "condition":
-        invalid(ph.operation, f"album {album_id} isn't a smart album.", param="album", value=album)
+        invalid(
+            ph.operation,
+            f"album {album_id} isn't a smart album.",
+            param=album.param,
+            value=album.given,
+        )
 
     if action == "rename":
         await ph.call("Browse.Album", "set_name", {"id": album_id, "name": name}, personal=True)
@@ -628,7 +633,7 @@ async def delete_photo_albums(
             if ref.id is not None:
                 matches = [by_id[ref.id]] if ref.id in by_id else []
             else:
-                name = (ref.name or "").casefold()
+                name = (ref.name or "").strip().casefold()
                 matches = [a for a in existing if str(a.get("name", "")).casefold() == name]
             if not matches:
                 missing.append(f"ID {ref.id}" if ref.id is not None else f"named {ref.name!r}")

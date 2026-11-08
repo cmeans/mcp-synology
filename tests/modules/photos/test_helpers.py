@@ -421,6 +421,19 @@ class TestNames:
         assert err["suggestion"] == "Ask the user which one they mean, then pass its person_id."
 
     @respx.mock
+    async def test_a_name_is_matched_without_its_padding(self) -> None:
+        """As before the split: "Trip " finds the album named Trip."""
+        install(
+            FakePhotos().on(
+                "SYNO.Foto.Browse.Album", "list", 2, {"list": [{"id": 5, "name": "Trip"}]}
+            )
+        )
+        client = make_client()
+        async with client:
+            found = await Photos(client, "personal", "Op").album(Ref("album_name", name="Trip "))
+        assert found["id"] == 5
+
+    @respx.mock
     async def test_person_walk_includes_hidden(self) -> None:
         fake = FakePhotos().on(
             "SYNO.Foto.Browse.Person", "list", 1, captured("person-list", PEOPLE)
@@ -437,6 +450,22 @@ class TestNames:
 
 
 class TestOneRef:
+    @pytest.mark.parametrize(
+        ("param", "id_param"),
+        [
+            ("album_name", "album_id"),
+            ("target_name", "target_id"),
+            ("merge_names", "merge_ids"),
+            ("album_names", "album_ids"),
+            ("condition", "ID in condition person_ids"),
+        ],
+    )
+    def test_an_ambiguous_name_points_at_its_own_id_parameter(
+        self, param: str, id_param: str
+    ) -> None:
+        """Pre-QA r3 on #615: merge_people has no person_id; its names are merge_names."""
+        assert Ref(param, name="Jo").id_param == id_param
+
     """`album_id` or `album_name` (and the other pairs): one, never both (#614, #616)."""
 
     def test_an_id_or_a_name(self) -> None:

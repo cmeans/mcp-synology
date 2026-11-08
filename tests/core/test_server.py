@@ -2056,7 +2056,7 @@ class TestInstructionComments:
 # replaces.
 # +270 by #609: the 19 Photos parameters that take an ID or a name, and the 2 tag names, say a
 # number is fine.
-# +844 by #614 and #616 (0.11.0rc3 live test): albums and people take an ID and a name in
+# +868 by #614 and #616 (0.11.0rc3 live test): albums and people take an ID and a name in
 # separate parameters (album_id / album_name and the like), 9 parameters becoming 18.
 PAYLOAD_BUDGET_CHARS = 60_100
 

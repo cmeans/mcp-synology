@@ -246,6 +246,22 @@ class TestListPhotosRefusals:
         assert err["code"] == "invalid_parameter"
         assert err["param"] == param
 
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"keyword": "x", "album_id": 1}, "keyword can't be combined with album_id."),
+            ({"keyword": "x", "person_name": "Jo"}, "keyword can't be combined with person_name."),
+            ({"album_name": "a", "person_id": 2}, "album_name can't be combined with person_id."),
+        ],
+    )
+    async def test_conflicts_name_the_parameters_given(
+        self, kwargs: dict[str, Any], message: str
+    ) -> None:
+        """Pre-QA r3 on #615: the conflict names the parameters the caller used."""
+        with pytest.raises(ToolError) as exc:
+            await list_photos(make_client(), **kwargs)
+        assert _error(exc)["message"] == f"List photos failed: {message}"
+
     @pytest.mark.parametrize("kwargs", [{"favorite": True}, {"concept": 3}])
     async def test_191_features_refused_on_134(self, kwargs: dict[str, Any]) -> None:
         """1.3.4 silently ignores a favorite filter (every item comes back)."""

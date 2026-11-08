@@ -189,6 +189,16 @@ class Ref:
         """The value as the caller gave it, for errors."""
         return self.id if self.id is not None else self.name or ""
 
+    @property
+    def id_param(self) -> str:
+        """Where the caller gives the ID instead of this name: ``merge_names`` → ``merge_ids``,
+        ``target_name`` → ``target_id``; a smart album condition's ``person_ids``."""
+        if self.param.endswith("_names"):
+            return self.param.removesuffix("_names") + "_ids"
+        if self.param.endswith("_name"):
+            return self.param.removesuffix("_name") + "_id"
+        return f"ID in {self.param} person_ids"
+
 
 def one_ref(
     operation: str,
@@ -436,7 +446,7 @@ class Photos:
                 value=ref.id,
                 suggestion=hint,
             )
-        name = ref.name or ""
+        name = (ref.name or "").strip()  # as before the split (#616)
         suffix, version, extra = walk
         entries = await self.walk(suffix, params=extra, version=version, personal=personal)
         matches = [e for e in entries if str(e.get("name", "")).casefold() == name.casefold()]
@@ -456,7 +466,7 @@ class Photos:
             f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
             param=ref.param,
             value=name,
-            suggestion=f"Ask the user which one they mean, then pass its {kind}_id.",
+            suggestion=f"Ask the user which one they mean, then pass its {ref.id_param}.",
         )
 
     async def album(self, ref: Ref) -> dict[str, Any]:

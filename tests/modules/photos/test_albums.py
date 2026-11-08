@@ -315,6 +315,7 @@ class TestChange:
             with pytest.raises(ToolError) as exc:
                 await photo_album(client, action="add", album_id=4, ids=[1])
         assert "set_condition" in _error(exc)["suggestion"]
+        assert (_error(exc)["param"], _error(exc)["value"]) == ("album_id", 4)
 
     @respx.mock
     async def test_set_condition_needs_smart_album(self) -> None:
@@ -326,6 +327,7 @@ class TestChange:
                     client, action="set_condition", album_id=4, condition={"ratings": [5]}
                 )
         assert "isn't a smart album" in _error(exc)["message"]
+        assert (_error(exc)["param"], _error(exc)["value"]) == ("album_id", 4)
 
     @pytest.mark.parametrize(
         ("kwargs", "param"),
