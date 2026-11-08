@@ -682,7 +682,12 @@ class TestDeleteFiles:
         # A restore back into the user's bin is refused, so the advice names a dest_folder.
         assert "share=homes brings them back with a dest_folder outside the bin" in kept
         assert "Empty folders aren't kept in the bin." in kept
-        assert "To remove them for good, delete them in /homes/#recycle/alice/#recycle" in kept
+        # The paths listed are where the items are now, not where they were.
+        assert kept.endswith(
+            "To remove them for good, delete them where they are now, after the user agrees:\n"
+            "  /homes/#recycle/alice/#recycle/x"
+        ), kept
+        assert "share=homes with a pattern (their names) finds them" in kept
         mixed = await delete_files(
             mock_client,
             paths=["/homes/alice/keep.txt", "/homes/alice/#recycle/x"],
@@ -730,6 +735,63 @@ class TestDeleteFiles:
         assert probes == ["homes"], probes
         assert out.count("Couldn't check whether /homes has its recycle bin enabled") == 2, out
         assert "can still be recovered" not in out and "permanent" not in out, out
+
+    @pytest.mark.parametrize("failure", ["timeout", "dsm_error"])
+    @respx.mock
+    async def test_a_mixed_homes_call_probes_once_and_agrees_with_itself(
+        self, mock_client: DsmClient, failure: str
+    ) -> None:
+        """Pre-QA r2 on #613: a /homes path outside the bin beside one in a home bin probes
+        /homes once, and when that can't tell, neither part of the reply says the files can
+        be recovered."""
+        probes: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("folder_path") == "/homes/#recycle":
+                probes.append("homes")
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("no answer")
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return _async_task_side_effect()(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        out = await delete_files(
+            mock_client,
+            paths=["/homes/alice/keep.txt", "/homes/alice/#recycle/x"],
+            recycle_bin_status={},
+        )
+        assert probes == ["homes"], probes
+        assert "can be recovered with" not in out, out
+        assert "Couldn't check whether /homes has its recycle bin enabled" in out, out
+        assert ("(DSM didn't answer)" in out) == (failure == "timeout"), out
+
+    @respx.mock
+    async def test_a_kept_home_bin_from_an_empty_cache_is_cached(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r2 on #613: the #610 path itself, from no cached status: /homes's bin is
+        probed, found on, kept in the cache, and the next call doesn't probe again."""
+        probes: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("folder_path") == "/homes/#recycle":
+                probes.append("homes")
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [], "total": 0, "offset": 0}}
+                )
+            return _async_task_side_effect()(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        status: dict[str, bool] = {}
+        out = await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status=status
+        )
+        assert "Recycle bin is enabled on /homes, so these went" in out, out
+        assert status == {"homes": True}
+        await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/y"], recycle_bin_status=status
+        )
+        assert probes == ["homes"], probes
 
     @respx.mock
     async def test_a_home_bin_through_homes_when_homes_doesnt_answer(
@@ -2300,8 +2362,8 @@ class TestStallHandoff:
     @pytest.mark.parametrize(
         ("path", "kept"),
         [
-            # Inside a user's home bin through /homes: permanent, so no share status kept
-            # (pre-QA on #479).
+            # Inside a user's home bin through /homes (pre-QA on #479): a bin path, so no
+            # share status kept at hand-off; the final result checks /homes's bin (#610).
             ("/homes/alice/#recycle/big", {}),
             ("/s/#recycle/big", {}),
             ("/homes/alice/big", {"homes": True}),
