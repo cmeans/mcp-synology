@@ -56,7 +56,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12, 99], folders=None, destination="14"
+                client, operation="copy", ids=[12, 99], folder_ids=None, destination_id=14
             )
         assert fake.one(FILE, "copy").params == {
             "target_folder_id": 14,
@@ -80,7 +80,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         # DSM's completion counts the skipped item (captured: completion 1, skip 1), so
         # the headline mustn't say it was copied (rc4 live test).
@@ -122,7 +122,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="move", ids=[12], folders=None, destination="14", timeout=0
+                client, operation="move", ids=[12], folder_ids=None, destination_id=14, timeout=0
             )
         assert "Still moving on the NAS (0 of 1 processed). Handle: photos:6" in out
         assert not fake.of(INFO)
@@ -140,7 +140,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert "didn't answer a status check (ReadTimeout)" in out
         assert "photos:5" in out
@@ -170,7 +170,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert out == (
             f"Copy of 1 item(s) to /mcp-spec-capture/dest (personal space): {shown} "
@@ -192,7 +192,7 @@ class TestCopyMove:
         client.set_re_auth_callback(reauth)
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert "answered a status check with an error (HTTP 502)" in out
         assert "photos:5" in out
@@ -214,7 +214,7 @@ class TestCopyMove:
         async with client:
             with pytest.raises(ToolError) as exc:
                 await copy_or_move(
-                    client, operation="copy", ids=[12], folders=None, destination="14"
+                    client, operation="copy", ids=[12], folder_ids=None, destination_id=14
                 )
         assert fake.one(INFO, "abort_task").params == {"id": [5]}
         err = _error(exc)
@@ -240,7 +240,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             call = asyncio.ensure_future(
-                copy_or_move(client, operation="copy", ids=[12], folders=None, destination="14")
+                copy_or_move(client, operation="copy", ids=[12], folder_ids=None, destination_id=14)
             )
             while not fake.of(INFO, "get_status"):
                 await asyncio.sleep(0)
@@ -258,7 +258,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert out == (
             "Copy of 1 item(s) to /mcp-spec-capture/dest (personal space): The NAS's status "
@@ -283,7 +283,7 @@ class TestCopyMove:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert "1 failed" in out and "item 12: not_existed" in out
         assert fake.one(INFO, "get_error_detail").params == {"id": 5}
@@ -302,8 +302,8 @@ class TestCopyMove:
                 client,
                 operation="copy",
                 ids=[12],
-                folders=None,
-                destination="/team",
+                folder_ids=None,
+                destination_path="/team",
                 dest_space="shared",
             )
         params = fake.one(FILE, "copy").params
@@ -320,8 +320,8 @@ class TestCopyMove:
                 make_client(),
                 operation="move",
                 ids=[1],
-                folders=None,
-                destination="/",
+                folder_ids=None,
+                destination_path="/",
                 space="shared",
                 dest_space="personal",
             )
@@ -335,29 +335,29 @@ class TestCopyMove:
         async with client:
             with pytest.raises(ToolError) as exc:
                 await copy_or_move(
-                    client, operation="copy", ids=None, folders=["/"], destination="/"
+                    client, operation="copy", ids=None, folder_paths=["/"], destination_path="/"
                 )
-        assert _error(exc)["param"] == "folders"
+        assert _error(exc)["param"] == "folder_paths"
 
     @pytest.mark.parametrize(
         ("kwargs", "param"),
         [
-            ({"ids": None, "folders": None}, "ids"),
-            ({"ids": [1], "folders": None, "on_conflict": "replace"}, "on_conflict"),
-            ({"ids": [1], "folders": None, "dest_space": "team"}, "space"),
-            ({"ids": None, "folders": [f"/f{i}" for i in range(1001)]}, "folders"),
+            ({"ids": None, "folder_ids": None}, "ids"),
+            ({"ids": [1], "folder_ids": None, "on_conflict": "replace"}, "on_conflict"),
+            ({"ids": [1], "folder_ids": None, "dest_space": "team"}, "space"),
+            ({"ids": None, "folder_paths": [f"/f{i}" for i in range(1001)]}, "folder_paths"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
         with pytest.raises(ToolError) as exc:
-            await copy_or_move(make_client(), operation="copy", destination="/", **kwargs)
+            await copy_or_move(make_client(), operation="copy", destination_path="/", **kwargs)
         assert _error(exc)["param"] == param
 
     async def test_delete_folders_capped(self) -> None:
         """Each folder costs a lookup, so the list is capped like ID lists (#272's QA)."""
         with pytest.raises(ToolError) as exc:
-            await delete_photo_folders(make_client(), folders=[f"/f{i}" for i in range(1001)])
-        assert _error(exc)["param"] == "folders"
+            await delete_photo_folders(make_client(), folder_paths=[f"/f{i}" for i in range(1001)])
+        assert _error(exc)["param"] == "folder_paths"
 
 
 class TestDeletes:
@@ -442,9 +442,47 @@ class TestDeletes:
         install(fake)
         client = make_client()
         async with client:
-            out = await delete_photo_folders(client, folders=["/mcp-spec-capture"])
+            out = await delete_photo_folders(client, folder_paths=["/mcp-spec-capture"])
         assert fake.one(FILE, "delete").params == {"item_id": [], "folder_id": [10]}
         assert out.startswith("Deleted /mcp-spec-capture (4,321 item(s) directly in it)")
+
+    @pytest.mark.parametrize(
+        ("kwargs", "looked_up"),
+        [
+            ({"folder_paths": ["2024"]}, {"name": "/2024"}),
+            ({"folder_paths": ["/2024"]}, {"name": "/2024"}),
+            ({"folder_ids": [2024]}, {"id": 2024}),
+        ],
+    )
+    @respx.mock
+    async def test_a_path_of_digits_is_that_path_and_an_id_that_id(
+        self, kwargs: dict[str, Any], looked_up: dict[str, Any]
+    ) -> None:
+        """#617 (pre-QA on #615): `folders=["2024"]`, meant as /2024, was folder ID 2024. A
+        path of digits is that path; an ID comes in folder_ids."""
+        fake = FakePhotos().on(FOLDER, "get", 2, captured("folder-get-by-name"))
+        fake.on(ITEM, "count", 1, {"count": 1})
+        fake.on(FILE, "delete", 1, captured("fav191_bg-delete"))
+        fake.on(INFO, "get_status", 1, captured("fav191_bg-delete-status"))
+        fake.on("SYNO.Foto.Setting.Admin", "get", 1, captured("qa1_setting-admin-get"))
+        install(fake)
+        client = make_client()
+        async with client:
+            await delete_photo_folders(client, **kwargs)
+        assert fake.one(FOLDER, "get").params == looked_up
+
+    async def test_a_folder_id_and_path_together_are_refused(self) -> None:
+        with pytest.raises(ToolError) as exc:
+            await copy_or_move(
+                make_client(),
+                operation="copy",
+                ids=[1],
+                destination_id=5,
+                destination_path="/x",
+            )
+        err = json.loads(str(exc.value)[str(exc.value).index("{") :])["error"]
+        assert (err["code"], err["param"]) == ("invalid_parameter", "destination_id")
+        assert "pass destination_id or destination_path, not both." in err["message"]
 
     @respx.mock
     async def test_delete_root_refused(self) -> None:
@@ -452,7 +490,7 @@ class TestDeletes:
         client = make_client()
         async with client:
             with pytest.raises(ToolError):
-                await delete_photo_folders(client, folders=["/"])
+                await delete_photo_folders(client, folder_paths=["/"])
 
     @respx.mock
     async def test_803_is_permission_denied(self) -> None:
@@ -761,7 +799,7 @@ class TestCoverage:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert out.startswith("Copied 1 item(s) to /mcp-spec-capture/dest")
 
@@ -774,7 +812,7 @@ class TestCoverage:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="copy", ids=[12], folders=None, destination="14"
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
             )
         assert "(couldn't read the failed items:" in out
 
@@ -790,8 +828,8 @@ class TestCoverage:
                 client,
                 operation="copy",
                 ids=None,
-                folders=["/mcp-spec-capture/dest"],
-                destination="14",
+                folder_paths=["/mcp-spec-capture/dest"],
+                destination_id=14,
             )
         assert fake.one(FILE, "copy").params["folder_id"] == [14]
         assert out.startswith("Copied 1 folder(s) to ")
@@ -803,7 +841,7 @@ class TestCoverage:
         client = make_client()
         async with client:
             out = await copy_or_move(
-                client, operation="move", ids=[99], folders=None, destination="14"
+                client, operation="move", ids=[99], folder_ids=None, destination_id=14
             )
         assert out.startswith("Nothing to do: none of the ids exist.")
         assert not fake.of(FILE)
@@ -838,8 +876,8 @@ class TestCoverage:
         ("route", "call"),
         [
             ((ITEM, "get", 2), lambda c: copy_or_move(
-                c, operation="copy", ids=[1], folders=None, destination="14")),
-            ((FOLDER, "get", 2), lambda c: delete_photo_folders(c, folders=["/x"])),
+                c, operation="copy", ids=[1], folder_ids=None, destination_id=14)),
+            ((FOLDER, "get", 2), lambda c: delete_photo_folders(c, folder_paths=["/x"])),
             ((INFO, "abort_task", 1), lambda c: photo_task(c, handle="photos:5", action="stop")),
         ],
     )  # fmt: skip

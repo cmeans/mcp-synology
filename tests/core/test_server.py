@@ -21,7 +21,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from mcp_synology.modules import PermissionTier
 from mcp_synology.modules.photos import MODULE_INFO as PHOTOS_INFO
-from mcp_synology.modules.photos.helpers import FOLDER_PARAMS, IdNumber
+from mcp_synology.modules.photos.helpers import FOLDER_PARAMS
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
     _MODULE_INSTRUCTIONS,
@@ -1726,52 +1726,19 @@ class TestIdParameters:
         }
         assert text_only == self.TEXT_IDS
 
-    async def test_a_number_arrives_as_that_id(self) -> None:
-        """Every Photos folder parameter (an ID or a path): 43 reaches the tool as "43" (the
-        lookup reads digits as an ID), text is unchanged, and true or 4.0 is still refused."""
-        server = create_server(make_test_config(modules=ALL_MODULES))
-        params = [
-            (tool, name)
-            for tool, name, types in await self._id_params()
-            if types == {"integer", "string"}
-        ]
-        assert len(params) == 10, params
-        for tool_name, name in params:
-            tool = server._tool_manager.get_tool(tool_name)
-            assert tool is not None
-            field = tool.fn_metadata.arg_model.model_fields[name]
-            hint = (
-                Annotated[field.annotation, *field.metadata] if field.metadata else field.annotation
-            )
-            adapter: TypeAdapter[Any] = TypeAdapter(hint)
-            listed = "array" in json.dumps(adapter.json_schema())
-            for given, wanted, kind in (
-                (43, "43", IdNumber),
-                ("43", "43", str),
-                ("trip", "trip", str),
-            ):
-                got = adapter.validate_python([given] if listed else given)
-                assert got == ([wanted] if listed else wanted), (tool_name, name, got)
-                # A number stays an IdNumber (an ID only, never a name) through validation.
-                assert type(got[0] if listed else got) is kind, (tool_name, name, given)
-            for wrong in (True, 4.0):
-                with pytest.raises(ValidationError):
-                    adapter.validate_python([wrong] if listed else wrong)
-
     # Photos parameters that take a name, never an ID: a number given there is that name.
     NAME_PARAMS = frozenset({"tag", "tags"})
 
-    async def test_albums_and_people_take_an_id_or_a_name_never_one_value_for_both(
-        self,
-    ) -> None:
+    async def test_no_photos_parameter_takes_an_id_and_a_name_or_path(self) -> None:
         """#614 (0.11.0rc3 live test): "the album whose ID is 9876543", sent as text, deleted
-        the album named 9876543; #616: "the album named 43" deleted album 43. A Photos
-        parameter that takes a number or text is a folder (an ID or a path, in
-        `FOLDER_PARAMS`) or a name (`*_name`, `*_names`, tags); an ID parameter
-        (`*_id`, `*_ids`) takes a number only."""
+        the album named 9876543; #616: "the album named 43" deleted album 43; #617: the folder
+        path `2024` was folder ID 2024. An ID and a name or path never share a parameter: an
+        ID parameter (`*_id`, `*_ids`, `ids`) takes a number only, a path parameter
+        (`*_path`, `*_paths`, all in `FOLDER_PARAMS`) text only, and the only parameters
+        taking a number or text are names, where a number is that name."""
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
         photos = {t.name for t in PHOTOS_INFO.tools}
-        both, ids = [], []
+        both, ids, paths = [], [], []
         for tool in tools:
             if tool.name not in photos:
                 continue
@@ -1780,16 +1747,21 @@ class TestIdParameters:
                 if name.endswith(("_id", "_ids")) or name == "ids":
                     ids.append((tool.name, name))
                     assert types == {"integer"}, (tool.name, name, types)
+                elif name.endswith(("_path", "_paths")) and name != "local_paths":
+                    paths.append((tool.name, name))
+                    assert types == {"string"}, (tool.name, name, types)
+                    assert name in FOLDER_PARAMS.get(tool.name, ()), (tool.name, name)
                 elif types == {"integer", "string"}:
                     both.append((tool.name, name))
-                    assert (
-                        name in FOLDER_PARAMS.get(tool.name, ())
-                        or name.endswith(("_name", "_names"))
-                        or name in self.NAME_PARAMS
-                    ), (tool.name, name)
-        # The walk found them: 10 folder, 9 album or person name and 2 tag parameters.
-        assert len(both) == 21, both
-        assert len(ids) > 15, ids
+                    assert name.endswith(("_name", "_names")) or name in self.NAME_PARAMS, (
+                        tool.name,
+                        name,
+                    )
+        # The walk found them: 9 album or person names and 2 tag parameters; 11 folder
+        # paths; and the IDs.
+        assert len(both) == 11, both
+        assert len(paths) == 11, paths
+        assert len(ids) > 25, ids
 
     async def test_a_photos_id_parameter_refuses_true_and_false(self) -> None:
         """pydantic reads true as 1: `album_ids=[true]` would have deleted album 1. Every
@@ -2056,9 +2028,10 @@ class TestInstructionComments:
 # replaces.
 # +270 by #609: the 19 Photos parameters that take an ID or a name, and the 2 tag names, say a
 # number is fine.
-# +868 by #614 and #616 (0.11.0rc3 live test): albums and people take an ID and a name in
-# separate parameters (album_id / album_name and the like), 9 parameters becoming 18.
-PAYLOAD_BUDGET_CHARS = 60_100
+# +1,741 by #614, #616 and #617 (0.11.0rc3 live test): albums, people and folders take an ID
+# and a name or path in separate parameters (album_id / album_name, folder_id / folder_path and
+# the like).
+PAYLOAD_BUDGET_CHARS = 61_000
 
 
 class TestPayloadBudget:
@@ -2162,10 +2135,10 @@ class TestParameterDescriptions:
             ("delete_photos", "ids"),
             ("photo_album", "ids"),
             ("copy_photos", "ids"),
-            ("copy_photos", "folders"),
+            ("copy_photos", "folder_ids"),
             ("move_photos", "ids"),
-            ("move_photos", "folders"),
-            ("delete_photo_folders", "folders"),
+            ("move_photos", "folder_ids"),
+            ("delete_photo_folders", "folder_ids"),
         }
         described = {
             (t.name, name): str(schema.get("description", ""))

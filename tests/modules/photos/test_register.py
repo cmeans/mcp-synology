@@ -170,11 +170,11 @@ async def test_handlers_reach_the_client(tmp_path) -> None:  # type: ignore[no-u
         ("merge_people", {"target_id": 1, "merge_ids": []}),
         ("delete_photo_albums", {"album_ids": []}),
         ("upload_photos", {"local_paths": []}),
-        ("copy_photos", {"destination": "/"}),
-        ("move_photos", {"destination": "/"}),
+        ("copy_photos", {"destination_path": "/"}),
+        ("move_photos", {"destination_path": "/"}),
         ("photo_task", {"action": "bogus"}),
         ("delete_photos", {"ids": []}),
-        ("delete_photo_folders", {"folders": []}),
+        ("delete_photo_folders", {"folder_ids": []}),
     ]:
         with pytest.raises(ToolError):
             await tools[name].fn(**args)

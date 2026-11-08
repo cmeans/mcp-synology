@@ -316,7 +316,7 @@ modules:
 
 - **Edits change the original files.** Photos writes ratings, descriptions, tags, taken-time changes and rotations into the files themselves, so their dates and sizes change; backup and sync tools see new versions.
 - **Tags are given by name.** A tag exists only while some item has it, so removing it from every item deletes it.
-- **Albums and people are given by ID or by name, in separate parameters** (`album_id` or `album_name`, and so on), so a name made of digits is never taken for an ID, nor an ID for a name.
+- **Albums, people and folders are given by ID or by name or path, in separate parameters** (`album_id` or `album_name`, `folder_id` or `folder_path`, and so on), so a name or path made of digits is never taken for an ID, nor an ID for a name.
 - **Deletes** go to the recycle bin of the share that holds the space, when it has one; Photos has no trash of its own. A large copy, move or delete hands off with a `photos:<id>` handle that `photo_task` follows up on.
 
 </details>

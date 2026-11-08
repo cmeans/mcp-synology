@@ -53,10 +53,12 @@ Call = Callable[["DsmClient", str, "Path"], "Awaitable[str]"]
 
 def _copy_move(operation: str, param: str) -> Call:
     def call(c: DsmClient, v: str, _tmp: Path) -> Awaitable[str]:
-        kwargs = {"folders": ["10"], "destination": "/dest"} | {param: v}
-        if param == "folders":
-            kwargs["folders"] = [v]
-        return copy_or_move(c, operation=operation, ids=None, **kwargs)  # type: ignore[arg-type]
+        kwargs: dict[str, Any] = {"folder_ids": [10], "destination_path": "/dest"}
+        if param == "folder_paths":
+            kwargs = {"folder_paths": [v], "destination_path": "/dest"}
+        else:
+            kwargs[param] = v
+        return copy_or_move(c, operation=operation, ids=None, **kwargs)
 
     return call
 
@@ -64,32 +66,34 @@ def _copy_move(operation: str, param: str) -> Call:
 def _upload(c: DsmClient, v: str, tmp: Path) -> Awaitable[str]:
     photo = tmp / "a.jpg"
     photo.write_bytes(b"\xff\xd8\xff")
-    return upload_photos(c, local_paths=[str(photo)], folder=v, allowed_roots=[tmp])
+    return upload_photos(c, local_paths=[str(photo)], folder_path=v, allowed_roots=[tmp])
 
 
 # Each registered argument, called through its tool with `value` as that argument.
 CALLS: dict[tuple[str, str], Call] = {
-    ("list_photos", "folder"): lambda c, v, _t: list_photos(c, folder=v),
-    ("list_photo_collections", "parent"): lambda c, v, _t: list_photo_collections(
-        c, type="folder", parent=v
+    ("list_photos", "folder_path"): lambda c, v, _t: list_photos(c, folder_path=v),
+    ("list_photo_collections", "parent_path"): lambda c, v, _t: list_photo_collections(
+        c, type="folder", parent_path=v
     ),
-    ("photo_folder", "folder"): lambda c, v, _t: photo_folder(
-        c, action="rename", folder=v, name="renamed"
+    ("photo_folder", "folder_path"): lambda c, v, _t: photo_folder(
+        c, action="rename", folder_path=v, name="renamed"
     ),
-    ("photo_folder", "parent"): lambda c, v, _t: photo_folder(
-        c, action="create", parent=v, name="new"
+    ("photo_folder", "parent_path"): lambda c, v, _t: photo_folder(
+        c, action="create", parent_path=v, name="new"
     ),
-    ("photo_request", "folder"): lambda c, v, _t: photo_request(
-        c, action="create", subject="s", folder=v
+    ("photo_request", "folder_path"): lambda c, v, _t: photo_request(
+        c, action="create", subject="s", folder_path=v
     ),
-    ("upload_photos", "folder"): _upload,
-    ("copy_photos", "folders"): _copy_move("copy", "folders"),
-    ("copy_photos", "destination"): _copy_move("copy", "destination"),
-    ("move_photos", "folders"): _copy_move("move", "folders"),
-    ("move_photos", "destination"): _copy_move("move", "destination"),
-    ("delete_photo_folders", "folders"): lambda c, v, _t: delete_photo_folders(c, folders=[v]),
+    ("upload_photos", "folder_path"): _upload,
+    ("copy_photos", "folder_paths"): _copy_move("copy", "folder_paths"),
+    ("copy_photos", "destination_path"): _copy_move("copy", "destination_path"),
+    ("move_photos", "folder_paths"): _copy_move("move", "folder_paths"),
+    ("move_photos", "destination_path"): _copy_move("move", "destination_path"),
+    ("delete_photo_folders", "folder_paths"): lambda c, v, _t: delete_photo_folders(
+        c, folder_paths=[v]
+    ),
     ("photo_album", "condition"): lambda c, v, _t: photo_album(
-        c, action="create_smart", name="smart", condition={"folders": [v]}
+        c, action="create_smart", name="smart", condition={"folder_paths": [v]}
     ),
 }
 
@@ -119,6 +123,9 @@ def test_every_folder_argument_is_registered() -> None:
             known = FOLDER_PARAMS.get(name, set()) | LOCAL_PARAMS.get(name, set())
             if param in known | NOT_FOLDERS.get(name, set()):
                 continue
+            if param.endswith(("_id", "_ids")):
+                continue  # a folder's ID (#617): no path to check
+
             unregistered.append(f"{name}.{param}")
     assert not unregistered, f"folder arguments not in FOLDER_PARAMS: {unregistered}"
     registered = {(name, p) for name, params in FOLDER_PARAMS.items() for p in params}

@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_timestamp, synology_error_response
 from mcp_synology.modules.photos.helpers import (
-    IdNumber,
     Photos,
     Ref,
     check_ids,
@@ -40,7 +39,8 @@ _ALBUM_ACTIONS = (
     "set_condition",
 )
 _CONDITION_KEYS = (
-    "folders",
+    "folder_ids",
+    "folder_paths",
     "person_ids",
     "person_names",
     "people_match",
@@ -277,15 +277,17 @@ def _rejected(data: dict[str, Any]) -> list[str]:
     return [f"  Rejected by DSM: {', '.join(str(r) for r in rejected)} (error_list)"]
 
 
-def condition_person_id(op: str, value: object) -> Ref:
-    """One of a condition's ``person_ids``: a person ID, as a number or its digits."""
+def condition_id(op: str, value: object, key: str) -> Ref:
+    """One of a condition's ``person_ids`` or ``folder_ids``: an ID, as a number or its
+    digits (a name or a path goes in ``person_names`` / ``folder_paths``)."""
     if type(value) is int:
         return Ref("condition", id=value)
     if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
         return Ref("condition", id=int(value.strip()))
+    other = {"person_ids": "names go in person_names", "folder_ids": "paths go in folder_paths"}
     invalid(
         op,
-        f"condition person_ids are person IDs, not {value!r}; names go in person_names.",
+        f"condition {key} are IDs, not {value!r}; {other[key]}.",
         param="condition",
         value=value,
     )
@@ -314,8 +316,8 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
         # DSM accepts a condition with only user_id and matches everything (verified).
         invalid(
             op,
-            "the condition needs at least one of folders, person_ids, person_names, tags, places, "
-            "start_date, end_date, type, ratings or keywords.",
+            "the condition needs at least one of folder_ids, folder_paths, person_ids, "
+            "person_names, tags, places, start_date, end_date, type, ratings or keywords.",
             param="condition",
             value=given,
         )
@@ -334,16 +336,12 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
             invalid(op, f"{key}_match must be any or all.", param="condition", value=match)
         return _MATCH[match]
 
-    if folders := as_list("folders"):
-        cond["folder_filter"] = [
-            int(
-                (await ph.folder(IdNumber(f) if type(f) is int else str(f), param="condition"))[
-                    "id"
-                ]
-            )
-            for f in folders
-        ]
-    people = [condition_person_id(op, p) for p in as_list("person_ids")]
+    # Each folder by ID or by path, from its own key (#617).
+    folders = [condition_id(op, f, "folder_ids") for f in as_list("folder_ids")]
+    folders += [Ref("condition", name=str(f)) for f in as_list("folder_paths")]
+    if folders:
+        cond["folder_filter"] = [int((await ph.folder(f))["id"]) for f in folders]
+    people = [condition_id(op, p, "person_ids") for p in as_list("person_ids")]
     people += [Ref("condition", name=str(p)) for p in as_list("person_names")]
     if people:
         # Each person by ID or by name, from its own key (#614, #616).

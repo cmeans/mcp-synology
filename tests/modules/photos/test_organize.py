@@ -57,7 +57,7 @@ class TestFolder:
         client = make_client()
         async with client:
             out = await photo_folder(
-                client, action="create", parent="/mcp-spec-capture", name="2024"
+                client, action="create", parent_path="/mcp-spec-capture", name="2024"
             )
         assert fake.one(FOLDER, "create").params == {"target_id": 10, "name": "2024"}
         assert out == "Created /mcp-spec-capture/mcp-spec-capture (id 11, personal space)."
@@ -71,7 +71,7 @@ class TestFolder:
         install(fake)
         client = make_client()
         async with client:
-            out = await photo_folder(client, action="rename", folder="13", name="sub-renamed")
+            out = await photo_folder(client, action="rename", folder_id=13, name="sub-renamed")
         assert out == "Renamed folder 13 to /mcp-spec-capture/sub-renamed."
 
     @respx.mock
@@ -83,7 +83,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_folder(client, action="create", parent="/x", name="dup")
+                await photo_folder(client, action="create", parent_path="/x", name="dup")
         assert _error(exc)["code"] == "already_exists"
 
     @respx.mock
@@ -93,7 +93,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError):
-                await photo_folder(client, action="rename", folder="/", name="x")
+                await photo_folder(client, action="rename", folder_path="/", name="x")
         assert not fake.of(FOLDER, "rename")
 
     @respx.mock
@@ -104,7 +104,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_folder(client, action="set_cover", folder="10", item_id=99)
+                await photo_folder(client, action="set_cover", folder_id=10, item_id=99)
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(FOLDER, "set_cover")
 
@@ -115,7 +115,7 @@ class TestFolder:
         install(fake)
         client = make_client()
         async with client:
-            await photo_folder(client, action="set_cover", folder="10", item_id=29)
+            await photo_folder(client, action="set_cover", folder_id=10, item_id=29)
         assert fake.one(FOLDER, "set_cover").params == {"id": 10, "id_item": [29]}
 
     @pytest.mark.parametrize(
@@ -124,8 +124,8 @@ class TestFolder:
             ({"action": "move"}, "action"),
             ({"action": "create"}, "name"),
             ({"action": "create", "name": "a/b"}, "name"),
-            ({"action": "rename", "name": "x"}, "folder"),
-            ({"action": "set_cover", "folder": "1"}, "item_id"),
+            ({"action": "rename", "name": "x"}, "folder_id"),
+            ({"action": "set_cover", "folder_id": 1}, "item_id"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -159,7 +159,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_folder(client, action=action, folder="13", parent="/x", name=name)
+                await photo_folder(client, action=action, folder_id=13, parent_path="/x", name=name)
         assert not fake.calls
         err = _error(exc)
         assert (err["code"], err["param"], err["value"]) == ("invalid_parameter", "name", name)
@@ -173,7 +173,7 @@ class TestFolder:
         install(fake)
         client = make_client()
         async with client:
-            await photo_folder(client, action="create", parent="/x", name="a\tb")
+            await photo_folder(client, action="create", parent_path="/x", name="a\tb")
         assert fake.one(FOLDER, "create").params["name"] == "a\tb"
 
 
@@ -729,7 +729,7 @@ class TestRequests:
                 client,
                 action="create",
                 subject="mcp spec",
-                folder="mcp-spec-capture/",
+                folder_path="mcp-spec-capture/",
                 description="capture",
                 max_file_mib=10,
             )
@@ -754,7 +754,7 @@ class TestRequests:
         install(fake)
         client = make_client()
         async with client:
-            await photo_request(client, action="create", subject="s", folder="  /x/foo ")
+            await photo_request(client, action="create", subject="s", folder_path="  /x/foo ")
         assert fake.one(FOLDER, "get").params == {"name": "/x/foo "}
         assert fake.one(REQ, "create").params["folder_home_path"] == "/x/foo "
 
@@ -765,8 +765,8 @@ class TestRequests:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_request(client, action="create", subject="s", folder="/x\x00y")
-        assert _error(exc)["param"] == "folder"
+                await photo_request(client, action="create", subject="s", folder_path="/x\x00y")
+        assert _error(exc)["param"] == "folder_path"
         # A path only: no ID advice (QA round 1 on #526).
         assert _error(exc)["suggestion"] == (
             "Pass the folder as a path starting with /, such as /Inbox."
@@ -782,9 +782,9 @@ class TestRequests:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_request(client, action="create", subject="s", folder="Inbx")
+                await photo_request(client, action="create", subject="s", folder_path="Inbx")
         err = _error(exc)
-        assert (err["code"], err["param"]) == ("not_found", "folder")
+        assert (err["code"], err["param"]) == ("not_found", "folder_path")
         assert err["suggestion"] == (
             "Pass the folder as a path starting with / (list_photo_collections type=folder "
             "lists them)."
@@ -800,7 +800,7 @@ class TestRequests:
         client = make_client()
         async with client:
             out = await photo_request(
-                client, action="create", subject="s", folder="/team", space="shared"
+                client, action="create", subject="s", folder_path="/team", space="shared"
             )
         assert fake.one(REQ, "create").params["library"] == "shared_space"
         assert "(Shared Space)" in out
@@ -911,8 +911,8 @@ class TestRequests:
         ("kwargs", "param"),
         [
             ({"action": "edit"}, "action"),
-            ({"action": "create", "folder": "/a"}, "subject"),
-            ({"action": "create", "subject": "s"}, "folder"),
+            ({"action": "create", "folder_path": "/a"}, "subject"),
+            ({"action": "create", "subject": "s"}, "folder_path"),
             ({"action": "update"}, "request"),
             ({"action": "list", "max_file_mib": -1}, "max_file_mib"),
             ({"action": "list", "expires": "2030"}, "expires"),
@@ -931,7 +931,10 @@ class TestDsmErrors:
     @pytest.mark.parametrize(
         ("route", "call"),
         [
-            ((FOLDER, "get", 2), lambda c: photo_folder(c, action="rename", folder="/a", name="b")),
+            (
+                (FOLDER, "get", 2),
+                lambda c: photo_folder(c, action="rename", folder_path="/a", name="b"),
+            ),
             ((ITEM, "get", 2), lambda c: edit_photo(c, ids=[1], rating=3)),
             ((ITEM, "get", 2), lambda c: tag_photos(c, action="add", ids=[1], tags=["x"])),
             ((PERSON, "get", 1), lambda c: edit_person(c, action="hide", person_id=5)),

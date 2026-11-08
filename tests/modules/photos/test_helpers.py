@@ -11,7 +11,6 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
 from mcp_synology.modules.photos.helpers import (
-    IdNumber,
     Photos,
     Ref,
     check_space,
@@ -138,7 +137,7 @@ class TestCall:
         install(fake)
         client = make_client()
         async with client:
-            folder = await Photos(client, "shared", "Op").folder("/")
+            folder = await Photos(client, "shared", "Op").folder(None)
         assert folder["id"] == 1
         assert fake.one("SYNO.FotoTeam.Browse.Folder", "get").params == {"id": 0}
 
@@ -174,11 +173,15 @@ class TestFolders:
     @pytest.mark.parametrize(
         ("value", "sent"),
         [
-            ("10", {"id": 10}),
+            (Ref("folder_id", id=10), {"id": 10}),
+            (None, {"id": 0}),
+            # A path of digits is that path, never folder ID 10 (#617: `2024`, meant as
+            # /2024, was folder ID 2024).
+            ("10", {"name": "/10"}),
+            (" 10 ", {"name": "/ 10 "}),
             ("/", {"id": 0}),
             ("", {"id": 0}),
             ("mcp-spec-capture/", {"name": "/mcp-spec-capture"}),
-            (" 10 ", {"id": 10}),
             ("  /", {"id": 0}),
             # Taken exactly (#510): Photos reaches ` foo` beside `foo` (vdsm, DSM 7.1,
             # 7.2.2, 7.3.2 and 7.4.1, both spaces); stripping looked up `foo`.
@@ -192,12 +195,13 @@ class TestFolders:
         ],
     )
     @respx.mock
-    async def test_id_root_or_path(self, value: str, sent: dict[str, object]) -> None:
+    async def test_id_root_or_path(self, value: Ref | str | None, sent: dict[str, object]) -> None:
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name"))
         install(fake)
         client = make_client()
+        ref = Ref("folder_path", name=value) if isinstance(value, str) else value
         async with client:
-            await Photos(client, "personal", "Op").folder(value)
+            await Photos(client, "personal", "Op").folder(ref)
         assert fake.one("SYNO.Foto.Browse.Folder", "get").params == sent
 
     @pytest.mark.parametrize(
@@ -219,12 +223,12 @@ class TestFolders:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").folder(value, param="destination")
+                await Photos(client, "personal", "Op").folder(Ref("destination_path", name=value))
         assert not fake.calls
         err = _error(exc)
         assert (err["code"], err["param"], err["value"]) == (
             "invalid_parameter",
-            "destination",
+            "destination_path",
             value,
         )
         assert what in err["message"]
@@ -235,10 +239,10 @@ class TestFolders:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").folder("/nope", param="parent")
+                await Photos(client, "personal", "Op").folder(Ref("parent_path", name="/nope"))
         err = _error(exc)
         assert err["code"] == "not_found"
-        assert err["param"] == "parent"
+        assert err["param"] == "parent_path"
 
     @pytest.mark.parametrize("kind", ["album", "person"])
     @respx.mock
@@ -263,7 +267,7 @@ class TestFolders:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").folder(IdNumber("-5"))
+                await Photos(client, "personal", "Op").folder(Ref("folder_id", id=-5))
         err = _error(exc)
         assert err["code"] == "not_found", err
         assert "no folder -5" in err["message"], err
@@ -275,7 +279,7 @@ class TestFolders:
         client = make_client()
         async with client:
             with pytest.raises(SynologyError) as exc:
-                await Photos(client, "shared", "Op").folder("/")
+                await Photos(client, "shared", "Op").folder(None)
         assert exc.value.code == 801
 
     @respx.mock
@@ -323,7 +327,7 @@ class TestFolders:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").folder("²")
+                await Photos(client, "personal", "Op").folder(Ref("folder_path", name="²"))
         assert _error(exc)["code"] == "not_found"
         assert fake.one("SYNO.Foto.Browse.Folder", "get").params == {"name": "/²"}
 
@@ -575,7 +579,7 @@ def test_id_limit_refusals_name_what_and_separate_thousands() -> None:
 
     from mcp_synology.modules.photos.helpers import check_ids
 
-    for param, noun in (("ids", "ids"), ("folders", "folders")):
+    for param, noun in (("ids", "ids"), ("folder_paths", "folders"), ("folder_ids", "folders")):
         try:
             check_ids("Copy photos", list(range(1_001)), param=param)
         except ToolError as e:

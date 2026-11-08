@@ -20,6 +20,7 @@ from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
+    Ref,
     add_rejected,
     check_folder_path,
     check_ids,
@@ -51,8 +52,10 @@ async def photo_folder(
     client: DsmClient,
     *,
     action: str,
-    folder: str | None = None,
-    parent: str = "/",
+    folder_id: int | None = None,
+    folder_path: str | None = None,
+    parent_id: int | None = None,
+    parent_path: str | None = None,
     name: str | None = None,
     item_id: int | None = None,
     space: str = "personal",
@@ -60,6 +63,10 @@ async def photo_folder(
     """Create or rename a folder, or set its cover (spec: photo_folder)."""
     op = "Photo folder"
     sp = check_space(op, space)
+    folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
+    parent = one_ref(
+        op, "folder", parent_id, parent_path, prefix="parent", other="path", required=False
+    )
     if action not in _FOLDER_ACTIONS:
         invalid(
             op,
@@ -77,36 +84,38 @@ async def photo_folder(
             invalid(op, f"action={action} needs name.", param="name", value=name)
         refuse_bad_name(op, leaf, "name", "Pass one folder name, without /, such as Trips.")
     if action in ("rename", "set_cover") and folder is None:
-        invalid(op, f"action={action} needs folder.", param="folder")
+        invalid(op, f"action={action} needs folder_id or folder_path.", param="folder_id")
     if action == "set_cover" and item_id is None:
         invalid(op, "action=set_cover needs item_id.", param="item_id")
     try:
         ph = Photos(client, sp, op)
         if action == "create":
-            under = await ph.folder(parent, param="parent")
+            under = await ph.folder(parent)
             data = await ph.call(
                 "Browse.Folder", "create", {"target_id": int(under["id"]), "name": leaf}
             )
             made = data["folder"]
             return f"Created {made.get('name')} (id {made['id']}, {space_label(sp)})."
-        target = await ph.folder(folder or "")
-        folder_id = int(target["id"])
+        assert folder is not None  # checked above
+        target = await ph.folder(folder)
+        fid = int(target["id"])
         if action == "rename":
-            if target.get("parent") == folder_id or target.get("name") == "/":
+            if target.get("parent") == fid or target.get("name") == "/":
                 invalid(
-                    op, "the space's root folder can't be renamed.", param="folder", value=folder
+                    op,
+                    "the space's root folder can't be renamed.",
+                    param=folder.param,
+                    value=folder.given,
                 )
-            data = await ph.call("Browse.Folder", "rename", {"id": folder_id, "name": leaf})
-            return f"Renamed folder {folder_id} to {data['folder'].get('name')}."
+            data = await ph.call("Browse.Folder", "rename", {"id": fid, "name": leaf})
+            return f"Renamed folder {fid} to {data['folder'].get('name')}."
         found, _missing = await ph.items([int(item_id or 0)])
         if not found:
             not_found(
                 op, f"no item {item_id} in the {space_label(sp)}.", param="item_id", value=item_id
             )
-        await ph.call(
-            "Browse.Folder", "set_cover", {"id": folder_id, "id_item": [item_id]}, version=2
-        )
-        return f"Folder {folder_id}'s cover is now item {item_id}."
+        await ph.call("Browse.Folder", "set_cover", {"id": fid, "id_item": [item_id]}, version=2)
+        return f"Folder {fid}'s cover is now item {item_id}."
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -494,7 +503,7 @@ async def photo_request(
     request: str | None = None,
     subject: str | None = None,
     description: str | None = None,
-    folder: str | None = None,
+    folder_path: str | None = None,
     space: str = "personal",
     max_file_mib: int | None = None,
     expires: str | None = None,
@@ -513,8 +522,8 @@ async def photo_request(
     if action == "create":
         if not (subject or "").strip():
             invalid(op, "action=create needs subject.", param="subject", value=subject)
-        if not folder:
-            invalid(op, "action=create needs folder.", param="folder")
+        if not folder_path:
+            invalid(op, "action=create needs folder_path.", param="folder_path")
     if action in ("update", "delete") and not request:
         invalid(
             op, f"action={action} needs request (its passphrase from action=list).", param="request"
@@ -568,11 +577,13 @@ async def photo_request(
             fields["subject"] = subject
         if description is not None:
             fields["description"] = description
-        if folder is not None:
-            # A path only: an ID here would be a folder named after it (`12` is `/12`).
-            path = check_folder_path(folder, advice=_REQUEST_FOLDER_ADVICE)
+        if folder_path is not None:
+            # A path only: DSM takes a request's folder by path (`12` is `/12`).
+            path = check_folder_path(folder_path, "folder_path", advice=_REQUEST_FOLDER_ADVICE)
             # Checked here, so a typo isn't a request into a folder that doesn't exist.
-            await Photos(client, sp, op).folder(path, missing_advice=_REQUEST_MISSING_ADVICE)
+            await Photos(client, sp, op).folder(
+                Ref("folder_path", name=path), missing_advice=_REQUEST_MISSING_ADVICE
+            )
             fields["library"] = _LIBRARY[sp]
             fields["folder_home_path"] = path
         if max_file_mib is not None:

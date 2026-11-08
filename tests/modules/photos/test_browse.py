@@ -49,7 +49,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, folder="/mcp-spec-capture", limit=2)
+            out = await list_photos(client, folder_path="/mcp-spec-capture", limit=2)
         listed = fake.one(ITEM, "list").params
         assert listed["folder_id"] == 10
         assert listed["sort_by"] == "takentime" and listed["sort_direction"] == "desc"
@@ -211,7 +211,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, folder="10")
+            out = await list_photos(client, folder_id=10)
         # The file's modification time, read as UTC, isn't shown: indexing replaces it
         # with the local taken time, 5 h off on a US Central NAS (#415).
         row = next(ln for ln in out.splitlines() if "(indexing)" in ln)
@@ -223,7 +223,7 @@ class TestListPhotosRefusals:
     @pytest.mark.parametrize(
         ("kwargs", "param"),
         [
-            ({"keyword": "x", "folder": "/"}, "keyword"),
+            ({"keyword": "x", "folder_path": "/"}, "keyword"),
             ({"album_id": 1, "tag": "x"}, "album_id"),
             ({"place": 1, "type": "photo"}, "place"),
             ({"concept": 1, "album_name": "2"}, "album_name"),
@@ -345,7 +345,9 @@ class TestCollections:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photo_collections(client, type="folder", parent="/mcp-spec-capture")
+            out = await list_photo_collections(
+                client, type="folder", parent_path="/mcp-spec-capture"
+            )
         assert fake.one(FOLDER, "list").params["id"] == 10
         assert "/mcp-spec-capture/2024" in out
 
@@ -362,7 +364,7 @@ class TestCollections:
         install(fake)
         client = make_client(CAPTURE_191)
         async with client:
-            out = await list_photo_collections(client, type="folder", parent="21")
+            out = await list_photo_collections(client, type="folder", parent_id=21)
         rows = {
             line.split()[1]: line.split()[-1]
             for line in out.splitlines()
@@ -401,7 +403,7 @@ class TestCollections:
         ("kwargs", "param"),
         [
             ({"type": "albums"}, "type"),
-            ({"type": "tag", "parent": "/"}, "parent"),
+            ({"type": "tag", "parent_path": "/"}, "parent_path"),
             ({"type": "tag", "limit": 0}, "limit"),
         ],
     )

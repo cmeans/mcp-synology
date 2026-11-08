@@ -427,7 +427,7 @@ class TestUpload:
             out = await upload_photos(
                 client,
                 local_paths=self._files(tmp_path),
-                folder="/mcp-spec-capture",
+                folder_path="/mcp-spec-capture",
                 allowed_roots=[tmp_path],
             )
         assert len(sent) == 3
@@ -712,8 +712,8 @@ class TestUpload:
         assert lines[-3] == (
             "Started no new file after 30 s (the task timeout, at most 45 s) so the reply "
             "isn't cut off; 2 file(s) not tried. To continue, call upload_photos again with "
-            "the same folder, space, album_id or album_name and on_duplicate, and only these "
-            "local_paths (resending the others makes renamed copies):"
+            "the same arguments and only these local_paths (resending the others makes "
+            "renamed copies):"
         )
         assert lines[-2:] == [f"  {paths[2]}", f"  {paths[3]}"]
 
@@ -1161,7 +1161,7 @@ class TestUploadPersonalRootFolder:
             fake = FakePhotos().on(
                 "SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name")
             )
-            kwargs: dict[str, Any] = {"folder": "/Trips"}
+            kwargs: dict[str, Any] = {"folder_path": "/Trips"}
         else:
             fake = FakePhotos().on(
                 "SYNO.FotoTeam.Browse.Folder", "get", 2, captured("folder-get-root")

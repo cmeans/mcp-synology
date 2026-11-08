@@ -73,7 +73,7 @@ class TestCreate:
                 action="create_smart",
                 name="mcp-spec-smart",
                 condition={
-                    "folders": ["/mcp-spec-capture"],
+                    "folder_paths": ["/mcp-spec-capture"],
                     "tags": ["mcp-spec-tag", "2024"],
                     "tags_match": "all",
                     "start_date": "2023-07-22",
@@ -242,14 +242,14 @@ class TestChange:
         assert "Album 4's condition is replaced.\nMatches 3,456 item(s) now." in out
 
     @pytest.mark.parametrize(
-        "condition", [{"person_ids": [43]}, {"person_ids": ["43"]}, {"folders": [-5]}]
+        "condition", [{"person_ids": [43]}, {"person_ids": ["43"]}, {"folder_ids": [-5]}]
     )
     @respx.mock
     async def test_a_numeric_person_in_a_condition_is_an_id_only(
         self, condition: dict[str, Any]
     ) -> None:
         """#609 pre-QA, #614: condition person_ids=[43], with no person 43 but one named "43",
-        is not found rather than that person; folders=[-5] isn't the path /-5."""
+        is not found rather than that person; folder_ids=[-5] isn't the path /-5."""
         fake = self._fake(type="condition")
         fake.on("SYNO.Foto.Browse.Folder", "get", 2, {"folder": {"id": 77, "name": "/-5"}})
         fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))

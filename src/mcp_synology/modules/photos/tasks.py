@@ -45,6 +45,8 @@ from mcp_synology.modules.photos.helpers import (
     check_space,
     invalid,
     not_found,
+    one_ref,
+    refs,
     space_label,
 )
 
@@ -232,8 +234,10 @@ async def copy_or_move(
     *,
     operation: str,
     ids: list[int] | None,
-    folders: list[str] | None,
-    destination: str,
+    folder_ids: list[int] | None = None,
+    folder_paths: list[str] | None = None,
+    destination_id: int | None = None,
+    destination_path: str | None = None,
     space: str = "personal",
     dest_space: str | None = None,
     on_conflict: str = "skip",
@@ -251,8 +255,12 @@ async def copy_or_move(
             value=on_conflict,
             valid=list(_CONFLICT),
         )
+    folders = refs(op, folder_ids, folder_paths, prefix="folder", other="paths", required=False)
     if not ids and not folders:
-        invalid(op, "pass ids, folders or both.", param="ids")
+        invalid(op, "pass ids, folder_ids or folder_paths.", param="ids")
+    destination = one_ref(
+        op, "folder", destination_id, destination_path, prefix="destination", other="path"
+    )
     if operation == "move" and src == "shared" and dst == "personal":
         # DSM answers 640 to it (verified on 7.1 and 7.2.2); a copy works, and so does a
         # move the other way.
@@ -266,29 +274,29 @@ async def copy_or_move(
     if ids:
         check_ids(op, ids)
     if folders:
-        check_ids(op, folders, param="folders")  # one lookup each
+        check_ids(op, folders, param=folders[0].param)  # one lookup each
     try:
         source = Photos(client, src, op)
         found, missing = await source.items(ids or [])
-        folder_ids: list[int] = []
-        for value in folders or []:
-            folder = await source.folder(value, param="folders")
+        moved: list[int] = []
+        for ref in folders:
+            folder = await source.folder(ref)
             if folder.get("name") == "/":
                 invalid(
                     op,
                     "the space's root folder can't be copied or moved.",
-                    param="folders",
-                    value=value,
+                    param=ref.param,
+                    value=ref.given,
                 )
-            folder_ids.append(int(folder["id"]))
+            moved.append(int(folder["id"]))
         target = Photos(client, dst, op)
-        dest = await target.folder(destination, param="destination")
-        if not found and not folder_ids:
+        dest = await target.folder(destination)
+        if not found and not moved:
             return "Nothing to do: none of the ids exist.\n" + source.missing_note(missing)
         params: dict[str, Any] = {
             "target_folder_id": int(dest["id"]),
             "item_id": list(found),
-            "folder_id": folder_ids,
+            "folder_id": moved,
             "action": _CONFLICT[on_conflict],
         }
         if src != dst:
@@ -301,7 +309,7 @@ async def copy_or_move(
         task = data["task_info"]
         verb = "copying" if operation == "copy" else "moving"
         status, why = await _wait(source, task, timeout)
-        what = _what(len(found), len(folder_ids))
+        what = _what(len(found), len(moved))
         where = f"{dest.get('name')} ({space_label(dst)})"
         if why is not None:
             lines = [
@@ -386,22 +394,29 @@ async def delete_photos(
 
 
 async def delete_photo_folders(
-    client: DsmClient, *, folders: list[str], space: str = "personal", timeout: float = 30
+    client: DsmClient,
+    *,
+    folder_ids: list[int] | None = None,
+    folder_paths: list[str] | None = None,
+    space: str = "personal",
+    timeout: float = 30,
 ) -> str:
     """Delete folders with everything in them (spec: delete_photo_folders)."""
     op = "Delete photo folders"
     sp = check_space(op, space)
-    if not folders:
-        invalid(op, "pass at least one folder.", param="folders", value=folders)
-    check_ids(op, folders, param="folders")  # one lookup each
+    folders = refs(op, folder_ids, folder_paths, prefix="folder", other="paths")
+    check_ids(op, folders, param=folders[0].param)  # one lookup each
     try:
         ph = Photos(client, sp, op)
         resolved: dict[int, str] = {}
-        for value in folders:
-            folder = await ph.folder(value, param="folders")
+        for ref in folders:
+            folder = await ph.folder(ref)
             if folder.get("name") == "/":
                 invalid(
-                    op, "the space's root folder can't be deleted.", param="folders", value=value
+                    op,
+                    "the space's root folder can't be deleted.",
+                    param=ref.param,
+                    value=ref.given,
                 )
             resolved[int(folder["id"])] = str(folder.get("name", ""))
         described = []

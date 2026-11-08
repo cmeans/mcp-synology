@@ -374,7 +374,8 @@ async def upload_photos(
     client: DsmClient,
     *,
     local_paths: list[str],
-    folder: str = "/",
+    folder_id: int | None = None,
+    folder_path: str | None = None,
     space: str = "personal",
     on_duplicate: str = "rename",
     album_id: int | None = None,
@@ -393,6 +394,7 @@ async def upload_photos(
     op = "Upload photos"
     sp = check_space(op, space)
     album = one_ref(op, "album", album_id, album_name, required=False)
+    folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
     if on_duplicate not in _DUPLICATE:
         invalid(
             op,
@@ -610,8 +612,8 @@ async def upload_photos(
         lines.append(
             f"Started no new file after {budget:g} s (the task timeout, at most "
             f"{UPLOAD_BUDGET_CAP:g} s) so the reply isn't cut off; {len(left):,} file(s) "
-            "not tried. To continue, call upload_photos again with the same folder, space, "
-            f"album_id or album_name and on_duplicate, and only these local_paths ({why}):"
+            "not tried. To continue, call upload_photos again with the same arguments and "
+            f"only these local_paths ({why}):"
         )
         lines += [f"  {value}" for value in left]
     return "\n".join(lines)

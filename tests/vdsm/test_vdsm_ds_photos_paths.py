@@ -250,14 +250,14 @@ class TestPhotos:
             # ` foo` is its own folder, and the lookup reaches it, not `foo`.
             got = await ph.folder(f"/{name}/ foo")
             assert int(got["id"]) == ids[" foo"]
-            out = await list_photos(photos, space=space, folder=f"/{name}/ foo")
+            out = await list_photos(photos, space=space, folder_path=f"/{name}/ foo")
             assert f"/{name}/ foo" in out and "No items to display." in out, out
 
             # DSM cuts a path at a NUL, so the tools refuse one.
             raw = await ph.call("Browse.Folder", "get", {"name": f"/{name}/foo\x00x"}, version=2)
             assert int(raw["folder"]["id"]) == ids["foo"]
             with pytest.raises(ToolError) as exc:
-                await list_photos(photos, space=space, folder=f"/{name}/foo\x00x")
+                await list_photos(photos, space=space, folder_path=f"/{name}/foo\x00x")
             assert _error(exc)["code"] == "invalid_parameter"
 
             # DSM keeps these new names as given; photo_folder refuses them.
@@ -269,7 +269,7 @@ class TestPhotos:
                 assert made["folder"]["name"] == escape_controls(f"/{name}/{bad}")
                 with pytest.raises(ToolError) as exc:
                     await photo_folder(
-                        photos, action="create", parent=f"/{name}", name=bad, space=space
+                        photos, action="create", parent_path=f"/{name}", name=bad, space=space
                     )
                 assert (_error(exc)["code"], _error(exc)["param"]) == ("invalid_parameter", "name")
         finally:
