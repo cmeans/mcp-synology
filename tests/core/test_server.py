@@ -9,7 +9,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -17,6 +17,7 @@ import pytest
 import respx
 from mcp.client import Client
 from mcp.server.mcpserver import MCPServer
+from pydantic import TypeAdapter, ValidationError
 
 from mcp_synology.modules import PermissionTier
 from mcp_synology.server import (
@@ -1671,6 +1672,102 @@ class TestServedSchemas:
         assert json.dumps(served.input_schema).count('"null"') == 0
 
 
+class TestIdParameters:
+    """#609 (0.11.0rc2 live test): Muse passed an album ID as the number list_photo_collections
+    shows (`albums=[43]`), and a parameter typed text-only refused it with a raw validation
+    error. A parameter that takes an ID accepts it as a number too."""
+
+    # Text-only on purpose: these IDs are never bare numbers (`dbid_…`, `volume_1`, `sda`),
+    # and `space` only says IDs belong to one space.
+    TEXT_IDS = frozenset(
+        {
+            ("get_download_info", "task_id"),
+            ("delete_download", "task_ids"),
+            ("pause_download", "task_ids"),
+            ("resume_download", "task_ids"),
+            ("edit_download", "task_ids"),
+            ("get_volume", "volume"),
+            ("get_disk", "disk"),
+        }
+    )
+
+    @staticmethod
+    def _types(node: dict[str, Any]) -> set[str]:
+        if "items" in node:
+            return TestIdParameters._types(node["items"])
+        found = node.get("type", [])
+        return set(found if isinstance(found, list) else [found])
+
+    async def _id_params(self) -> list[tuple[str, str, set[str]]]:
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        return [
+            (tool.name, name, self._types(prop))
+            for tool in tools
+            for name, prop in tool.input_schema.get("properties", {}).items()
+            if name != "space" and re.search(r"\bIDs?\b", prop.get("description", ""))
+        ]
+
+    async def test_every_id_parameter_takes_a_number(self) -> None:
+        """Structural guard: a new parameter described as taking an ID, typed text-only,
+        fails here unless it's listed in TEXT_IDS with a reason."""
+        params = await self._id_params()
+        assert len(params) > 30, params  # the walk found the parameters
+        text_only = {
+            (tool, name)
+            for tool, name, types in params
+            if "string" in types and "integer" not in types
+        }
+        assert text_only == self.TEXT_IDS
+
+    async def test_a_number_arrives_as_that_id(self) -> None:
+        """Every Photos parameter that takes an ID or a name: 43 reaches the tool as "43" (the
+        lookups read digits as an ID), text is unchanged, and true or 4.0 is still refused."""
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        params = [
+            (tool, name)
+            for tool, name, types in await self._id_params()
+            if types == {"integer", "string"}
+        ]
+        assert len(params) == 19, params
+        for tool_name, name in params:
+            tool = server._tool_manager.get_tool(tool_name)
+            assert tool is not None
+            field = tool.fn_metadata.arg_model.model_fields[name]
+            hint = (
+                Annotated[field.annotation, *field.metadata] if field.metadata else field.annotation
+            )
+            adapter: TypeAdapter[Any] = TypeAdapter(hint)
+            listed = "array" in json.dumps(adapter.json_schema())
+            for given, wanted in ((43, "43"), ("trip", "trip")):
+                got = adapter.validate_python([given] if listed else given)
+                assert got == ([wanted] if listed else wanted), (tool_name, name, got)
+            for wrong in (True, 4.0):
+                with pytest.raises(ValidationError):
+                    adapter.validate_python([wrong] if listed else wrong)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            ("delete_photo_albums", {"albums": [43]}),
+            ("list_photos", {"album": 43}),
+            ("photo_share_link", {"album": 43, "action": "stop"}),
+        ],
+    )
+    async def test_a_numeric_id_gets_past_a_real_tool_call(
+        self, tool: str, args: dict[str, Any]
+    ) -> None:
+        """Through MCP's call path: no validation error; the call reaches the NAS."""
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        async with Client(server) as client:
+            result = await client.call_tool(tool, args)
+        text = " ".join(getattr(c, "text", "") for c in result.content)
+        assert result.is_error
+        assert "validation error" not in text.lower(), text
+        assert "unavailable" in text, text
+
+
 class TestInstructionComments:
     """HTML comments are notes for whoever edits the file; models never get them (#163)."""
 
@@ -1858,7 +1955,8 @@ class TestInstructionComments:
 # +828 by #597: copy, move and restore say a call is refused while this user's running task lands
 # the same name there and either one replaces, what that can miss, and that overwrite=false never
 # replaces.
-PAYLOAD_BUDGET_CHARS = 58_930
+# +244 by #609: the 19 Photos parameters that take an ID or a name say an ID can be a number.
+PAYLOAD_BUDGET_CHARS = 59_174
 
 
 class TestPayloadBudget:

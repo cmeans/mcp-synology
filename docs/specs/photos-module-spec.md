@@ -191,7 +191,7 @@ Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share
 
 ### Identifiers and names
 
-Tools take the IDs list calls return, and also **names where they're unique**: tags (always by name), albums and people (by name when exactly one matches; otherwise `invalid_parameter` listing the matches with IDs). Folders take an ID or a path inside the space (`/Trips/2024`, resolved with `Folder.get` by `name`, verified). Every folder argument goes through `Photos.folder` (`FOLDER_PARAMS` lists them), which takes a path exactly by File Station's part rules (`check_folder_path`, #510): only whitespace before a leading `/`, and a trailing `/`, are dropped; a NUL (DSM cuts the path there: `/x/foo<NUL>y` resolved to `/x/foo`), an empty part (`//`) and a `.` or `..` part (DSM answers 642 for those) are refused. Photos reaches a folder whose name starts with whitespace exactly (` foo` beside `foo`; it refuses to create a name ending in whitespace, 606), so the old `strip()` looked up another folder (vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). A backslash is an ordinary character. A trailing `/` answers 642 on DSM 7.1 and resolves on 7.2.2 and later, so it's dropped. Places take IDs from `list_photo_collections(type="place")`.
+Tools take the IDs list calls return, and also **names where they're unique**: tags (always by name), albums and people (by name when exactly one matches; otherwise `invalid_parameter` listing the matches with IDs). Folders take an ID or a path inside the space (`/Trips/2024`, resolved with `Folder.get` by `name`, verified). Every folder argument goes through `Photos.folder` (`FOLDER_PARAMS` lists them), which takes a path exactly by File Station's part rules (`check_folder_path`, #510): only whitespace before a leading `/`, and a trailing `/`, are dropped; a NUL (DSM cuts the path there: `/x/foo<NUL>y` resolved to `/x/foo`), an empty part (`//`) and a `.` or `..` part (DSM answers 642 for those) are refused. Photos reaches a folder whose name starts with whitespace exactly (` foo` beside `foo`; it refuses to create a name ending in whitespace, 606), so the old `strip()` looked up another folder (vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). A backslash is an ordinary character. A trailing `/` answers 642 on DSM 7.1 and resolves on 7.2.2 and later, so it's dropped. Places take IDs from `list_photo_collections(type="place")`. Every parameter that takes an ID or a name or path (`IdOrName`, 19 of them) accepts the ID as a number too, its schema `integer` or `string`, and reads it as that ID: list calls show IDs as numbers, and `delete_photo_albums albums=[43]` was refused with a raw validation error (#609, found in the 0.11.0rc2 live test). `true`, `false` and a decimal stay refused. `tests/core/test_server.py` `TestIdParameters` fails on a new parameter, in any module, that's described as taking an ID and typed text-only.
 
 ### Formatting
 
@@ -247,9 +247,9 @@ Browse or search items.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
-| `folder` | `str` | No | — | Folder ID or path in the space. **One level** (Photos has no recursive folder listing). |
-| `album` | `str` | No | — | Album ID or unique name (personal only). Can't be combined with other filters. |
-| `person` | `str` | No | — | Person ID or unique name. |
+| `folder` | `int/str` | No | — | Folder ID or path in the space. **One level** (Photos has no recursive folder listing). |
+| `album` | `int/str` | No | — | Album ID or unique name (personal only). Can't be combined with other filters. |
+| `person` | `int/str` | No | — | Person ID or unique name. |
 | `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. Can't be combined with other filters. |
 | `tag` | `str` | No | — | Tag name (any case). |
 | `keyword` | `str` | No | — | Search text. Can't be combined with other filters. |
@@ -312,7 +312,7 @@ Albums, people, tags, places and folders.
 | `type` | `str` | **Yes** | — | `album`, `shared_with_me`, `person`, `tag`, `place`, `concept` or `folder`. |
 | `space` | `str` | No | `"personal"` | Ignored for `album` and `shared_with_me`. |
 | `name` | `str` | No | — | Case-insensitive substring; applied client-side over all pages. |
-| `parent` | `str` | No | — | `folder` only: parent folder ID or path (default the root). |
+| `parent` | `int/str` | No | — | `folder` only: parent folder ID or path (default the root). |
 | `include_hidden` | `bool` | No | `false` | `person` and `concept`: `show_hidden` (for people also `show_more`, which adds people with few photos). |
 | `offset` | `int` | No | `0` | Entries to skip, for the next page. |
 | `limit` | `int` | No | `100` | 1–1,000. |
@@ -447,10 +447,10 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `local_paths` | `list[str]` | **Yes** | — | 1–50 files (not folders), inside the allowed local folders, which its description names. |
-| `folder` | `str` | No | `"/"` | Folder ID or path in the space; must exist. |
+| `folder` | `int/str` | No | `"/"` | Folder ID or path in the space; must exist. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
-| `album` | `str` | No | — | Album ID or unique name to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
+| `album` | `int/str` | No | — | Album ID or unique name to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
 
 DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's). The count in the first line is files stored (new or renamed); skipped ones are counted apart, and an album gets both, since a skipped file's item is already there. The indexing note appears only when something was stored.
 
@@ -502,7 +502,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `create`, `rename`, `add`, `remove`, `set_cover`, `copy`, `create_smart` or `set_condition`. |
-| `album` | `str` | No | — | Album ID or unique name (all actions except `create`/`create_smart`). |
+| `album` | `int/str` | No | — | Album ID or unique name (all actions except `create`/`create_smart`). |
 | `name` | `str` | No | — | New name (`create`, `create_smart`, `rename`, `copy`). |
 | `ids` | `list[int]` | No | — | Personal space items from `list_photos` (`create`, `add`, `remove`); exactly one for `set_cover`. At most 1,000 per call. |
 | `condition` | `dict` | No | — | `create_smart` / `set_condition`; see design notes. |
@@ -544,7 +544,7 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `share` (public access starts at `none` unless `public` is given), `update` (an album already shared) or `stop` (takes no settings). |
-| `album` | `str` | **Yes** | — | Album ID or unique name. |
+| `album` | `int/str` | **Yes** | — | Album ID or unique name. |
 | `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). `none` also clears the password and expiry (#348). |
 | `password` | `str` | No | — | Set; `""` removes. Setting a password needs public `view` or `download` after the call, or it's refused: Photos drops a password on a link with no public access (#348). |
 | `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. An expiry other than `never` needs public `view` or `download` after the call, or it's refused: Photos drops an expiry on a link with no public access (#348). |
@@ -590,8 +590,8 @@ Album 9 "Trip 2024" is shared.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `create`, `rename` or `set_cover`. |
-| `folder` | `str` | No | — | Folder ID or path (`rename`, `set_cover`). |
-| `parent` | `str` | No | `"/"` | `create` only: parent folder ID or path. |
+| `folder` | `int/str` | No | — | Folder ID or path (`rename`, `set_cover`). |
+| `parent` | `int/str` | No | `"/"` | `create` only: parent folder ID or path. |
 | `name` | `str` | No | — | New leaf name (`create`, `rename`). File Station's new-name rules apply (`refuse_bad_name`, #510): no `/`, NUL, `.` or `..`, control character (a tab inside is fine), direction-changing or line separator, invisible character where Unicode doesn't use one, or whitespace at either end. DSM keeps a name with ESC, a zero-width space, U+202E or a leading space as given, and refuses a trailing space, `#recycle`, `.`, `..` and `/` itself (606; vdsm, all four versions). |
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
@@ -621,8 +621,8 @@ Album 9 "Trip 2024" is shared.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `ids` | `list[int]` | No | — | Items. At least one of `ids` / `folders`. At most 1,000 per call. |
-| `folders` | `list[str]` | No | — | Folder IDs or paths. At most 1,000 per call. |
-| `destination` | `str` | **Yes** | — | Folder ID or path. |
+| `folders` | `list[int/str]` | No | — | Folder IDs or paths. At most 1,000 per call. |
+| `destination` | `int/str` | **Yes** | — | Folder ID or path. |
 | `space` | `str` | No | `"personal"` | Space of the source and of `destination` unless `dest_space` says otherwise. |
 | `dest_space` | `str` | No | — | `personal` or `shared`; cross-space copies are allowed (web client). |
 | `on_conflict` | `str` | No | `"skip"` | `skip` or `overwrite`. |
@@ -661,8 +661,8 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `ids` | `list[int]` | No | — | |
-| `folders` | `list[str]` | No | — | |
-| `destination` | `str` | **Yes** | — | |
+| `folders` | `list[int/str]` | No | — | |
+| `destination` | `int/str` | **Yes** | — | |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `dest_space` | `str` | No | — | |
 | `on_conflict` | `str` | No | `"skip"` | |
@@ -793,7 +793,7 @@ Photos rewrites edited files, so their dates and sizes change.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `rename`, `hide`, `unhide` or `set_cover`. |
-| `person` | `str` | **Yes** | — | Person ID or unique name. |
+| `person` | `int/str` | **Yes** | — | Person ID or unique name. |
 | `name` | `str` | No | — | `rename`; `""` clears it. |
 | `item_id` | `int` | No | — | `set_cover`: a photo of that person. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
@@ -866,8 +866,8 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `target` | `str` | **Yes** | — | Person ID or unique name to keep. |
-| `merge` | `list[str]` | **Yes** | — | Person IDs or unique names merged into the target. |
+| `target` | `int/str` | **Yes** | — | Person ID or unique name to keep. |
+| `merge` | `list[int/str]` | **Yes** | — | Person IDs or unique names merged into the target. |
 | `name` | `str` | No | — | Name after the merge; default the target's. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
@@ -922,7 +922,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `folders` | `list[str]` | **Yes** | — | Folder IDs or paths. The space root is refused locally. At most 1,000 per call. |
+| `folders` | `list[int/str]` | **Yes** | — | Folder IDs or paths. The space root is refused locally. At most 1,000 per call. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
 **Annotations:** `destructiveHint=true`.
@@ -949,7 +949,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `albums` | `list[str]` | **Yes** | — | Album IDs or unique names; a name several albums share is refused and nothing is deleted. |
+| `albums` | `list[int/str]` | **Yes** | — | Album IDs or unique names; a name several albums share is refused and nothing is deleted. |
 
 **Annotations:** `destructiveHint=true`.
 

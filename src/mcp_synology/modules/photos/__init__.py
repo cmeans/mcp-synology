@@ -12,7 +12,7 @@ switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
-from pydantic import Field, field_validator
+from pydantic import BeforeValidator, Field, WithJsonSchema, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -332,6 +332,22 @@ MODULE_INFO = ModuleInfo(
 )
 
 
+def _id_as_text(value: object) -> object:
+    """An ID sent as a JSON number, as list_photo_collections shows it, is that ID (#609).
+
+    True and False stay refused (``type(value) is int`` leaves out bool), as does a float.
+    """
+    return str(value) if type(value) is int else value
+
+
+# A Photos parameter that takes an ID or a name (or path): the schema says a number is fine,
+# and one arrives as its text, which the lookups read as that ID (#609, 0.11.0rc2 live test).
+IdOrName = Annotated[
+    str,
+    BeforeValidator(_id_as_text),
+    WithJsonSchema({"type": ["integer", "string"]}),
+]
+
 # Parameter descriptions used by several tools (#247).
 _SPACE = "`personal` (default) or `shared` (Shared Space). IDs belong to one space."
 _ITEM_IDS = "Item IDs from list_photos, at most 1,000 per call."
@@ -375,16 +391,16 @@ def register(ctx: "RegisterContext") -> None:
         async def tool_list_photos(
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             folder: Annotated[
-                str | None,
+                IdOrName | None,
                 Field(
                     description=(f"Only items directly in this folder, not subfolders. {_FOLDER}")
                 ),
             ] = None,
             album: Annotated[
-                str | None, Field(description=(f"One album only (personal space). {_ALBUM}"))
+                IdOrName | None, Field(description=(f"One album only (personal space). {_ALBUM}"))
             ] = None,
             person: Annotated[
-                str | None, Field(description=(f"Only items showing this person. {_PERSON}"))
+                IdOrName | None, Field(description=(f"Only items showing this person. {_PERSON}"))
             ] = None,
             place: Annotated[
                 int | None,
@@ -491,7 +507,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             parent: Annotated[
-                str | None,
+                IdOrName | None,
                 Field(
                     description=(
                         "`type=folder`: the folder ID or path to list (default the space root)."
@@ -595,7 +611,8 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ],
             album: Annotated[
-                str | None, Field(description=(f"The album to change; not for creates. {_ALBUM}"))
+                IdOrName | None,
+                Field(description=(f"The album to change; not for creates. {_ALBUM}")),
             ] = (None),
             name: Annotated[
                 str | None,
@@ -646,7 +663,7 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ],
-            album: Annotated[str, Field(description=(_ALBUM))],
+            album: Annotated[IdOrName, Field(description=(_ALBUM))],
             public: Annotated[
                 str | None,
                 Field(
@@ -711,11 +728,11 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ],
             folder: Annotated[
-                str | None,
+                IdOrName | None,
                 Field(description=(f"For `rename` and `set_cover`; not the space root. {_FOLDER}")),
             ] = None,
             parent: Annotated[
-                str,
+                IdOrName,
                 Field(
                     description=(
                         "`create`: the parent folder's ID or path (default `/`, the space root)."
@@ -830,7 +847,8 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ],
             person: Annotated[
-                str, Field(description=(f"{_PERSON} Hidden ones need include_hidden=true there."))
+                IdOrName,
+                Field(description=(f"{_PERSON} Hidden ones need include_hidden=true there.")),
             ],
             name: Annotated[
                 str | None, Field(description=('The new name; `""` makes them unnamed.'))
@@ -912,9 +930,9 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("merge_people"))  # type: ignore[arg-type]
         async def tool_merge_people(
-            target: Annotated[str, Field(description=(f"The person to keep. {_PERSON}"))],
+            target: Annotated[IdOrName, Field(description=(f"The person to keep. {_PERSON}"))],
             merge: Annotated[
-                list[str],
+                list[IdOrName],
                 Field(description=("The people merged into `target`, as IDs or unique names.")),
             ],
             name: Annotated[
@@ -932,7 +950,7 @@ def register(ctx: "RegisterContext") -> None:
         @server.tool(**_tool("delete_photo_albums"))  # type: ignore[arg-type]
         async def tool_delete_photo_albums(
             albums: Annotated[
-                list[str],
+                list[IdOrName],
                 Field(
                     description=(
                         "Album IDs (list_photo_collections type=album) or unique names; a name "
@@ -960,7 +978,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ],
             folder: Annotated[
-                str,
+                IdOrName,
                 Field(
                     description=("The existing folder's ID or path (default `/`, the space root).")
                 ),
@@ -976,7 +994,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = "rename",
             album: Annotated[
-                str | None,
+                IdOrName | None,
                 Field(
                     description=(
                         "An existing album to add them to (personal space; create one with "
@@ -1007,7 +1025,7 @@ def register(ctx: "RegisterContext") -> None:
         def _make(operation: str) -> Any:
             async def tool_copy_or_move(
                 destination: Annotated[
-                    str,
+                    IdOrName,
                     Field(
                         description=("The existing target folder's ID or path, in `dest_space`.")
                     ),
@@ -1022,7 +1040,7 @@ def register(ctx: "RegisterContext") -> None:
                     ),
                 ] = None,
                 folders: Annotated[
-                    list[str] | None,
+                    list[IdOrName] | None,
                     Field(
                         description=(
                             "Folder IDs or paths, with everything in them; not the space root. "
@@ -1120,7 +1138,7 @@ def register(ctx: "RegisterContext") -> None:
         @server.tool(**_tool("delete_photo_folders"))  # type: ignore[arg-type]
         async def tool_delete_photo_folders(
             folders: Annotated[
-                list[str],
+                list[IdOrName],
                 Field(description=(f"Not the space root; at most 1,000. {_FOLDER}")),
             ],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
