@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_timestamp, synology_error_response
 from mcp_synology.modules.photos.helpers import (
+    IdNumber,
     Photos,
     check_ids,
     invalid,
@@ -309,10 +310,22 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
 
     if folders := as_list("folders"):
         cond["folder_filter"] = [
-            int((await ph.folder(str(f), param="condition"))["id"]) for f in folders
+            int(
+                (await ph.folder(IdNumber(f) if type(f) is int else str(f), param="condition"))[
+                    "id"
+                ]
+            )
+            for f in folders
         ]
     if people := as_list("people"):
-        cond["person"] = [int((await ph.person(str(p), param="condition"))["id"]) for p in people]
+        cond["person"] = [
+            int(
+                (await ph.person(IdNumber(p) if type(p) is int else str(p), param="condition"))[
+                    "id"
+                ]
+            )
+            for p in people
+        ]
         cond["person_policy"] = policy("people")
     if tags := as_list("tags"):
         ids = await ph.tag_ids([str(t) for t in tags], param="condition")
@@ -588,11 +601,15 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
         by_id = {int(a["id"]): a for a in existing}
         for value in albums:
             text = str(value).strip()
-            matches = (
-                [by_id[int(text)]]
-                if text.isascii() and text.isdigit() and int(text) in by_id
-                else [a for a in existing if str(a.get("name", "")).casefold() == text.casefold()]
-            )
+            digits = text.isascii() and text.isdigit()
+            if digits and int(text) in by_id:
+                matches = [by_id[int(text)]]
+            elif isinstance(value, IdNumber):
+                matches = []  # sent as a number: an ID only, never a name (#609)
+            else:
+                matches = [
+                    a for a in existing if str(a.get("name", "")).casefold() == text.casefold()
+                ]
             if not matches:
                 missing.append(text)
             elif len(matches) > 1:

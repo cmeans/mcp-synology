@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import ApiNotFoundError, SynologyError
+from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
 from mcp_synology.modules.photos.helpers import (
+    IdNumber,
     Photos,
     check_space,
     encode,
@@ -234,6 +236,42 @@ class TestFolders:
         err = _error(exc)
         assert err["code"] == "not_found"
         assert err["param"] == "parent"
+
+    @pytest.mark.parametrize("value", [IdNumber("43"), "43"])
+    @pytest.mark.parametrize("kind", ["album", "person"])
+    @respx.mock
+    async def test_no_dsm_answer_on_the_id_lookup_is_not_not_found(
+        self, kind: str, value: str
+    ) -> None:
+        """Pre-QA r3 on #611: a proxy's 502 on the ID get is that error, not "no album 43"
+        (a number) or a fall-through to the name lookup (text)."""
+        api = {"album": "SYNO.Foto.Browse.Album", "person": "SYNO.Foto.Browse.Person"}[kind]
+        fake = FakePhotos().on(api, "get", 1, lambda _p: httpx.Response(502, text="Bad Gateway"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(DsmHttpError):
+                await getattr(Photos(client, "personal", "Op"), kind)(value)
+        assert not fake.of(api, "list")
+
+    @pytest.mark.parametrize("kind", ["folder", "album", "person"])
+    @respx.mock
+    async def test_a_negative_number_is_no_id_and_no_name(self, kind: str) -> None:
+        """#609 pre-QA: -5 sent as a number is an ID only: not the folder path /-5, nor an
+        album or person named -5, and nothing is asked of DSM; the hint says to pass text."""
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, {"folder": {"id": 77}})
+        fake.on("SYNO.Foto.Browse.Album", "list", 2, {"list": [{"id": 3, "name": "-5"}]})
+        fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 4, "name": "-5"}]})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await getattr(Photos(client, "personal", "Op"), kind)(IdNumber("-5"))
+        err = _error(exc)
+        assert err["code"] == "not_found", err
+        assert f"no {kind} -5" in err["message"], err
+        assert "as text" not in err["suggestion"], err  # no hint toward a name (#611)
+        assert not fake.calls, fake.calls
 
     @respx.mock
     async def test_other_errors_pass_through(self) -> None:

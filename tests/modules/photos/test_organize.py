@@ -10,6 +10,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.modules.photos.helpers import IdNumber
 from mcp_synology.modules.photos.organize import (
     edit_person,
     edit_photo,
@@ -669,6 +670,25 @@ class TestPeople:
             "name": "Person 1",
         }
         assert out == 'Merged 2 people into person 12 "Person 1" (now 70 items).'
+
+    @respx.mock
+    async def test_a_numeric_id_never_merges_a_person_by_name(self) -> None:
+        """#609 pre-QA: merge=[43] sent as a number, with no person 43 but one named "43",
+        merges nothing: it can't be undone."""
+        people = {"list": [{"id": 12, "name": "Keep"}, {"id": 99, "name": "43"}]}
+        keep = {"list": [{"id": 12, "name": "Keep"}]}
+        fake = FakePhotos().on(PERSON, "get", 1, keep, {"list": []})
+        fake.on(PERSON, "list", 1, people)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await merge_people(client, target="12", merge=[IdNumber("43")])
+        assert _error(exc)["code"] == "not_found"
+        assert "no person 43" in _error(exc)["message"]
+        # Not a hint to resend the digits as text: that would match the person named "43".
+        assert "as text" not in _error(exc)["suggestion"], _error(exc)
+        assert not fake.of(PERSON, "merge")
 
     @respx.mock
     async def test_merge_into_itself_refused(self) -> None:
