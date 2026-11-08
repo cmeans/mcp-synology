@@ -401,7 +401,7 @@ async def merge_people(
         keep_id = int(keep["id"])
         merged: dict[int, dict[str, Any]] = {}
         for value in merge:
-            found = await ph.person(str(value), param="merge")
+            found = await ph.person(value, param="merge")
             if int(found["id"]) == keep_id:
                 invalid(
                     op,
