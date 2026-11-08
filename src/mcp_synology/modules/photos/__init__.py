@@ -774,11 +774,11 @@ def register(ctx: "RegisterContext") -> None:
             folder_path: Annotated[FolderPath | None, Field(description=(_FOLDER_PATH))] = None,
             parent_id: Annotated[
                 PhotoId | None,
-                Field(description=("`create`: the parent folder's ID (default the space root).")),
+                Field(description=("`create`: the parent folder's ID, or parent_path.")),
             ] = None,
             parent_path: Annotated[
                 FolderPath | None,
-                Field(description=("Or its path, such as `/Trips`; not with parent_id.")),
+                Field(description=("Or its path, such as `/Trips` (`/`: the space root).")),
             ] = None,
             name: Annotated[
                 str | None, Field(description=("One folder name, without `/`."))
@@ -1052,11 +1052,11 @@ def register(ctx: "RegisterContext") -> None:
             ],
             folder_id: Annotated[
                 PhotoId | None,
-                Field(description=("The existing folder's ID (default the space root).")),
+                Field(description=("The existing folder's ID; this or folder_path is required.")),
             ] = None,
             folder_path: Annotated[
                 FolderPath | None,
-                Field(description=("Or its path, such as `/Trips`; not with folder_id.")),
+                Field(description=("Or its path, such as `/Trips` (`/`: the space root).")),
             ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             on_duplicate: Annotated[

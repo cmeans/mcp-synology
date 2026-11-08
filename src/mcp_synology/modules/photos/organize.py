@@ -83,6 +83,13 @@ async def photo_folder(
         if not leaf:
             invalid(op, f"action={action} needs name.", param="name", value=name)
         refuse_bad_name(op, leaf, "name", "Pass one folder name, without /, such as Trips.")
+    if action == "create" and parent is None:
+        # Required, the root included: a lost parent mustn't create in the root (#615).
+        invalid(
+            op,
+            "action=create needs parent_id or parent_path (`/` for the space's root).",
+            param="parent_id",
+        )
     if action in ("rename", "set_cover") and folder is None:
         invalid(op, f"action={action} needs folder_id or folder_path.", param="folder_id")
     if action == "set_cover" and item_id is None:

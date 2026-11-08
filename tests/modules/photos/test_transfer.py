@@ -394,6 +394,17 @@ class TestRefusals:
 
 
 class TestUpload:
+    async def test_a_folder_is_required_the_root_too(self, tmp_path: Path) -> None:
+        """#615: a folder argument lost on the way (an old name a client dropped) mustn't
+        upload into the root: the root is passed as folder_path="/"."""
+        photo = tmp_path / "a.jpg"
+        photo.write_bytes(b"\xff\xd8\xff")
+        with pytest.raises(ToolError) as exc:
+            await upload_photos(make_client(), local_paths=[str(photo)], allowed_roots=[tmp_path])
+        err = _error(exc)
+        assert (err["code"], err["param"]) == ("invalid_parameter", "folder_id")
+        assert "pass folder_id or folder_path (`/` for the space's root)." in err["message"]
+
     @staticmethod
     def _files(tmp_path: Path) -> list[str]:
         paths = []
@@ -471,6 +482,7 @@ class TestUpload:
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
                 album_id=4,
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         assert lines[0] == "Uploaded 1 of 3 file(s) to / (personal space)"
@@ -524,6 +536,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         assert lines[2] == row
@@ -551,6 +564,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "big.mp4"), str(tmp_path / "small.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         assert lines[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
@@ -578,6 +592,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         state = "failed" if status == 429 else "unknown"
@@ -603,6 +618,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert "a.jpg  failed   DSM's reply couldn't be read (KeyError)" in out
         assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
@@ -626,6 +642,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
         assert "b.jpg  failed   couldn't read the file (No such file or directory)" in out
@@ -657,6 +674,7 @@ class TestUpload:
                     local_paths=[str(tmp_path / "a.jpg")],
                     album_id=4,
                     allowed_roots=[tmp_path],
+                    folder_path="/",
                 )
         assert "renamed  id 9" in out and "(as " not in out
         assert (
@@ -695,7 +713,12 @@ class TestUpload:
         paths = [str(tmp_path / n) for n in names]
         async with client:
             out = await upload_photos(
-                client, local_paths=paths, album_id=4, allowed_roots=[tmp_path], budget=30
+                client,
+                local_paths=paths,
+                album_id=4,
+                allowed_roots=[tmp_path],
+                budget=30,
+                folder_path="/",
             )
         lines = out.splitlines()
         # a.jpg ends at 20 s, under the limit, so b.jpg starts; at 40 s c.jpg doesn't.
@@ -762,6 +785,7 @@ class TestUpload:
                 on_duplicate=on_duplicate,
                 allowed_roots=[tmp_path],
                 budget=budget,
+                folder_path="/",
             )
         assert out.startswith(f"Uploaded {uploaded} of 5 file(s)"), out
         assert footer in out, out
@@ -784,7 +808,11 @@ class TestUpload:
         client = make_client()
         async with client:
             out = await upload_photos(
-                client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path], budget=0
+                client,
+                local_paths=[str(tmp_path / "a.jpg")],
+                allowed_roots=[tmp_path],
+                budget=0,
+                folder_path="/",
             )
         assert out.startswith("Uploaded 1 of 1 file(s)")
         assert "Stopped after" not in out
@@ -807,6 +835,7 @@ class TestUpload:
                 on_duplicate="skip",
                 album_id=4,
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert "skipped  id 9 (already there)" in out
         assert out.startswith("Uploaded 0 of 1 file(s) (1 skipped, already there) to ")
@@ -839,6 +868,7 @@ class TestUpload:
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
                 on_duplicate="skip",
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert out.splitlines()[0] == (
             "Uploaded 1 of 3 file(s) (2 skipped, already there) to / (personal space)"
@@ -863,6 +893,7 @@ class TestUpload:
                     local_paths=[str(tmp_path / "a.jpg")],
                     album_name="mcp-rc-0.10 user album",
                     allowed_roots=[tmp_path],
+                    folder_path="/",
                 )
         error = _error(exc)
         assert error["code"] == "not_found"
@@ -877,7 +908,10 @@ class TestUpload:
         async with client:
             with pytest.raises(ToolError) as exc:
                 await upload_photos(
-                    client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path]
+                    client,
+                    local_paths=[str(tmp_path / "a.jpg")],
+                    allowed_roots=[tmp_path],
+                    folder_path="/",
                 )
         assert "160" in _error(exc)["message"]
 
@@ -914,6 +948,7 @@ class TestUpload:
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 album_id=4,
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert "a.jpg  failed   couldn't read the file (Permission denied)" in out
         assert "renamed  id 9" in out and "(as " not in out
@@ -924,14 +959,20 @@ class TestUpload:
         inside.mkdir()
         with pytest.raises(ToolError) as exc:
             await upload_photos(
-                make_client(), local_paths=["/etc/hostname"], allowed_roots=[inside]
+                make_client(),
+                local_paths=["/etc/hostname"],
+                allowed_roots=[inside],
+                folder_path="/",
             )
         assert _error(exc)["code"] == "permission_denied"
 
     async def test_folder_path_not_a_file(self, tmp_path: Path) -> None:
         with pytest.raises(ToolError) as exc:
             await upload_photos(
-                make_client(), local_paths=[str(tmp_path)], allowed_roots=[tmp_path]
+                make_client(),
+                local_paths=[str(tmp_path)],
+                allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert _error(exc)["code"] == "not_found"
 
@@ -985,7 +1026,7 @@ class TestUploadRetry:
                     client,
                     local_paths=[str(tmp_path / n) for n in names],
                     allowed_roots=[tmp_path],
-                    **kwargs,
+                    **({"folder_path": "/"} | kwargs),
                 )
         return out, len(sent)
 

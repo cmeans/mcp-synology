@@ -451,8 +451,8 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `local_paths` | `list[str]` | **Yes** | — | 1–50 files (not folders), inside the allowed local folders, which its description names. |
-| `folder_id` | `int` | No | — | Folder ID in the space (default the root); must exist. |
-| `folder_path` | `str` | No | — | Or its path; not with `folder_id`. |
+| `folder_id` | `int` | One of these two | — | Folder ID in the space; must exist. Required, the root too (`folder_path="/"`): a folder argument lost on the way, such as an old name a client dropped, mustn't upload into the root (#615). |
+| `folder_path` | `str` | One of these two | — | Or its path (`/` for the root); not with `folder_id`. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
 | `album_id` | `int` | No | — | Album ID to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
@@ -600,8 +600,8 @@ Album 9 "Trip 2024" is shared.
 | `action` | `str` | **Yes** | — | `create`, `rename` or `set_cover`. |
 | `folder_id` | `int` | No | — | Folder ID (`rename`, `set_cover`). |
 | `folder_path` | `str` | No | — | Or its path; not with `folder_id`. |
-| `parent_id` | `int` | No | — | `create` only: parent folder ID (default the root). |
-| `parent_path` | `str` | No | — | Or its path; not with `parent_id`. |
+| `parent_id` | `int` | For `create`, one of these two | — | Parent folder ID. Required for `create`, the root too (`parent_path="/"`), so a lost parent can't create in the root (#615). |
+| `parent_path` | `str` | For `create`, one of these two | — | Or its path (`/` for the root); not with `parent_id`. |
 | `name` | `str` | No | — | New leaf name (`create`, `rename`). File Station's new-name rules apply (`refuse_bad_name`, #510): no `/`, NUL, `.` or `..`, control character (a tab inside is fine), direction-changing or line separator, invisible character where Unicode doesn't use one, or whitespace at either end. DSM keeps a name with ESC, a zero-width space, U+202E or a leading space as given, and refuses a trailing space, `#recycle`, `.`, `..` and `/` itself (606; vdsm, all four versions). |
 | `item_id` | `int` | No | — | `set_cover`. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |

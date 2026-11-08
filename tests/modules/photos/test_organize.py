@@ -125,6 +125,8 @@ class TestFolder:
             ({"action": "create"}, "name"),
             ({"action": "create", "name": "a/b"}, "name"),
             ({"action": "rename", "name": "x"}, "folder_id"),
+            # #615: required, the root too, so a lost parent can't create in the root.
+            ({"action": "create", "name": "x"}, "parent_id"),
             ({"action": "set_cover", "folder_id": 1}, "item_id"),
         ],
     )

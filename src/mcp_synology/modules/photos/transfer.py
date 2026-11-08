@@ -394,6 +394,8 @@ async def upload_photos(
     op = "Upload photos"
     sp = check_space(op, space)
     album = one_ref(op, "album", album_id, album_name, required=False)
+    # Required, the root included (`folder_path="/"`): a folder argument lost on the way (an
+    # old name a client dropped) mustn't upload into the root instead (#615).
     folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
     if on_duplicate not in _DUPLICATE:
         invalid(
@@ -443,6 +445,13 @@ async def upload_photos(
                 suggestion="Pass files, not folders; check the path.",
             )
         files.append(path)
+    if folder is None:
+        invalid(
+            op,
+            "pass folder_id or folder_path (`/` for the space's root).",
+            param="folder_id",
+            value=None,
+        )
     try:
         ph = Photos(client, sp, op)
         target = await ph.folder(folder)

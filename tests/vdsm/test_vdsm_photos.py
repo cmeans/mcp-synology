@@ -704,7 +704,10 @@ async def test_upload_to_a_new_accounts_personal_root(
         ):
             assert not has_folder(), "the new account already has its Photos folder"
             out = await upload_photos(
-                client, local_paths=[str(SEED / "beach-sunset.jpg")], allowed_roots=[SEED]
+                client,
+                local_paths=[str(SEED / "beach-sunset.jpg")],
+                folder_path="/",
+                allowed_roots=[SEED],
             )
             assert out.startswith("Uploaded 1 of 1 file(s) to / (personal space)"), out
             assert has_folder()
