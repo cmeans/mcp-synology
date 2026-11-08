@@ -17,6 +17,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.operations import (
+    _delete_summary,
     copy_files,
     create_folder,
     delete_files,
@@ -684,8 +685,8 @@ class TestDeleteFiles:
         assert "Empty folders aren't kept in the bin." in kept
         # The paths listed are where the items are now, not where they were.
         assert kept.endswith(
-            "To remove them for good, delete them where they are now, after the user agrees:\n"
-            "  /homes/#recycle/alice/#recycle/x"
+            "To remove them for good, delete the ones still there (that listing shows which) "
+            "by those paths, after the user agrees:\n  /homes/#recycle/alice/#recycle/x"
         ), kept
         assert "share=homes with a pattern (their names) finds them" in kept
         mixed = await delete_files(
@@ -789,6 +790,15 @@ class TestDeleteFiles:
         assert "Couldn't check whether /homes has its recycle bin enabled" in out, out
         assert "permanent" not in out, out
         assert status == {}
+
+    async def test_no_status_cache_keeps_homes_strict(self, mock_client: DsmClient) -> None:
+        """Pre-QA r3 on #613: with no status cache at all (defensive), a /homes path beside a
+        home bin doesn't get the hopeful "can be recovered" while the home bin can't tell."""
+        out = await _delete_summary(
+            mock_client, ["/homes/alice/keep.txt", "/homes/alice/#recycle/x"], None
+        )
+        assert "can be recovered with" not in out, out
+        assert out.count("Couldn't check whether /homes has its recycle bin enabled") == 2, out
 
     @respx.mock
     async def test_a_kept_home_bin_from_an_empty_cache_is_cached(

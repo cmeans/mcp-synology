@@ -1502,9 +1502,9 @@ async def _delete_summary(
                 homes_answered = False
             else:
                 if not definite:
-                    # A tentative answer (no #recycle yet, and /homes's setting unreadable:
-                    # the state before the first delete its bin would keep) can't tell
-                    # (QA round 1 on #613).
+                    # A tentative answer (no #recycle, and /homes's setting unreadable). After
+                    # the delete that most likely means off (#409), but it isn't proven, and
+                    # this check never guesses (QA round 1 on #613).
                     homes_bin = None
                 elif homes_bin is not None:
                     recycle_bin_status["homes"] = homes_bin
@@ -1512,11 +1512,15 @@ async def _delete_summary(
     unknown_bins = home_keys if homes_bin is None else set()
     if recycle_bin_status is None:
         # Defensive: caller passed nothing. Skip probing; preserve prior
-        # default-true messaging for the touched shares.
+        # default-true messaging for the touched shares, except /homes beside a home bin,
+        # which takes the same strict answer as the home bin (pre-QA r3 on #613).
         for p in outside_bin:
             parts = p.split("/")
             share_name = parts[1] if len(parts) > 1 else ""
-            shares_with_recycle.add(share_name)
+            if share_name == "homes" and home_keys:
+                shares_unclear.add(share_name)
+            else:
+                shares_with_recycle.add(share_name)
     else:
         seen: set[str] = set()
         for p in outside_bin:
@@ -1572,8 +1576,9 @@ async def _delete_summary(
         for share in sorted(shares_with_recycle)
     )
     for share, bin_paths in sorted(in_bin.items()):
-        user = share.split("/", 1)[1] if "/" in share else ""
-        kept = f"/homes/#recycle/{user}/#recycle"
+        if share in kept_bins or share in unknown_bins:
+            user = share.split("/", 1)[1]
+            kept = f"/homes/#recycle/{user}/#recycle"
         if share in kept_bins:
             lines.append(
                 f"\nRecycle bin is enabled on /homes, so these went from {user}'s home recycle "
@@ -1581,7 +1586,8 @@ async def _delete_summary(
                 "share=homes with a pattern (their names) finds them, and "
                 "restore_from_recycle_bin share=homes brings them back with a dest_folder "
                 "outside the bin. Empty folders aren't kept in the bin. To remove them for "
-                "good, delete them where they are now, after the user agrees:"
+                "good, delete the ones still there (that listing shows which) by those paths, "
+                "after the user agrees:"
             )
             home_bin = f"/homes/{user}/#recycle"
             lines.extend(f"  {kept}{p[len(home_bin) :]}" for p in bin_paths)
