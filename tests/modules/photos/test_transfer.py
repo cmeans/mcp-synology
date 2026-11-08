@@ -469,7 +469,7 @@ class TestUpload:
             out = await upload_photos(
                 client,
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
-                album="4",
+                album_id=4,
                 allowed_roots=[tmp_path],
             )
         lines = out.splitlines()
@@ -655,7 +655,7 @@ class TestUpload:
                 out = await upload_photos(
                     client,
                     local_paths=[str(tmp_path / "a.jpg")],
-                    album="4",
+                    album_id=4,
                     allowed_roots=[tmp_path],
                 )
         assert "renamed  id 9" in out and "(as " not in out
@@ -695,7 +695,7 @@ class TestUpload:
         paths = [str(tmp_path / n) for n in names]
         async with client:
             out = await upload_photos(
-                client, local_paths=paths, album="4", allowed_roots=[tmp_path], budget=30
+                client, local_paths=paths, album_id=4, allowed_roots=[tmp_path], budget=30
             )
         lines = out.splitlines()
         # a.jpg ends at 20 s, under the limit, so b.jpg starts; at 40 s c.jpg doesn't.
@@ -712,8 +712,8 @@ class TestUpload:
         assert lines[-3] == (
             "Started no new file after 30 s (the task timeout, at most 45 s) so the reply "
             "isn't cut off; 2 file(s) not tried. To continue, call upload_photos again with "
-            "the same folder, space, album and on_duplicate, and only these local_paths "
-            "(resending the others makes renamed copies):"
+            "the same folder, space, album_id or album_name and on_duplicate, and only these "
+            "local_paths (resending the others makes renamed copies):"
         )
         assert lines[-2:] == [f"  {paths[2]}", f"  {paths[3]}"]
 
@@ -805,7 +805,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg")],
                 on_duplicate="skip",
-                album="4",
+                album_id=4,
                 allowed_roots=[tmp_path],
             )
         assert "skipped  id 9 (already there)" in out
@@ -861,12 +861,12 @@ class TestUpload:
                 await upload_photos(
                     client,
                     local_paths=[str(tmp_path / "a.jpg")],
-                    album="mcp-rc-0.10 user album",
+                    album_name="mcp-rc-0.10 user album",
                     allowed_roots=[tmp_path],
                 )
         error = _error(exc)
         assert error["code"] == "not_found"
-        assert error["message"] == "Upload photos failed: no album 'mcp-rc-0.10 user album'."
+        assert error["message"] == "Upload photos failed: no album named 'mcp-rc-0.10 user album'."
         assert sent == []
 
     @respx.mock
@@ -912,7 +912,7 @@ class TestUpload:
             out = await upload_photos(
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
-                album="4",
+                album_id=4,
                 allowed_roots=[tmp_path],
             )
         assert "a.jpg  failed   couldn't read the file (Permission denied)" in out
@@ -941,7 +941,7 @@ class TestUpload:
             ({"local_paths": []}, "local_paths"),
             ({"local_paths": ["a"] * 51}, "local_paths"),
             ({"local_paths": ["a"], "on_duplicate": "overwrite"}, "on_duplicate"),
-            ({"local_paths": ["a"], "album": "1", "space": "shared"}, "album"),
+            ({"local_paths": ["a"], "album_id": 1, "space": "shared"}, "album_id"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:

@@ -43,7 +43,7 @@ FOLDER = "SYNO.Foto.Browse.Folder"
 LOCAL_PARAMS = {"download_photos": {"dest_folder"}, "upload_photos": {"local_paths"}}
 # Arguments whose names look like a folder's but aren't one.
 NOT_FOLDERS = {
-    "merge_people": {"target"},  # the person to keep
+    "merge_people": {"target_id", "target_name"},  # the person to keep
     "copy_photos": {"dest_space"},  # personal or shared
     "move_photos": {"dest_space"},
 }

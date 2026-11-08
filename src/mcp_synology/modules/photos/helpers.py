@@ -174,6 +174,73 @@ def id_number(value: int) -> IdNumber:
     return IdNumber(value)
 
 
+@dataclass(frozen=True)
+class Ref:
+    """An album or a person a tool was given, by ID or by name, each from its own parameter
+    (`album_id` / `album_name`, #614, #616): which one is never inferred from the value.
+    ``param`` is the tool argument it came from, for errors."""
+
+    param: str
+    id: int | None = None
+    name: str | None = None
+
+    @property
+    def given(self) -> int | str:
+        """The value as the caller gave it, for errors."""
+        return self.id if self.id is not None else self.name or ""
+
+
+def one_ref(
+    operation: str,
+    kind: str,
+    id_value: int | None,
+    name_value: str | None,
+    *,
+    prefix: str | None = None,
+    required: bool = True,
+) -> Ref | None:
+    """The one album or person a tool's ``<prefix>_id`` / ``<prefix>_name`` pair names: both
+    is refused, and neither when ``required``. ``prefix`` defaults to ``kind``."""
+    prefix = prefix or kind
+    id_param, name_param = f"{prefix}_id", f"{prefix}_name"
+    if id_value is not None and name_value is not None:
+        invalid(
+            operation,
+            f"pass {id_param} or {name_param}, not both.",
+            param=id_param,
+            value=id_value,
+        )
+    if id_value is not None:
+        return Ref(id_param, id=id_value)
+    if name_value is not None:
+        return Ref(name_param, name=name_value)
+    if required:
+        invalid(operation, f"pass {id_param} or {name_param}.", param=id_param, value=None)
+    return None
+
+
+def refs(
+    operation: str,
+    ids: Sequence[int] | None,
+    names: Sequence[str] | None,
+    *,
+    prefix: str,
+    required: bool = True,
+) -> list[Ref]:
+    """The albums or people a ``<prefix>_ids`` / ``<prefix>_names`` pair names, IDs first.
+    Both lists may be given; at least one entry when ``required``."""
+    found = [Ref(f"{prefix}_ids", id=i) for i in ids or ()]
+    found += [Ref(f"{prefix}_names", name=n) for n in names or ()]
+    if required and not found:
+        invalid(
+            operation,
+            f"pass {prefix}_ids or {prefix}_names.",
+            param=f"{prefix}_ids",
+            value=None,
+        )
+    return found
+
+
 @dataclass
 class Photos:
     """One tool call's view of Photos: the client, the space and per-call caches."""
@@ -333,89 +400,81 @@ class Photos:
 
     # -- names --------------------------------------------------------------
 
-    async def _by_id_or_name(
+    async def _by_ref(
         self,
-        value: str,
+        ref: Ref,
         *,
         kind: str,
-        param: str,
         get: tuple[str, int, dict[str, Any]],
         walk: tuple[str, int, dict[str, Any]],
         personal: bool = False,
         hint: str,
     ) -> dict[str, Any]:
-        """Resolve an ID (digits; tried first) or a unique case-insensitive name. An
-        `IdNumber` (sent as a JSON number) is an ID only: not found is not found (#609)."""
-        text = value.strip()
-        if isinstance(value, IdNumber) and not (text.isascii() and text.isdigit()):
-            not_found(
-                self.operation,
-                f"no {kind} {text}.",
-                param=param,
-                value=value,
-                suggestion=hint,
-            )
-        if text.isascii() and text.isdigit():
+        """Resolve an album or person given by ID or by name, never a guess between them
+        (#614, #616): an ID is looked up as that ID only, and a name (digits too) as a unique
+        case-insensitive name only."""
+        if ref.id is not None:
             suffix, version, extra = get
             try:
                 data = await self.call(
-                    suffix, "get", {"id": [int(text)], **extra}, version=version, personal=personal
+                    suffix, "get", {"id": [ref.id], **extra}, version=version, personal=personal
                 )
             except SynologyError as e:
                 # A setup or permission problem is the answer, and so is no DSM answer at
                 # all (a proxy's 502, a reply that isn't DSM's: code None), which isn't an
-                # unknown ID (pre-QA r3 on #611). A DSM code for an unknown ID falls through
-                # to the name lookup.
+                # unknown ID (pre-QA r3 on #611). Any other DSM code is an unknown ID.
                 if e.code in SETUP_CODES or e.code is None:
                     raise
                 data = {}
             found = data.get("list", [])
             if found:
                 return dict(found[0])
-            if isinstance(value, IdNumber):
-                not_found(
-                    self.operation,
-                    f"no {kind} {text}.",
-                    param=param,
-                    value=value,
-                    suggestion=hint,
-                )
+            not_found(
+                self.operation,
+                f"no {kind} {ref.id}.",
+                param=ref.param,
+                value=ref.id,
+                suggestion=hint,
+            )
+        name = ref.name or ""
         suffix, version, extra = walk
         entries = await self.walk(suffix, params=extra, version=version, personal=personal)
-        matches = [e for e in entries if str(e.get("name", "")).casefold() == text.casefold()]
+        matches = [e for e in entries if str(e.get("name", "")).casefold() == name.casefold()]
         if len(matches) == 1:
             return matches[0]
         if not matches:
             not_found(
-                self.operation, f"no {kind} {value!r}.", param=param, value=value, suggestion=hint
+                self.operation,
+                f"no {kind} named {name!r}.",
+                param=ref.param,
+                value=name,
+                suggestion=hint,
             )
         listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
         invalid(
             self.operation,
-            f"{len(matches):,} {kind}s are named {value!r}: {listed}.",
-            param=param,
-            value=value,
-            suggestion=f"Pass the {kind}'s ID instead.",
+            f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
+            param=ref.param,
+            value=name,
+            suggestion=f"Ask the user which one they mean, then pass its {kind}_id.",
         )
 
-    async def album(self, value: str, *, param: str = "album") -> dict[str, Any]:
-        """An album (personal space only) by ID or unique name."""
-        return await self._by_id_or_name(
-            value,
+    async def album(self, ref: Ref) -> dict[str, Any]:
+        """An album (personal space only) by ID or by unique name."""
+        return await self._by_ref(
+            ref,
             kind="album",
-            param=param,
             get=("Browse.Album", 1, {"additional": ["sharing_info"]}),
             walk=("Browse.Album", 2, {"additional": ["sharing_info"]}),
             personal=True,
             hint="list_photo_collections type=album lists your albums.",
         )
 
-    async def person(self, value: str, *, param: str = "person") -> dict[str, Any]:
-        """A person (face-recognition group) by ID or unique name."""
-        return await self._by_id_or_name(
-            value,
+    async def person(self, ref: Ref) -> dict[str, Any]:
+        """A person (face-recognition group) by ID or by unique name."""
+        return await self._by_ref(
+            ref,
             kind="person",
-            param=param,
             get=("Browse.Person", 1, {"additional": ["thumbnail"]}),
             walk=("Browse.Person", 1, {"show_more": True, "show_hidden": True}),
             hint="list_photo_collections type=person include_hidden=true lists people.",

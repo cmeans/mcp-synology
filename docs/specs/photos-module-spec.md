@@ -191,7 +191,7 @@ Photos has no trash of its own. Deletes go to the **DSM recycle bin of the share
 
 ### Identifiers and names
 
-Tools take the IDs list calls return, and also **names where they're unique**: tags (always by name), albums and people (by name when exactly one matches; otherwise `invalid_parameter` listing the matches with IDs). Folders take an ID or a path inside the space (`/Trips/2024`, resolved with `Folder.get` by `name`, verified). Every folder argument goes through `Photos.folder` (`FOLDER_PARAMS` lists them), which takes a path exactly by File Station's part rules (`check_folder_path`, #510): only whitespace before a leading `/`, and a trailing `/`, are dropped; a NUL (DSM cuts the path there: `/x/foo<NUL>y` resolved to `/x/foo`), an empty part (`//`) and a `.` or `..` part (DSM answers 642 for those) are refused. Photos reaches a folder whose name starts with whitespace exactly (` foo` beside `foo`; it refuses to create a name ending in whitespace, 606), so the old `strip()` looked up another folder (vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). A backslash is an ordinary character. A trailing `/` answers 642 on DSM 7.1 and resolves on 7.2.2 and later, so it's dropped. Places take IDs from `list_photo_collections(type="place")`. Every parameter that takes an ID or a name or path (`IdOrName`, 19 of them) accepts the ID as a number too, its schema `integer` or `string`: list calls show IDs as numbers, and `delete_photo_albums albums=[43]` was refused with a raw validation error (#609, found in the 0.11.0rc2 live test). A number is that ID only (`IdNumber`): one that doesn't exist is `not_found`, never matched against names, so `merge_people merge=[43]` can't merge a person named `43` after person 43 is gone; the text `"43"` is still tried as an ID, then as a name, as before. A number given as a folder is an ID only too: a negative one is `not_found`, never the path `/-5`. A smart album's `condition` folders and people take a number the same way. A not-found reply for a number gives no hint to resend it as text: the text would be matched as a name, which is the mistake this rule prevents (maintainer, #611 pre-QA run 3). Nor is a missing DSM answer read as not found: a proxy's 502 or a reply that isn't DSM's during the ID lookup is that error, for a number and for text. Tag names (`tag_photos tags`, `list_photos tag`, `TagName`) take a number as that name (`2024`). `true`, `false` and a decimal stay refused. `tests/core/test_server.py` `TestIdParameters` fails on a new parameter, in any module, that's described as taking an ID and typed text-only.
+Tools take the IDs list calls return, and also **names where they're unique**: tags (always by name), albums and people (an ID, or a name taken when exactly one matches, case ignored; otherwise `invalid_parameter` listing the matches with IDs), each in its own parameter (below). Folders take an ID or a path inside the space (`/Trips/2024`, resolved with `Folder.get` by `name`, verified). Every folder argument goes through `Photos.folder` (`FOLDER_PARAMS` lists them), which takes a path exactly by File Station's part rules (`check_folder_path`, #510): only whitespace before a leading `/`, and a trailing `/`, are dropped; a NUL (DSM cuts the path there: `/x/foo<NUL>y` resolved to `/x/foo`), an empty part (`//`) and a `.` or `..` part (DSM answers 642 for those) are refused. Photos reaches a folder whose name starts with whitespace exactly (` foo` beside `foo`; it refuses to create a name ending in whitespace, 606), so the old `strip()` looked up another folder (vdsm, DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). A backslash is an ordinary character. A trailing `/` answers 642 on DSM 7.1 and resolves on 7.2.2 and later, so it's dropped. Places take IDs from `list_photo_collections(type="place")`. **Albums and people take an ID and a name in separate parameters** (#614, #616, maintainer 2026-11-08): `album_id` or `album_name` (refused together; one is required where an album is), `person_id` / `person_name`, `target_id` / `target_name`, and the lists `album_ids` / `album_names` and `merge_ids` / `merge_names` (both may be given); a smart album's `condition` has `person_ids` and `person_names`. An ID is looked up as that ID only and a name as a name only, digits too: one parameter for both, read as an ID if the value was a number and as a name if it was text, failed twice. In the 0.11.0rc3 live test, asked to delete "the album whose ID is 9876543", a tester sent `albums=["9876543"]` as text, which matched no ID and deleted the album named 9876543 (#614); and "the album named 43" sent as text deleted album 43 when that was another album's ID (#616, found by the pre-QA review of the first fix). Models often send a number as text, so a value's JSON type is no place to carry its meaning; a parameter's name is. An ID parameter (`PhotoId`, every Photos ID) takes a number or its digits as text, and refuses `true` and `false`, which pydantic would read as 1 and 0. A name parameter (`Name`) takes a number as that name (`2024`), as tag names do (`tag_photos tags`, `list_photos tag`). A not-found ID gives no hint toward a name, nor a not-found name toward an ID. A missing DSM answer isn't read as not found: a proxy's 502 or a reply that isn't DSM's during the ID lookup is that error (#611 pre-QA run 3). Folder parameters (`IdOrName`, 10 of them, `FOLDER_PARAMS`) still take an ID or a path in one parameter: a path starts with `/`, so digits are always an ID, and an ID sent as a number is an ID only, a negative one `not_found`, never the path `/-5` (#609, found in the 0.11.0rc2 live test). `true`, `false` and a decimal stay refused. `tests/core/test_server.py` `TestIdParameters` fails on a Photos parameter that takes a number or text and isn't a folder or a name, on an ID parameter that isn't number-only or takes a boolean, and, in any module, on a parameter described as taking an ID and typed text-only.
 
 ### Formatting
 
@@ -248,8 +248,10 @@ Browse or search items.
 |------|------|----------|---------|-------------|
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `folder` | `int/str` | No | — | Folder ID or path in the space. **One level** (Photos has no recursive folder listing). |
-| `album` | `int/str` | No | — | Album ID or unique name (personal only). Can't be combined with other filters. |
-| `person` | `int/str` | No | — | Person ID or unique name. |
+| `album_id` | `int` | No | — | Album ID (personal only). Can't be combined with other filters. |
+| `album_name` | `str` | No | — | Or the album's unique name (case ignored); not with `album_id`. |
+| `person_id` | `int` | No | — | Person ID. |
+| `person_name` | `str` | No | — | Or the person's unique name (case ignored); not with `person_id`. |
 | `place` | `int` | No | — | Place ID from `list_photo_collections(type="place")`. Can't be combined with other filters. |
 | `tag` | `int/str` | No | — | Tag name (any case). |
 | `keyword` | `str` | No | — | Search text. Can't be combined with other filters. |
@@ -450,7 +452,8 @@ Downloaded 2 of 3 item(s) to /home/user/Downloads (original, personal space)
 | `folder` | `int/str` | No | `"/"` | Folder ID or path in the space; must exist. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 | `on_duplicate` | `str` | No | `"rename"` | `rename` or `skip` (DSM `duplicate`: `rename` / `ignore`). |
-| `album` | `int/str` | No | — | Album ID or unique name to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
+| `album_id` | `int` | No | — | Album ID to add the uploads to (personal only). It must already exist; a missing one is `not_found` before any file is uploaded. |
+| `album_name` | `str` | No | — | Or that album's unique name (case ignored); not with `album_id`. |
 
 DSM's `action` per file: `new`, `rename` (kept both, as `name_1.jpg`) or `ignore` (skipped; the reply's `id` is the **existing** item's). The count in the first line is files stored (new or renamed); skipped ones are counted apart, and an album gets both, since a skipped file's item is already there. The indexing note appears only when something was stored.
 
@@ -475,7 +478,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 - **Time limit (#416):** no new file is started once `task_timeout` (default 30 s) has passed, or 45 s if `task_timeout` is longer (`UPLOAD_BUDGET_CAP`: `task_timeout` goes up to 600 for long copies, which would bring the stall back), counting from the first upload, so the reply reaches the client before its tool-call timeout (Claude Desktop gives up after about 60 s and sends no cancel; in the 0.10.0rc9 live test a 50-file batch took 133 s on a real NAS, and a retry would have made 50 renamed copies). The files left are `not tried` rows, and the reply ends with their local paths, as given, to pass to another call:
 
   ```
-  Started no new file after 30 s (the task timeout, at most 45 s) so the reply isn't cut off; 38 file(s) not tried. To continue, call upload_photos again with the same folder, space, album and on_duplicate, and only these local_paths (resending the others makes renamed copies):
+  Started no new file after 30 s (the task timeout, at most 45 s) so the reply isn't cut off; 38 file(s) not tried. To continue, call upload_photos again with the same folder, space, album_id or album_name and on_duplicate, and only these local_paths (resending the others makes renamed copies):
     /home/u/Downloads/trip/IMG_0013.jpg
     …
   ```
@@ -502,7 +505,8 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `create`, `rename`, `add`, `remove`, `set_cover`, `copy`, `create_smart` or `set_condition`. |
-| `album` | `int/str` | No | — | Album ID or unique name (all actions except `create`/`create_smart`). |
+| `album_id` | `int` | No | — | Album ID (all actions except `create`/`create_smart`). |
+| `album_name` | `str` | No | — | Or the album's unique name (case ignored); not with `album_id`. |
 | `name` | `str` | No | — | New name (`create`, `create_smart`, `rename`, `copy`). |
 | `ids` | `list[int]` | No | — | Personal space items from `list_photos` (`create`, `add`, `remove`); exactly one for `set_cover`. At most 1,000 per call. |
 | `condition` | `dict` | No | — | `create_smart` / `set_condition`; see design notes. |
@@ -521,7 +525,7 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 **Design notes:**
 - Album names needn't be unique: DSM created a second album with the same name (verified). `create` warns when the name already exists; name lookup then needs the ID.
 - `set_cover` takes `id_item` as a **scalar** (unlike `Folder.set_cover`).
-- **Smart album condition** (tool input → DSM): `folders` → `folder_filter: [ids]`, `people` → `person: [ids]` + `person_policy` (`any`/`all` → `or`/`and`), `tags` → `general_tag` + `general_tag_policy`, `places` → `geocoding` (see below), `start_date`/`end_date` → `time: [{start_time, end_time}]`, `type` → `item_type` (`[]`, `[-1]` photos, `[-2]` videos), `ratings` → `rating: [..]`, `keywords` → `keyword` + `keyword_policy`; `user_id` is filled in (the caller's id from `UserInfo me`, or `0` for a Shared Space source). The tool previews the match count with `peek_item_count` and returns it.
+- **Smart album condition** (tool input → DSM): `folders` → `folder_filter: [ids]`, `person_ids` and `person_names` → `person: [ids]` + `person_policy` (`people_match`) (`any`/`all` → `or`/`and`), `tags` → `general_tag` + `general_tag_policy`, `places` → `geocoding` (see below), `start_date`/`end_date` → `time: [{start_time, end_time}]`, `type` → `item_type` (`[]`, `[-1]` photos, `[-2]` videos), `ratings` → `rating: [..]`, `keywords` → `keyword` + `keyword_policy`; `user_id` is filled in (the caller's id from `UserInfo me`, or `0` for a Shared Space source). The tool previews the match count with `peek_item_count` and returns it.
 - **Places in a condition** use the address-tree node IDs of `Search.Filter list`'s `geocoding` tree, not `Geocoding.list`'s place IDs: a place ID there answered **950** (verified on 7.1). The tool takes place IDs from `list_photo_collections(type="place")` and maps each to its node (the place's `country_id` is the tree's root; `first_level`, then `second_level`, name the node), which worked on both versions.
 - A condition DSM can't use fails with 953 (e.g. `user_id` missing or null) or 950 (a referenced tag/person/folder no longer exists; see tag IDs above). A condition with only `user_id` is accepted and matches everything (verified), so the tool requires at least one other key.
 
@@ -544,7 +548,8 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `share` (public access starts at `none` unless `public` is given), `update` (an album already shared) or `stop` (takes no settings). |
-| `album` | `int/str` | **Yes** | — | Album ID or unique name. |
+| `album_id` | `int` | One of these two | — | Album ID. |
+| `album_name` | `str` | One of these two | — | Or the album's unique name (case ignored); not with `album_id`. |
 | `public` | `str` | No | — | `none`, `view` or `download` (DSM privacy `private` / `public-view` / `public-download`). `none` also clears the password and expiry (#348). |
 | `password` | `str` | No | — | Set; `""` removes. Setting a password needs public `view` or `download` after the call, or it's refused: Photos drops a password on a link with no public access (#348). |
 | `expires` | `str` | No | — | `YYYY-MM-DD` (end of that day UTC), an ISO 8601 date-time with an offset or `Z` (that instant; without an offset it's refused, since it names no instant), or `never` (`0`). The expiration is a real UTC instant (see Formatting). A value at or before 1970-01-01 is refused: 0 is DSM's `never`, and DSM's handling of an earlier instant isn't known. An expiry other than `never` needs public `view` or `download` after the call, or it's refused: Photos drops an expiry on a link with no public access (#348). |
@@ -793,7 +798,8 @@ Photos rewrites edited files, so their dates and sizes change.
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
 | `action` | `str` | **Yes** | — | `rename`, `hide`, `unhide` or `set_cover`. |
-| `person` | `int/str` | **Yes** | — | Person ID or unique name. |
+| `person_id` | `int` | One of these two | — | Person ID. |
+| `person_name` | `str` | One of these two | — | Or the person's unique name (case ignored); not with `person_id`. |
 | `name` | `str` | No | — | `rename`; `""` clears it. |
 | `item_id` | `int` | No | — | `set_cover`: a photo of that person. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
@@ -858,16 +864,18 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Tool description (LLM-facing):**
 > Merge people (face-recognition groups) in Synology Photos that are the same person: every person
-> in merge joins target, which keeps its id, and the merged people are gone. If any person isn't
-> found, nothing is merged. This can't be undone, so confirm with the user first. To rename or hide
+> in merge_ids and merge_names joins the target, which keeps its id, and the merged people are
+> gone. If any person isn't found, nothing is merged. This can't be undone, so confirm with the user first. To rename or hide
 > one person, use edit_person.
 
 **Parameters:**
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `target` | `int/str` | **Yes** | — | Person ID or unique name to keep. |
-| `merge` | `list[int/str]` | **Yes** | — | Person IDs or unique names merged into the target. |
+| `target_id` | `int` | One of these two | — | Person ID to keep. |
+| `target_name` | `str` | One of these two | — | Or that person's unique name (case ignored); not with `target_id`. |
+| `merge_ids` | `list[int]` | At least one person in these two | — | IDs of the people merged into the target. |
+| `merge_names` | `list[str]` | At least one person in these two | — | Unique names (case ignored) of the people merged into it. |
 | `name` | `str` | No | — | Name after the merge; default the target's. |
 | `space` | `str` | No | `"personal"` | `personal` or `shared`. |
 
@@ -949,7 +957,8 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `albums` | `list[int/str]` | **Yes** | — | Album IDs or unique names; a name several albums share is refused and nothing is deleted. |
+| `album_ids` | `list[int]` | At least one album in these two | — | Album IDs. |
+| `album_names` | `list[str]` | At least one album in these two | — | Album names (case ignored); a name several albums share is refused and nothing is deleted. |
 
 **Annotations:** `destructiveHint=true`.
 

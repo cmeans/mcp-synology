@@ -229,8 +229,9 @@ MODULE_INFO = ModuleInfo(
             name="merge_people",
             description=(
                 "Merge people (face-recognition groups) in Synology Photos that are the same "
-                "person: every person in merge joins target, which keeps its id, and the merged "
-                "people are gone. If any person isn't found, nothing is merged. This can't be "
+                "person: every person in merge_ids and merge_names joins the target, which "
+                "keeps its id, and the merged people are gone. If any person isn't found, "
+                "nothing is merged. This can't be "
                 "undone, so confirm with the user first. To rename or hide one person, use "
                 "edit_person."
             ),
@@ -333,29 +334,48 @@ MODULE_INFO = ModuleInfo(
 )
 
 
-# A Photos parameter that takes an ID or a name (or path): the schema says a number is fine.
-# A number arrives as an `IdNumber`, looked up as that ID only, never as a name (#609, found
-# in the 0.11.0rc2 live test); True, False and a decimal stay refused.
+# A Photos folder parameter, which takes an ID or a path: the schema says a number is fine.
+# A number arrives as an `IdNumber`, looked up as that ID only, never as a path (#609, found
+# in the 0.11.0rc2 live test); True, False and a decimal stay refused. Albums and people
+# don't use it: they take an ID and a name in separate parameters (#614, #616).
 IdOrName = Annotated[
     str,
     # Wrap, not Before: pydantic would turn an IdNumber back into a plain str.
     WrapValidator(lambda v, text: id_number(v) if type(v) is int else text(v)),
     WithJsonSchema({"type": ["integer", "string"]}),
 ]
-# A tag name, never an ID: a number is that name (`2024`), as the smart-album condition already
-# took it (#609).
-TagName = Annotated[
+
+
+# A Photos ID: a number, or its digits as text (the parameter says it's an ID, so there's
+# nothing to tell apart). True and False are refused: pydantic would read them as 1 and 0, and
+# `album_ids=[true]` would delete album 1.
+def _no_bool(value: object) -> object:
+    if isinstance(value, bool):
+        raise ValueError("an ID is a number, not true or false")
+    return value
+
+
+PhotoId = Annotated[int, BeforeValidator(_no_bool)]
+# A name, never an ID (an album's, a person's or a tag's): a number is that name (`2024`), as
+# the smart-album condition already took it (#609).
+Name = Annotated[
     str,
     BeforeValidator(lambda v: str(v) if type(v) is int else v),
     WithJsonSchema({"type": ["integer", "string"]}),
 ]
+TagName = Name
 
 
 # Parameter descriptions used by several tools (#247).
 _SPACE = "`personal` (default) or `shared` (Shared Space). IDs belong to one space."
 _ITEM_IDS = "Item IDs from list_photos, at most 1,000 per call."
-_ALBUM = "Album ID (list_photo_collections type=album) or unique name."
-_PERSON = "Person ID (list_photo_collections type=person) or unique name."
+# Albums and people: an ID or a name, each in its own parameter (#614: a tester sent an ID as
+# text, which matched the album with that name; #616: a name of digits matched the album with
+# that ID). tests/core/test_server.py TestIdParameters checks no Photos parameter takes both.
+_ALBUM_ID = "Album ID (list_photo_collections type=album)."
+_ALBUM_NAME = "Or the album's name, case ignored; not with album_id."
+_PERSON_ID = "Person ID (list_photo_collections type=person)."
+_PERSON_NAME = "Or the person's name, case ignored; not with person_id."
 _FOLDER = "Folder ID (list_photo_collections type=folder) or path, such as `/Trips/2024`."
 _EXPIRES = (
     "`YYYY-MM-DD` (end of that day, UTC), a date-time with offset "
@@ -399,14 +419,16 @@ def register(ctx: "RegisterContext") -> None:
                     description=(f"Only items directly in this folder, not subfolders. {_FOLDER}")
                 ),
             ] = None,
-            album: Annotated[
-                IdOrName | None, Field(description=(f"One album only (personal space). {_ALBUM}"))
+            album_id: Annotated[
+                PhotoId | None, Field(description=(f"One album only (personal space). {_ALBUM_ID}"))
             ] = None,
-            person: Annotated[
-                IdOrName | None, Field(description=(f"Only items showing this person. {_PERSON}"))
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
+            person_id: Annotated[
+                PhotoId | None, Field(description=(f"Only items showing this person. {_PERSON_ID}"))
             ] = None,
+            person_name: Annotated[Name | None, Field(description=(_PERSON_NAME))] = None,
             place: Annotated[
-                int | None,
+                PhotoId | None,
                 Field(
                     description=(
                         "One place only: a place ID from list_photo_collections type=place."
@@ -446,7 +468,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             concept: Annotated[
-                int | None,
+                PhotoId | None,
                 Field(
                     description=(
                         "One concept only (a thing or scene Photos recognized): an ID from "
@@ -468,8 +490,10 @@ def register(ctx: "RegisterContext") -> None:
                 client,
                 space=space,
                 folder=folder,
-                album=album,
-                person=person,
+                album_id=album_id,
+                album_name=album_name,
+                person_id=person_id,
+                person_name=person_name,
                 place=place,
                 tag=tag,
                 keyword=keyword,
@@ -544,7 +568,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("get_photo"))  # type: ignore[arg-type]
         async def tool_get_photo(
-            ids: Annotated[list[int], Field(description=("1-20 item IDs from list_photos."))],
+            ids: Annotated[list[PhotoId], Field(description=("1-20 item IDs from list_photos."))],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             exif: Annotated[
                 bool, Field(description=("Also show each item's full EXIF table."))
@@ -557,7 +581,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("download_photos"))  # type: ignore[arg-type]
         async def tool_download_photos(
-            ids: Annotated[list[int], Field(description=("1-50 item IDs from list_photos."))],
+            ids: Annotated[list[PhotoId], Field(description=("1-50 item IDs from list_photos."))],
             dest_folder: Annotated[
                 str | None,
                 Field(
@@ -613,10 +637,11 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ],
-            album: Annotated[
-                IdOrName | None,
-                Field(description=(f"The album to change; not for creates. {_ALBUM}")),
-            ] = (None),
+            album_id: Annotated[
+                PhotoId | None,
+                Field(description=(f"The album to change; not for creates. {_ALBUM_ID}")),
+            ] = None,
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
             name: Annotated[
                 str | None,
                 Field(
@@ -624,7 +649,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             ids: Annotated[
-                list[int] | None,
+                list[PhotoId] | None,
                 Field(
                     description=(
                         "Personal space item IDs from list_photos, at most 1,000; exactly one "
@@ -636,10 +661,11 @@ def register(ctx: "RegisterContext") -> None:
                 dict[str, Any] | None,
                 Field(
                     description=(
-                        "At least one of `folders` (IDs or paths), `people` (IDs or names), `tags` "
-                        "(names), `places` (place IDs), `start_date` / `end_date` (`YYYY-MM-DD`), "
-                        "`type` (`all`, `photo`, `video`), `ratings` (list of 0-5), `keywords`; "
-                        "`people_match`, `tags_match`, `keywords_match`: `any` (default) or `all`. "
+                        "At least one of `folders` (IDs or paths), `person_ids`, `person_names`, "
+                        "`tags` (names), `places` (place IDs), `start_date` / `end_date` "
+                        "(`YYYY-MM-DD`), `type` (`all`, `photo`, `video`), `ratings` (list of "
+                        "0-5), `keywords`; `people_match` (for both person keys), `tags_match`, "
+                        "`keywords_match`: `any` (default) or `all`. "
                         'Example: `{"tags": ["beach"], "start_date": "2024-01-01"}`.'
                     )
                 ),
@@ -649,7 +675,13 @@ def register(ctx: "RegisterContext") -> None:
 
             client = await manager.get_client()
             return await photo_album(
-                client, action=action, album=album, name=name, ids=ids, condition=condition
+                client,
+                action=action,
+                album_id=album_id,
+                album_name=album_name,
+                name=name,
+                ids=ids,
+                condition=condition,
             )
 
     if "photo_share_link" in ctx.allowed_tools:
@@ -666,7 +698,8 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ],
-            album: Annotated[IdOrName, Field(description=(_ALBUM))],
+            album_id: Annotated[PhotoId | None, Field(description=(_ALBUM_ID))] = None,
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
             public: Annotated[
                 str | None,
                 Field(
@@ -710,7 +743,8 @@ def register(ctx: "RegisterContext") -> None:
             return await photo_share_link(
                 client,
                 action=action,
-                album=album,
+                album_id=album_id,
+                album_name=album_name,
                 public=public,
                 password=password,
                 expires=expires,
@@ -746,7 +780,7 @@ def register(ctx: "RegisterContext") -> None:
                 str | None, Field(description=("One folder name, without `/`."))
             ] = None,
             item_id: Annotated[
-                int | None, Field(description=("`set_cover`: an item ID from list_photos."))
+                PhotoId | None, Field(description=("`set_cover`: an item ID from list_photos."))
             ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
@@ -770,7 +804,7 @@ def register(ctx: "RegisterContext") -> None:
             action: Annotated[
                 str, Field(description=("`add` (creates tags that don't exist) or `remove`."))
             ],
-            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            ids: Annotated[list[PhotoId], Field(description=(_ITEM_IDS))],
             tags: Annotated[
                 list[TagName],
                 Field(description=('Tag names, any case, such as `["beach", "2024"]`.')),
@@ -786,7 +820,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("edit_photo"))  # type: ignore[arg-type]
         async def tool_edit_photo(
-            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            ids: Annotated[list[PhotoId], Field(description=(_ITEM_IDS))],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             rating: Annotated[
                 int | None, Field(description=("0-5; `0` clears the rating."))
@@ -850,15 +884,16 @@ def register(ctx: "RegisterContext") -> None:
                     description=("`rename` (`name`), `hide`, `unhide` or `set_cover` (`item_id`).")
                 ),
             ],
-            person: Annotated[
-                IdOrName,
-                Field(description=(f"{_PERSON} Hidden ones need include_hidden=true there.")),
-            ],
+            person_id: Annotated[
+                PhotoId | None,
+                Field(description=(f"{_PERSON_ID} Hidden ones need include_hidden=true there.")),
+            ] = None,
+            person_name: Annotated[Name | None, Field(description=(_PERSON_NAME))] = None,
             name: Annotated[
                 str | None, Field(description=('The new name; `""` makes them unnamed.'))
             ] = None,
             item_id: Annotated[
-                int | None,
+                PhotoId | None,
                 Field(description=("An item ID from list_photos of a photo showing this person.")),
             ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
@@ -867,7 +902,13 @@ def register(ctx: "RegisterContext") -> None:
 
             client = await manager.get_client()
             return await edit_person(
-                client, action=action, person=person, name=name, item_id=item_id, space=space
+                client,
+                action=action,
+                person_id=person_id,
+                person_name=person_name,
+                name=name,
+                item_id=item_id,
+                space=space,
             )
 
     if "photo_request" in ctx.allowed_tools:
@@ -934,11 +975,21 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("merge_people"))  # type: ignore[arg-type]
         async def tool_merge_people(
-            target: Annotated[IdOrName, Field(description=(f"The person to keep. {_PERSON}"))],
-            merge: Annotated[
-                list[IdOrName],
-                Field(description=("The people merged into `target`, as IDs or unique names.")),
-            ],
+            target_id: Annotated[
+                PhotoId | None, Field(description=(f"The person to keep. {_PERSON_ID}"))
+            ] = None,
+            target_name: Annotated[
+                Name | None,
+                Field(description=("Or that person's name, case ignored; not with target_id.")),
+            ] = None,
+            merge_ids: Annotated[
+                list[PhotoId] | None,
+                Field(description=("IDs of the people merged into the target.")),
+            ] = None,
+            merge_names: Annotated[
+                list[Name] | None,
+                Field(description=("Names of the people merged into it, case ignored.")),
+            ] = None,
             name: Annotated[
                 str | None, Field(description=("The name after the merge; default the target's."))
             ] = None,
@@ -947,26 +998,37 @@ def register(ctx: "RegisterContext") -> None:
             from mcp_synology.modules.photos.organize import merge_people
 
             client = await manager.get_client()
-            return await merge_people(client, target=target, merge=merge, name=name, space=space)
+            return await merge_people(
+                client,
+                target_id=target_id,
+                target_name=target_name,
+                merge_ids=merge_ids,
+                merge_names=merge_names,
+                name=name,
+                space=space,
+            )
 
     if "delete_photo_albums" in ctx.allowed_tools:
 
         @server.tool(**_tool("delete_photo_albums"))  # type: ignore[arg-type]
         async def tool_delete_photo_albums(
-            albums: Annotated[
-                list[IdOrName],
+            album_ids: Annotated[
+                list[PhotoId] | None,
+                Field(description=("Album IDs (list_photo_collections type=album).")),
+            ] = None,
+            album_names: Annotated[
+                list[Name] | None,
                 Field(
                     description=(
-                        "Album IDs (list_photo_collections type=album) or unique names; a name "
-                        "several albums share deletes nothing."
+                        "Album names, case ignored; a name several albums share deletes nothing."
                     )
                 ),
-            ],
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.albums import delete_photo_albums
 
             client = await manager.get_client()
-            return await delete_photo_albums(client, albums=albums)
+            return await delete_photo_albums(client, album_ids=album_ids, album_names=album_names)
 
     if "upload_photos" in ctx.allowed_tools:
 
@@ -997,15 +1059,16 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ] = "rename",
-            album: Annotated[
-                IdOrName | None,
+            album_id: Annotated[
+                PhotoId | None,
                 Field(
                     description=(
                         "An existing album to add them to (personal space; create one with "
-                        f"photo_album). {_ALBUM}"
+                        f"photo_album). {_ALBUM_ID}"
                     )
                 ),
             ] = None,
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
         ) -> str:
             from mcp_synology.modules.photos.transfer import upload_photos
 
@@ -1016,7 +1079,8 @@ def register(ctx: "RegisterContext") -> None:
                 folder=folder,
                 space=space,
                 on_duplicate=on_duplicate,
-                album=album,
+                album_id=album_id,
+                album_name=album_name,
                 allowed_roots=local_roots,
                 budget=settings.task_timeout,
             )
@@ -1035,7 +1099,7 @@ def register(ctx: "RegisterContext") -> None:
                     ),
                 ],
                 ids: Annotated[
-                    list[int] | None,
+                    list[PhotoId] | None,
                     Field(
                         description=(
                             "Item IDs from list_photos, in `space`, at most 1,000. Pass `ids`, "
@@ -1129,7 +1193,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("delete_photos"))  # type: ignore[arg-type]
         async def tool_delete_photos(
-            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            ids: Annotated[list[PhotoId], Field(description=(_ITEM_IDS))],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.tasks import delete_photos

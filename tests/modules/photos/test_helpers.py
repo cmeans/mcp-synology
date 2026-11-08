@@ -13,15 +13,18 @@ from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyErr
 from mcp_synology.modules.photos.helpers import (
     IdNumber,
     Photos,
+    Ref,
     check_space,
     encode,
     id_list,
     is_indexing,
+    one_ref,
     page_footer,
     parse_date,
     parse_expires,
     photo_time,
     prefix,
+    refs,
     taken,
 )
 from tests.modules.photos.dsm import CAPTURE_191, PEOPLE, FakePhotos, captured, install, make_client
@@ -237,40 +240,33 @@ class TestFolders:
         assert err["code"] == "not_found"
         assert err["param"] == "parent"
 
-    @pytest.mark.parametrize("value", [IdNumber("43"), "43"])
     @pytest.mark.parametrize("kind", ["album", "person"])
     @respx.mock
-    async def test_no_dsm_answer_on_the_id_lookup_is_not_not_found(
-        self, kind: str, value: str
-    ) -> None:
-        """Pre-QA r3 on #611: a proxy's 502 on the ID get is that error, not "no album 43"
-        (a number) or a fall-through to the name lookup (text)."""
+    async def test_no_dsm_answer_on_the_id_lookup_is_not_not_found(self, kind: str) -> None:
+        """Pre-QA r3 on #611: a proxy's 502 on the ID get is that error, not "no album 43",
+        and no name lookup follows."""
         api = {"album": "SYNO.Foto.Browse.Album", "person": "SYNO.Foto.Browse.Person"}[kind]
         fake = FakePhotos().on(api, "get", 1, lambda _p: httpx.Response(502, text="Bad Gateway"))
         install(fake)
         client = make_client()
         async with client:
             with pytest.raises(DsmHttpError):
-                await getattr(Photos(client, "personal", "Op"), kind)(value)
+                await getattr(Photos(client, "personal", "Op"), kind)(Ref(f"{kind}_id", id=43))
         assert not fake.of(api, "list")
 
-    @pytest.mark.parametrize("kind", ["folder", "album", "person"])
     @respx.mock
-    async def test_a_negative_number_is_no_id_and_no_name(self, kind: str) -> None:
-        """#609 pre-QA: -5 sent as a number is an ID only: not the folder path /-5, nor an
-        album or person named -5, and nothing is asked of DSM; the hint says to pass text."""
+    async def test_a_negative_number_is_no_folder_path(self) -> None:
+        """#609 pre-QA: -5 sent as a number is a folder ID only, not the path /-5, and
+        nothing is asked of DSM."""
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, {"folder": {"id": 77}})
-        fake.on("SYNO.Foto.Browse.Album", "list", 2, {"list": [{"id": 3, "name": "-5"}]})
-        fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 4, "name": "-5"}]})
         install(fake)
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await getattr(Photos(client, "personal", "Op"), kind)(IdNumber("-5"))
+                await Photos(client, "personal", "Op").folder(IdNumber("-5"))
         err = _error(exc)
         assert err["code"] == "not_found", err
-        assert f"no {kind} -5" in err["message"], err
-        assert "as text" not in err["suggestion"], err  # no hint toward a name (#611)
+        assert "no folder -5" in err["message"], err
         assert not fake.calls, fake.calls
 
     @respx.mock
@@ -333,49 +329,82 @@ class TestFolders:
 
 
 class TestNames:
+    """Albums and people come by ID or by name, each from its own parameter (#614, #616): an ID
+    is that ID only, and a name (digits too) that name only."""
+
     @respx.mock
     async def test_person_by_id(self) -> None:
         fake = FakePhotos().on("SYNO.Foto.Browse.Person", "get", 1, captured("person-get", PEOPLE))
         install(fake)
         client = make_client()
         async with client:
-            person = await Photos(client, "personal", "Op").person("12")
+            person = await Photos(client, "personal", "Op").person(Ref("person_id", id=12))
         assert person["name"] == "Person 1"
+        assert not fake.of("SYNO.Foto.Browse.Person", "list")
 
+    @pytest.mark.parametrize("kind", ["album", "person"])
     @respx.mock
-    async def test_digits_fall_back_to_a_name(self) -> None:
-        """An album named "2024": no album has ID 2024, so the name is tried."""
-        albums = {"list": [{"id": 4, "name": "2024", "item_count": 1}]}
+    async def test_a_missing_id_is_not_found_even_when_a_name_matches(self, kind: str) -> None:
+        """#614 (0.11.0rc3 live test): "the album whose ID is 9876543" deleted the album named
+        9876543. An ID that doesn't exist is not found; names aren't looked at."""
+        api, version = {
+            "album": ("SYNO.Foto.Browse.Album", 2),
+            "person": ("SYNO.Foto.Browse.Person", 1),
+        }[kind]
         fake = (
             FakePhotos()
-            .on("SYNO.Foto.Browse.Album", "get", 1, {"list": []})
-            .on("SYNO.Foto.Browse.Album", "list", 2, albums)
-        )
-        install(fake)
-        client = make_client()
-        async with client:
-            album = await Photos(client, "shared", "Op").album("2024")
-        assert album["id"] == 4
-        assert fake.one("SYNO.Foto.Browse.Album", "list").api.startswith("SYNO.Foto.")
-
-    @respx.mock
-    async def test_id_lookup_error_falls_back_but_setup_errors_raise(self) -> None:
-        fake = (
-            FakePhotos()
-            .error("SYNO.Foto.Browse.Album", "get", 1, 609)
-            .on("SYNO.Foto.Browse.Album", "list", 2, {"list": []})
+            .on(api, "get", 1, {"list": []})
+            .on(api, "list", version, {"list": [{"id": 49, "name": "9876543"}]})
         )
         install(fake)
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").album("9")
+                await getattr(Photos(client, "personal", "Op"), kind)(Ref(f"{kind}_id", id=9876543))
+        err = _error(exc)
+        assert (err["code"], err["param"], err["value"]) == (
+            "not_found",
+            f"{kind}_id",
+            9876543,
+        )
+        assert f"no {kind} 9876543." in err["message"]
+        assert not fake.of(api, "list")
+
+    @pytest.mark.parametrize("kind", ["album", "person"])
+    @respx.mock
+    async def test_a_name_of_digits_is_that_name_even_when_an_id_matches(self, kind: str) -> None:
+        """#616: "the album named 43" deleted album 43, another album. A name is matched
+        against names only; no ID lookup is made."""
+        api, version = {
+            "album": ("SYNO.Foto.Browse.Album", 2),
+            "person": ("SYNO.Foto.Browse.Person", 1),
+        }[kind]
+        names = {"list": [{"id": 43, "name": "Holiday"}, {"id": 7, "name": "43"}]}
+        fake = FakePhotos().on(api, "list", version, names)
+        install(fake)
+        client = make_client()
+        async with client:
+            found = await getattr(Photos(client, "personal", "Op"), kind)(
+                Ref(f"{kind}_name", name="43")
+            )
+        assert found["id"] == 7
+        assert not fake.of(api, "get")
+
+    @respx.mock
+    async def test_other_id_lookup_errors_are_not_found_but_setup_errors_raise(self) -> None:
+        fake = FakePhotos().error("SYNO.Foto.Browse.Album", "get", 1, 609)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").album(Ref("album_id", id=9))
         assert _error(exc)["code"] == "not_found"
+        assert not fake.of("SYNO.Foto.Browse.Album", "list")
         respx.clear()
         install(FakePhotos().error("SYNO.Foto.Browse.Album", "get", 1, 160))
         async with client:
             with pytest.raises(SynologyError) as info:
-                await Photos(client, "personal", "Op").album("9")
+                await Photos(client, "personal", "Op").album(Ref("album_id", id=9))
         assert info.value.code == 160
 
     @respx.mock
@@ -385,10 +414,11 @@ class TestNames:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").person("JO")
+                await Photos(client, "personal", "Op").person(Ref("person_name", name="JO"))
         err = _error(exc)
-        assert err["code"] == "invalid_parameter"
+        assert (err["code"], err["param"]) == ("invalid_parameter", "person_name")
         assert "1 (Jo)" in str(err["message"]) and "2 (jo)" in str(err["message"])
+        assert err["suggestion"] == "Ask the user which one they mean, then pass its person_id."
 
     @respx.mock
     async def test_person_walk_includes_hidden(self) -> None:
@@ -398,10 +428,47 @@ class TestNames:
         install(fake)
         client = make_client()
         async with client:
-            person = await Photos(client, "personal", "Op").person("person 3")
+            person = await Photos(client, "personal", "Op").person(
+                Ref("person_name", name="person 3")
+            )
         assert person["id"] == 19
         params = fake.one("SYNO.Foto.Browse.Person", "list").params
         assert params["show_hidden"] is True and params["show_more"] is True
+
+
+class TestOneRef:
+    """`album_id` or `album_name` (and the other pairs): one, never both (#614, #616)."""
+
+    def test_an_id_or_a_name(self) -> None:
+        assert one_ref("Op", "album", 4, None) == Ref("album_id", id=4)
+        assert one_ref("Op", "album", None, "43") == Ref("album_name", name="43")
+        assert one_ref("Op", "person", None, None, required=False) is None
+        assert one_ref("Op", "person", 5, None, prefix="target") == Ref("target_id", id=5)
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            ((4, "Trip"), "pass album_id or album_name, not both."),
+            ((None, None), "pass album_id or album_name."),
+        ],
+    )
+    def test_both_or_neither_is_refused(
+        self, args: tuple[int | None, str | None], message: str
+    ) -> None:
+        with pytest.raises(ToolError) as exc:
+            one_ref("Op", "album", *args)
+        err = _error(exc)
+        assert (err["code"], err["param"]) == ("invalid_parameter", "album_id")
+        assert err["message"] == f"Op failed: {message}"
+
+    def test_lists_take_both_kinds_ids_first(self) -> None:
+        assert refs("Op", [4], ["43"], prefix="album") == [
+            Ref("album_ids", id=4),
+            Ref("album_names", name="43"),
+        ]
+        with pytest.raises(ToolError) as exc:
+            refs("Op", [], None, prefix="merge")
+        assert _error(exc)["message"] == "Op failed: pass merge_ids or merge_names."
 
     @respx.mock
     async def test_tag_ids_exact_then_unique_casefold(self) -> None:

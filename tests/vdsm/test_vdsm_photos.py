@@ -476,10 +476,10 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             made.append(name)
             assert "with 3 item(s)" in out
             out = await photo_album(
-                photos, action="remove", album=name, ids=[ids["city-night.jpg"]]
+                photos, action="remove", album_name=name, ids=[ids["city-night.jpg"]]
             )
             assert "2 item(s)" in out
-            out = await list_photos(photos, album=name)
+            out = await list_photos(photos, album_name=name)
             assert "2 item(s) total" in out
 
             smart = f"{name}-smart"
@@ -495,7 +495,7 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             out = await photo_share_link(
                 photos,
                 action="share",
-                album=name,
+                album_name=name,
                 public="view",
                 password="t258-Pw",
                 expires="2035-01-01",
@@ -503,28 +503,30 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             assert "/mo/sharing/" in out and "password: yes" in out
             # A date-time with an offset is that exact instant (a real UTC instant).
             out = await photo_share_link(
-                photos, action="update", album=name, expires="2034-12-31T23:59:59-05:00"
+                photos, action="update", album_name=name, expires="2034-12-31T23:59:59-05:00"
             )
             assert "expires 2035-01-01 04:59:59 UTC" in out, out
             link = re.search(r"Link:\s+(\S+)", out).group(1)  # type: ignore[union-attr]
             # #348: turning public access off clears the expiry and the password, and
             # Photos would drop a new expiry on a link with public none, so it's refused.
-            out = await photo_share_link(photos, action="update", album=name, public="none")
+            out = await photo_share_link(photos, action="update", album_name=name, public="none")
             assert "Public:    none · password: no · expires never" in out, out
             assert "also cleared the link's expiry and password" in out, out
             with pytest.raises(ToolError) as exc:
-                await photo_share_link(photos, action="update", album=name, expires="2035-01-01")
+                await photo_share_link(
+                    photos, action="update", album_name=name, expires="2035-01-01"
+                )
             assert _error(exc)["param"] == "expires"
             out = await photo_share_link(
-                photos, action="update", album=name, public="view", expires="2035-01-01"
+                photos, action="update", album_name=name, public="view", expires="2035-01-01"
             )
             assert "Public:    view · password: no · expires 2035-01-01 23:59:59 UTC" in out, out
-            await photo_share_link(photos, action="stop", album=name)
-            again = await photo_share_link(photos, action="share", album=name)
+            await photo_share_link(photos, action="stop", album_name=name)
+            again = await photo_share_link(photos, action="share", album_name=name)
             # Same link, settings reset (verified while implementing #258).
             assert link in again and "Public:    none" in again
         finally:
-            out = await delete_photo_albums(photos, albums=made)
+            out = await delete_photo_albums(photos, album_names=made)
             assert f"Deleted {len(made)} album(s)" in out
         # DSM answers success for unknown album IDs, so the reply alone proves nothing:
         # the normal and the smart album must both be gone.
@@ -532,8 +534,42 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
         assert not [m for m in made if m in listed], listed
         for gone in made:
             with pytest.raises(ToolError) as exc:
-                await list_photos(photos, album=gone)
+                await list_photos(photos, album_name=gone)
             assert _error(exc)["code"] == "not_found"
+
+
+async def test_album_ids_and_names_are_never_taken_for_each_other(photos: DsmClient) -> None:
+    """#614 (0.11.0rc3 live test) and #616: an album named with digits beside an album whose ID
+    is those digits. album_names deletes the one by that name, album_ids the one with that ID,
+    and an ID no album has deletes nothing, though an album is named with it."""
+    tag = uuid.uuid4().hex[:6]
+    out = await photo_album(photos, action="create", name=f"t614-holiday-{tag}")
+    holiday = int(re.search(r"\(id (\d+)\)", out).group(1))  # type: ignore[union-attr]
+    named: list[str] = []
+    try:
+        await photo_album(photos, action="create", name=str(holiday))
+        named.append(str(holiday))
+        missing = holiday + 900_000
+        await photo_album(photos, action="create", name=str(missing))
+        named.append(str(missing))
+
+        out = await delete_photo_albums(photos, album_ids=[missing])
+        assert out == f"No albums deleted.\n  Not found: ID {missing}", out
+
+        out = await delete_photo_albums(photos, album_names=[str(holiday)])
+        assert "Deleted 1 album(s): " in out and f'"{holiday}"' in out, out
+        named.remove(str(holiday))
+        listed = await list_photo_collections(photos, type="album")
+        assert f"t614-holiday-{tag}" in listed, listed  # the album with that ID is still there
+
+        out = await delete_photo_albums(photos, album_ids=[holiday])
+        assert f'Deleted 1 album(s): {holiday} "t614-holiday-{tag}"' in out, out
+        holiday = 0
+    finally:
+        if named:
+            await delete_photo_albums(photos, album_names=named)
+        if holiday:
+            await delete_photo_albums(photos, album_ids=[holiday])
 
 
 async def test_photo_requests(photos: DsmClient) -> None:

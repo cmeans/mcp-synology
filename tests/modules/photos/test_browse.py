@@ -113,7 +113,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, person="12")
+            out = await list_photos(client, person_id=12)
         assert fake.one(ITEM, "count_with_filter").params == {"person": [12], "person_policy": "or"}
         assert "No items to display." in out and "0 item(s) total." in out
 
@@ -157,7 +157,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, album="4")
+            out = await list_photos(client, album_id=4)
         assert fake.one(ITEM, "list").params["album_id"] == 4
         assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
 
@@ -224,9 +224,9 @@ class TestListPhotosRefusals:
         ("kwargs", "param"),
         [
             ({"keyword": "x", "folder": "/"}, "keyword"),
-            ({"album": "1", "tag": "x"}, "album"),
+            ({"album_id": 1, "tag": "x"}, "album_id"),
             ({"place": 1, "type": "photo"}, "place"),
-            ({"concept": 1, "album": "2"}, "album"),
+            ({"concept": 1, "album_name": "2"}, "album_name"),
             ({"type": "raw"}, "type"),
             ({"sort_by": "date"}, "sort_by"),
             ({"sort_direction": "up"}, "sort_direction"),
@@ -236,7 +236,7 @@ class TestListPhotosRefusals:
             ({"min_rating": 6}, "min_rating"),
             ({"start_date": "2024-02-01", "end_date": "2024-01-01"}, "start_date"),
             ({"space": "team"}, "space"),
-            ({"album": "1", "space": "shared"}, "space"),
+            ({"album_id": 1, "space": "shared"}, "space"),
         ],
     )
     async def test_refused_before_any_request(self, kwargs: dict[str, Any], param: str) -> None:

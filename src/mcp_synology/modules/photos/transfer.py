@@ -22,6 +22,7 @@ from mcp_synology.modules.photos.helpers import (
     Photos,
     check_space,
     invalid,
+    one_ref,
     space_label,
 )
 
@@ -376,7 +377,8 @@ async def upload_photos(
     folder: str = "/",
     space: str = "personal",
     on_duplicate: str = "rename",
-    album: str | None = None,
+    album_id: int | None = None,
+    album_name: str | None = None,
     allowed_roots: list[Path] | None = None,
     budget: float = 30.0,
 ) -> str:
@@ -390,6 +392,7 @@ async def upload_photos(
     budget = min(budget, UPLOAD_BUDGET_CAP)
     op = "Upload photos"
     sp = check_space(op, space)
+    album = one_ref(op, "album", album_id, album_name, required=False)
     if on_duplicate not in _DUPLICATE:
         invalid(
             op,
@@ -412,8 +415,8 @@ async def upload_photos(
             op,
             "albums are personal space only; upload to the personal space to add "
             "the files to an album.",
-            param="album",
-            value=album,
+            param=album.param,
+            value=album.given,
         )
     files: list[Path] = []
     for value in local_paths:
@@ -608,7 +611,7 @@ async def upload_photos(
             f"Started no new file after {budget:g} s (the task timeout, at most "
             f"{UPLOAD_BUDGET_CAP:g} s) so the reply isn't cut off; {len(left):,} file(s) "
             "not tried. To continue, call upload_photos again with the same folder, space, "
-            f"album and on_duplicate, and only these local_paths ({why}):"
+            f"album_id or album_name and on_duplicate, and only these local_paths ({why}):"
         )
         lines += [f"  {value}" for value in left]
     return "\n".join(lines)

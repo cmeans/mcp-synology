@@ -14,11 +14,14 @@ from mcp_synology.core.formatting import format_timestamp, synology_error_respon
 from mcp_synology.modules.photos.helpers import (
     IdNumber,
     Photos,
+    Ref,
     check_ids,
     invalid,
     not_found,
+    one_ref,
     parse_date,
     parse_expires,
+    refs,
 )
 
 if TYPE_CHECKING:
@@ -38,7 +41,8 @@ _ALBUM_ACTIONS = (
 )
 _CONDITION_KEYS = (
     "folders",
-    "people",
+    "person_ids",
+    "person_names",
     "people_match",
     "tags",
     "tags_match",
@@ -95,7 +99,8 @@ async def photo_album(
     client: DsmClient,
     *,
     action: str,
-    album: str | None = None,
+    album_id: int | None = None,
+    album_name: str | None = None,
     name: str | None = None,
     ids: list[int] | None = None,
     condition: dict[str, Any] | None = None,
@@ -110,9 +115,10 @@ async def photo_album(
             value=action,
             valid=list(_ALBUM_ACTIONS),
         )
+    album = one_ref(op, "album", album_id, album_name, required=False)
     needs_album = action not in ("create", "create_smart")
     if needs_album and album is None:
-        invalid(op, f"action={action} needs album.", param="album")
+        invalid(op, f"action={action} needs album_id or album_name.", param="album_id")
     if action in ("create", "create_smart", "rename", "copy") and not (name or "").strip():
         invalid(op, f"action={action} needs name.", param="name", value=name)
     if action in ("add", "remove", "set_cover") or (action == "create" and ids):
@@ -131,7 +137,7 @@ async def photo_album(
 async def _photo_album(
     ph: Photos,
     action: str,
-    album: str | None,
+    album: Ref | None,
     name: str,
     ids: list[int],
     condition: dict[str, Any] | None,
@@ -175,13 +181,14 @@ async def _photo_album(
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
-                f"Note: another album already has this name (id {others}); use ids to tell "
-                "them apart."
+                f"Note: another album already has this name (id {others}); use album_id to "
+                "tell them apart."
             )
         now = await _album_now(ph, int(created["id"]))
         return "\n".join([*lines, album_line(now)])
 
-    target = await ph.album(album or "")
+    assert album is not None  # photo_album checked it
+    target = await ph.album(album)
     album_id = int(target["id"])
     kind = str(target.get("type", "normal"))
     if action in ("add", "remove", "copy") and kind != "normal":
@@ -265,6 +272,20 @@ def _rejected(data: dict[str, Any]) -> list[str]:
     return [f"  Rejected by DSM: {', '.join(str(r) for r in rejected)} (error_list)"]
 
 
+def condition_person_id(op: str, value: object) -> Ref:
+    """One of a condition's ``person_ids``: a person ID, as a number or its digits."""
+    if type(value) is int:
+        return Ref("condition", id=value)
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        return Ref("condition", id=int(value.strip()))
+    invalid(
+        op,
+        f"condition person_ids are person IDs, not {value!r}; names go in person_names.",
+        param="condition",
+        value=value,
+    )
+
+
 async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
     """The tool's condition (names, dates) as DSM's (IDs, Unix times, policies)."""
     op = ph.operation
@@ -288,7 +309,7 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
         # DSM accepts a condition with only user_id and matches everything (verified).
         invalid(
             op,
-            "the condition needs at least one of folders, people, tags, places, "
+            "the condition needs at least one of folders, person_ids, person_names, tags, places, "
             "start_date, end_date, type, ratings or keywords.",
             param="condition",
             value=given,
@@ -317,15 +338,11 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
             )
             for f in folders
         ]
-    if people := as_list("people"):
-        cond["person"] = [
-            int(
-                (await ph.person(IdNumber(p) if type(p) is int else str(p), param="condition"))[
-                    "id"
-                ]
-            )
-            for p in people
-        ]
+    people = [condition_person_id(op, p) for p in as_list("person_ids")]
+    people += [Ref("condition", name=str(p)) for p in as_list("person_names")]
+    if people:
+        # Each person by ID or by name, from its own key (#614, #616).
+        cond["person"] = [int((await ph.person(p))["id"]) for p in people]
         cond["person_policy"] = policy("people")
     if tags := as_list("tags"):
         ids = await ph.tag_ids([str(t) for t in tags], param="condition")
@@ -381,7 +398,8 @@ async def photo_share_link(
     client: DsmClient,
     *,
     action: str,
-    album: str,
+    album_id: int | None = None,
+    album_name: str | None = None,
     public: str | None = None,
     password: str | None = None,
     expires: str | None = None,
@@ -389,6 +407,8 @@ async def photo_share_link(
 ) -> str:
     """Share an album by link, change the link's settings, or stop (spec: photo_share_link)."""
     op = "Photo share link"
+    album = one_ref(op, "album", album_id, album_name)
+    assert album is not None  # required
     if action not in _SHARE_ACTIONS:
         invalid(
             op,
@@ -588,39 +608,39 @@ def _share_block(album: dict[str, Any]) -> str:
 # -- delete_photo_albums ------------------------------------------------------------
 
 
-async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
+async def delete_photo_albums(
+    client: DsmClient,
+    *,
+    album_ids: list[int] | None = None,
+    album_names: list[str] | None = None,
+) -> str:
     """Delete albums; their photos stay (spec: delete_photo_albums)."""
     op = "Delete photo albums"
-    if not albums:
-        invalid(op, "pass at least one album.", param="albums", value=albums)
+    wanted = refs(op, album_ids, album_names, prefix="album")
     try:
         ph = Photos(client, "personal", op)
         found: dict[int, str] = {}
         missing: list[str] = []
         existing = await ph.walk("Browse.Album", version=2, personal=True)
         by_id = {int(a["id"]): a for a in existing}
-        for value in albums:
-            text = str(value).strip()
-            digits = text.isascii() and text.isdigit()
-            if digits and int(text) in by_id:
-                matches = [by_id[int(text)]]
-            elif isinstance(value, IdNumber):
-                matches = []  # sent as a number: an ID only, never a name (#609)
+        for ref in wanted:
+            # An ID is that ID only and a name that name only (#614, #616).
+            if ref.id is not None:
+                matches = [by_id[ref.id]] if ref.id in by_id else []
             else:
-                matches = [
-                    a for a in existing if str(a.get("name", "")).casefold() == text.casefold()
-                ]
+                name = (ref.name or "").casefold()
+                matches = [a for a in existing if str(a.get("name", "")).casefold() == name]
             if not matches:
-                missing.append(text)
+                missing.append(f"ID {ref.id}" if ref.id is not None else f"named {ref.name!r}")
             elif len(matches) > 1:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(
                     op,
-                    f"{len(matches):,} albums are named {text!r} (ids {listed}); "
+                    f"{len(matches):,} albums are named {ref.name!r} (IDs {listed}); "
                     "nothing was deleted.",
-                    param="albums",
-                    value=text,
-                    suggestion="Pass album ids instead.",
+                    param=ref.param,
+                    value=ref.name,
+                    suggestion="Ask the user which one they mean, then pass its album_ids.",
                 )
             else:
                 found[int(matches[0]["id"])] = str(matches[0].get("name", ""))

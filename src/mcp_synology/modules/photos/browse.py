@@ -19,8 +19,10 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
+    Ref,
     check_space,
     invalid,
+    one_ref,
     page_footer,
     parse_date,
     space_label,
@@ -77,8 +79,10 @@ async def list_photos(
     *,
     space: str = "personal",
     folder: str | None = None,
-    album: str | None = None,
-    person: str | None = None,
+    album_id: int | None = None,
+    album_name: str | None = None,
+    person_id: int | None = None,
+    person_name: str | None = None,
     place: int | None = None,
     tag: str | None = None,
     keyword: str | None = None,
@@ -96,6 +100,8 @@ async def list_photos(
     """Browse or search items (spec: list_photos)."""
     op = "List photos"
     sp = check_space(op, space)
+    album = one_ref(op, "album", album_id, album_name, required=False)
+    person = one_ref(op, "person", person_id, person_name, required=False)
     if type not in _TYPES:
         invalid(op, f"unknown type {type!r}.", param="type", value=type, valid=list(_TYPES))
     if sort_by not in _SORTS:
@@ -150,8 +156,8 @@ async def list_photos(
             invalid(
                 op,
                 f"{alone} can't be combined with {', '.join(sorted(set(others)))}.",
-                param=alone,
-                value=value,
+                param=value.param if isinstance(value, Ref) else alone,
+                value=value.given if isinstance(value, Ref) else value,
             )
     if album is not None and sp == "shared":
         invalid(op, "albums are personal space only.", param="space", value=space)
@@ -203,8 +209,8 @@ async def _list(
     ph: Photos,
     *,
     folder: str | None,
-    album: str | None,
-    person: str | None,
+    album: Ref | None,
+    person: Ref | None,
     place: int | None,
     tag: str | None,
     keyword: str | None,

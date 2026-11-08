@@ -10,7 +10,6 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.helpers import IdNumber
 from mcp_synology.modules.photos.organize import (
     edit_person,
     edit_photo,
@@ -627,7 +626,7 @@ class TestPeople:
         install(fake)
         client = make_client()
         async with client:
-            out = await edit_person(client, action="rename", person="12", name="")
+            out = await edit_person(client, action="rename", person_id=12, name="")
         assert fake.one(PERSON, "set").params == {"id": 12, "name": ""}
         assert out == "Person 12: Person 1 (70 items, visible, cover: item 26)."
 
@@ -637,8 +636,8 @@ class TestPeople:
         install(fake)
         client = make_client()
         async with client:
-            await edit_person(client, action="hide", person="12")
-            await edit_person(client, action="set_cover", person="12", item_id=2121)
+            await edit_person(client, action="hide", person_id=12)
+            await edit_person(client, action="set_cover", person_id=12, item_id=2121)
         assert fake.one(PERSON, "show").params == {"id": [12], "show": False}
         assert fake.one(PERSON, "set_cover").params == {"id": 12, "photo_id": 2121}
 
@@ -651,7 +650,9 @@ class TestPeople:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="Person 1", merge=["Person 2", "Nobody"])
+                await merge_people(
+                    client, target_name="Person 1", merge_names=["Person 2", "Nobody"]
+                )
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(PERSON, "merge")
 
@@ -663,7 +664,9 @@ class TestPeople:
         install(fake)
         client = make_client()
         async with client:
-            out = await merge_people(client, target="person 1", merge=["Person 2", "Person 3"])
+            out = await merge_people(
+                client, target_name="person 1", merge_names=["Person 2", "Person 3"]
+            )
         assert fake.one(PERSON, "merge").params == {
             "target_id": 12,
             "merged_id": [11, 19],
@@ -673,8 +676,8 @@ class TestPeople:
 
     @respx.mock
     async def test_a_numeric_id_never_merges_a_person_by_name(self) -> None:
-        """#609 pre-QA: merge=[43] sent as a number, with no person 43 but one named "43",
-        merges nothing: it can't be undone."""
+        """#609 pre-QA, #614: merge_ids=[43], with no person 43 but one named "43", merges
+        nothing: it can't be undone."""
         people = {"list": [{"id": 12, "name": "Keep"}, {"id": 99, "name": "43"}]}
         keep = {"list": [{"id": 12, "name": "Keep"}]}
         fake = FakePhotos().on(PERSON, "get", 1, keep, {"list": []})
@@ -683,7 +686,7 @@ class TestPeople:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="12", merge=[IdNumber("43")])
+                await merge_people(client, target_id=12, merge_ids=[43])
         assert _error(exc)["code"] == "not_found"
         assert "no person 43" in _error(exc)["message"]
         # Not a hint to resend the digits as text: that would match the person named "43".
@@ -696,15 +699,15 @@ class TestPeople:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="12", merge=["12"])
+                await merge_people(client, target_id=12, merge_ids=[12])
         assert "into itself" in _error(exc)["message"]
 
     @pytest.mark.parametrize(
         ("kwargs", "param"),
         [
-            ({"action": "delete", "person": "1"}, "action"),
-            ({"action": "rename", "person": "1"}, "name"),
-            ({"action": "set_cover", "person": "1"}, "item_id"),
+            ({"action": "delete", "person_id": 1}, "action"),
+            ({"action": "rename", "person_id": 1}, "name"),
+            ({"action": "set_cover", "person_id": 1}, "item_id"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -931,8 +934,8 @@ class TestDsmErrors:
             ((FOLDER, "get", 2), lambda c: photo_folder(c, action="rename", folder="/a", name="b")),
             ((ITEM, "get", 2), lambda c: edit_photo(c, ids=[1], rating=3)),
             ((ITEM, "get", 2), lambda c: tag_photos(c, action="add", ids=[1], tags=["x"])),
-            ((PERSON, "get", 1), lambda c: edit_person(c, action="hide", person="5")),
-            ((PERSON, "get", 1), lambda c: merge_people(c, target="5", merge=["6"])),
+            ((PERSON, "get", 1), lambda c: edit_person(c, action="hide", person_id=5)),
+            ((PERSON, "get", 1), lambda c: merge_people(c, target_id=5, merge_ids=[6])),
             ((REQ, "list", 1), lambda c: photo_request(c, action="list")),
         ],
     )
@@ -989,7 +992,7 @@ class TestNamesShownEscaped:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="12", merge=["11"])
+                await merge_people(client, target_id=12, merge_ids=[11])
         assert (_error(exc)["code"], _error(exc)["param"]) == ("invalid_parameter", "name")
         assert not fake.of(PERSON, "merge")
         assert "without the backslash escapes" in _error(exc)["suggestion"]

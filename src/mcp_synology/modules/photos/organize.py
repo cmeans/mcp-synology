@@ -27,7 +27,9 @@ from mcp_synology.modules.photos.helpers import (
     in_batches,
     invalid,
     not_found,
+    one_ref,
     parse_expires,
+    refs,
     rejected_text,
     space_label,
 )
@@ -345,7 +347,8 @@ async def edit_person(
     client: DsmClient,
     *,
     action: str,
-    person: str,
+    person_id: int | None = None,
+    person_name: str | None = None,
     name: str | None = None,
     item_id: int | None = None,
     space: str = "personal",
@@ -353,6 +356,8 @@ async def edit_person(
     """Rename, hide, unhide or set a person's cover (spec: edit_person)."""
     op = "Edit person"
     sp = check_space(op, space)
+    person = one_ref(op, "person", person_id, person_name)
+    assert person is not None  # required
     if action not in _PERSON_ACTIONS:
         invalid(
             op,
@@ -368,15 +373,15 @@ async def edit_person(
     try:
         ph = Photos(client, sp, op)
         target = await ph.person(person)
-        person_id = int(target["id"])
+        pid = int(target["id"])
         if action == "rename":
-            await ph.call("Browse.Person", "set", {"id": person_id, "name": name})
+            await ph.call("Browse.Person", "set", {"id": pid, "name": name})
         elif action in ("hide", "unhide"):
-            await ph.call("Browse.Person", "show", {"id": [person_id], "show": action == "unhide"})
+            await ph.call("Browse.Person", "show", {"id": [pid], "show": action == "unhide"})
         else:
             # photo_id is an item of this person; DSM picks that item's face (verified).
-            await ph.call("Browse.Person", "set_cover", {"id": person_id, "photo_id": item_id})
-        return person_line(await _person_now(ph, person_id))
+            await ph.call("Browse.Person", "set_cover", {"id": pid, "photo_id": item_id})
+        return person_line(await _person_now(ph, pid))
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -384,8 +389,10 @@ async def edit_person(
 async def merge_people(
     client: DsmClient,
     *,
-    target: str,
-    merge: list[str],
+    target_id: int | None = None,
+    target_name: str | None = None,
+    merge_ids: list[int] | None = None,
+    merge_names: list[str] | None = None,
     name: str | None = None,
     space: str = "personal",
 ) -> str:
@@ -393,21 +400,22 @@ async def merge_people(
     ignores a missing ``merged_id`` and reports success."""
     op = "Merge people"
     sp = check_space(op, space)
-    if not merge:
-        invalid(op, "pass at least one person in merge.", param="merge", value=merge)
+    target = one_ref(op, "person", target_id, target_name, prefix="target")
+    assert target is not None  # required
+    merge = refs(op, merge_ids, merge_names, prefix="merge")
     try:
         ph = Photos(client, sp, op)
-        keep = await ph.person(target, param="target")
+        keep = await ph.person(target)
         keep_id = int(keep["id"])
         merged: dict[int, dict[str, Any]] = {}
-        for value in merge:
-            found = await ph.person(value, param="merge")
+        for ref in merge:
+            found = await ph.person(ref)
             if int(found["id"]) == keep_id:
                 invalid(
                     op,
                     f"person {keep_id} is the target; it can't be merged into itself.",
-                    param="merge",
-                    value=value,
+                    param=ref.param,
+                    value=ref.given,
                 )
             merged[int(found["id"])] = found
         final = name if name is not None else str(keep.get("name") or "")

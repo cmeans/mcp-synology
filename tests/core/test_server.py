@@ -20,7 +20,8 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import TypeAdapter, ValidationError
 
 from mcp_synology.modules import PermissionTier
-from mcp_synology.modules.photos.helpers import IdNumber
+from mcp_synology.modules.photos import MODULE_INFO as PHOTOS_INFO
+from mcp_synology.modules.photos.helpers import FOLDER_PARAMS, IdNumber
 from mcp_synology.server import (
     _BASE_INSTRUCTIONS,
     _MODULE_INSTRUCTIONS,
@@ -1726,15 +1727,15 @@ class TestIdParameters:
         assert text_only == self.TEXT_IDS
 
     async def test_a_number_arrives_as_that_id(self) -> None:
-        """Every Photos parameter that takes an ID or a name: 43 reaches the tool as "43" (the
-        lookups read digits as an ID), text is unchanged, and true or 4.0 is still refused."""
+        """Every Photos folder parameter (an ID or a path): 43 reaches the tool as "43" (the
+        lookup reads digits as an ID), text is unchanged, and true or 4.0 is still refused."""
         server = create_server(make_test_config(modules=ALL_MODULES))
         params = [
             (tool, name)
             for tool, name, types in await self._id_params()
             if types == {"integer", "string"}
         ]
-        assert len(params) == 19, params
+        assert len(params) == 10, params
         for tool_name, name in params:
             tool = server._tool_manager.get_tool(tool_name)
             assert tool is not None
@@ -1757,13 +1758,75 @@ class TestIdParameters:
                 with pytest.raises(ValidationError):
                     adapter.validate_python([wrong] if listed else wrong)
 
-    async def test_the_handler_gets_an_id_only(self) -> None:
-        """Through MCP's call path, a number reaches the handler as an IdNumber (looked up as
-        an ID only), and the text "43" as plain text (an ID, or else a name)."""
-        seen: list[object] = []
+    # Photos parameters that take a name, never an ID: a number given there is that name.
+    NAME_PARAMS = frozenset({"tag", "tags"})
 
-        async def fake(_client: object, *, albums: list[str]) -> str:
-            seen.extend(albums)
+    async def test_albums_and_people_take_an_id_or_a_name_never_one_value_for_both(
+        self,
+    ) -> None:
+        """#614 (0.11.0rc3 live test): "the album whose ID is 9876543", sent as text, deleted
+        the album named 9876543; #616: "the album named 43" deleted album 43. A Photos
+        parameter that takes a number or text is a folder (an ID or a path, in
+        `FOLDER_PARAMS`) or a name (`*_name`, `*_names`, tags); an ID parameter
+        (`*_id`, `*_ids`) takes a number only."""
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        photos = {t.name for t in PHOTOS_INFO.tools}
+        both, ids = [], []
+        for tool in tools:
+            if tool.name not in photos:
+                continue
+            for name, prop in tool.input_schema.get("properties", {}).items():
+                types = self._types(prop)
+                if name.endswith(("_id", "_ids")) or name == "ids":
+                    ids.append((tool.name, name))
+                    assert types == {"integer"}, (tool.name, name, types)
+                elif types == {"integer", "string"}:
+                    both.append((tool.name, name))
+                    assert (
+                        name in FOLDER_PARAMS.get(tool.name, ())
+                        or name.endswith(("_name", "_names"))
+                        or name in self.NAME_PARAMS
+                    ), (tool.name, name)
+        # The walk found them: 10 folder, 9 album or person name and 2 tag parameters.
+        assert len(both) == 21, both
+        assert len(ids) > 15, ids
+
+    async def test_a_photos_id_parameter_refuses_true_and_false(self) -> None:
+        """pydantic reads true as 1: `album_ids=[true]` would have deleted album 1. Every
+        Photos ID parameter takes a number or its digits, never a boolean."""
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        checked = 0
+        for info in PHOTOS_INFO.tools:
+            tool = server._tool_manager.get_tool(info.name)
+            assert tool is not None
+            for name, field in tool.fn_metadata.arg_model.model_fields.items():
+                if not (name.endswith(("_id", "_ids")) or name in ("ids", "place", "concept")):
+                    continue
+                hint = (
+                    Annotated[field.annotation, *field.metadata]
+                    if field.metadata
+                    else field.annotation
+                )
+                adapter: TypeAdapter[Any] = TypeAdapter(hint)
+                listed = "array" in json.dumps(adapter.json_schema())
+                assert adapter.validate_python([43] if listed else 43) == ([43] if listed else 43)
+                assert adapter.validate_python(["43"] if listed else "43") == (
+                    [43] if listed else 43
+                )
+                for wrong in (True, False, 4.5):
+                    with pytest.raises(ValidationError):
+                        adapter.validate_python([wrong] if listed else wrong)
+                checked += 1
+        assert checked > 15, checked
+
+    async def test_the_handler_gets_an_id_as_a_number_and_a_name_as_text(self) -> None:
+        """Through MCP's call path: an ID reaches the handler as a number, the digits of one
+        sent as text too (its parameter says what it is), and a name sent as a number as
+        that name."""
+        seen: dict[str, object] = {}
+
+        async def fake(_client: object, **kwargs: object) -> str:
+            seen.update(kwargs)
             return "ok"
 
         server = create_server(make_test_config(modules=ALL_MODULES))
@@ -1772,17 +1835,20 @@ class TestIdParameters:
             patch("mcp_synology.modules.photos.albums.delete_photo_albums", fake),
         ):
             async with Client(server) as client:
-                result = await client.call_tool("delete_photo_albums", {"albums": [43, "43"]})
+                result = await client.call_tool(
+                    "delete_photo_albums", {"album_ids": [43, "44"], "album_names": [2024, "x"]}
+                )
         assert not result.is_error, result
-        assert [type(v) for v in seen] == [IdNumber, str], seen
+        assert seen == {"album_ids": [43, 44], "album_names": ["2024", "x"]}, seen
 
     @respx.mock
     @pytest.mark.parametrize(
         ("tool", "args"),
         [
-            ("delete_photo_albums", {"albums": [43]}),
-            ("list_photos", {"album": 43}),
-            ("photo_share_link", {"album": 43, "action": "stop"}),
+            ("delete_photo_albums", {"album_ids": [43]}),
+            ("delete_photo_albums", {"album_names": [43]}),
+            ("list_photos", {"album_id": 43}),
+            ("photo_share_link", {"album_id": 43, "action": "stop"}),
             ("tag_photos", {"action": "add", "ids": [1], "tags": [2024]}),
             ("list_photos", {"tag": 2024}),
         ],
@@ -1990,7 +2056,9 @@ class TestInstructionComments:
 # replaces.
 # +270 by #609: the 19 Photos parameters that take an ID or a name, and the 2 tag names, say a
 # number is fine.
-PAYLOAD_BUDGET_CHARS = 59_200
+# +844 by #614 and #616 (0.11.0rc3 live test): albums and people take an ID and a name in
+# separate parameters (album_id / album_name and the like), 9 parameters becoming 18.
+PAYLOAD_BUDGET_CHARS = 60_100
 
 
 class TestPayloadBudget:
