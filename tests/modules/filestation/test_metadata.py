@@ -287,6 +287,18 @@ class TestGetFileInfoMissingPaths:
         assert "Name:  \n" not in result  # no blank card for the missing path
 
     @respx.mock
+    @pytest.mark.parametrize(("gone", "advised"), [("/a/inv\\u202efdp", True), ("/a/gone", False)])
+    async def test_mixed_with_an_escaped_missing_path_gives_the_advice(
+        self, mock_client: DsmClient, gone: str, advised: bool
+    ) -> None:
+        """Pre-QA r4 on #606: a found path beside an escaped missing one got only a "Not found"
+        note, and listing again shows the same escape; the note carries the advice once."""
+        self._route({"/a/real.txt": self._found("/a/real.txt"), gone: self._missing(gone)})
+        result = await get_file_info(mock_client, paths=["/a/real.txt", gone])
+        assert "real.txt" in result
+        assert result.count(ESCAPED_NAME_ADVICE) == (1 if advised else 0), result
+
+    @respx.mock
     async def test_missing_path_never_rendered_as_a_file(self, mock_client: DsmClient) -> None:
         self._route(
             {"/a/real.txt": self._found("/a/real.txt"), "/a/gone": self._missing("/a/gone")}

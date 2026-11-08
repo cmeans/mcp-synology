@@ -1438,6 +1438,14 @@ def test_missing_paths_suggestion_gives_both_hints_once() -> None:
     assert suggestion.endswith(ESCAPED_NAME_ADVICE)
 
 
+def test_missing_paths_suggestion_keeps_the_wildcard_hint_for_an_escaped_name() -> None:
+    """Pre-QA r4 on #606: every path escaped led with the advice alone and dropped the hint."""
+    suggestion = missing_paths_suggestion([("/docs/a\\nb*", 408)])
+    assert suggestion.startswith(ESCAPED_NAME_ADVICE), suggestion
+    assert suggestion.count("wildcard patterns") == 1
+    assert "Check the paths" not in suggestion
+
+
 def test_escaped_name_advice_says_who_renames_it() -> None:
     """Pre-QA r2 on #606: "rename it in DSM's File Station" read as the rename tool, which
     can't reach the item either; the advice says the user does it in DSM's web interface."""

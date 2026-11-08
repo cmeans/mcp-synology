@@ -266,7 +266,7 @@ File Info: /video/Movies/Dune Part Two (2024)/Dune.Part.Two.2024.mkv
 - `type` renders as "File type" (DSM's extension type, e.g. `ISO`; empty for a folder) and `mount_point_type` as "Mount point", each only when non-empty (#146).
 - Timestamps are UTC and labeled as such (`2025-02-18 13:42:05 UTC`), consistent with `search_files` treating naive input dates as UTC (#137).
 - For multiple paths, report individual failures inline alongside successes.
-- DSM's `getinfo` answers a missing path with a per-file `{"code": 408, "path": ...}` entry, not a failed request (DSM 7.1 and 7.2.2). That entry is the path's error, never a file row (#161). One path, or every path, missing is a structured `not_found` naming each path. A mixed request shows the found entries plus a `Not found: <path>` line for each missing one.
+- DSM's `getinfo` answers a missing path with a per-file `{"code": 408, "path": ...}` entry, not a failed request (DSM 7.1 and 7.2.2). That entry is the path's error, never a file row (#161). One path, or every path, missing is a structured `not_found` naming each path. A mixed request shows the found entries plus a `Not found: <path>` line for each missing one, then the escaped-name advice once if a missing path holds an escape as replies write one (#606).
 
 ---
 
