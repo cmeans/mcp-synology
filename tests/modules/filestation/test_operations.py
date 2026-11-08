@@ -766,6 +766,31 @@ class TestDeleteFiles:
         assert ("(DSM didn't answer)" in out) == (failure == "timeout"), out
 
     @respx.mock
+    async def test_no_homes_bin_yet_and_an_unreadable_setting_cant_tell(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA round 1 on #613: /homes/#recycle doesn't exist yet (408) and /homes's setting
+        can't be read, which is also the state before the first delete its bin would keep:
+        "couldn't check", not #610's "permanent"; nothing is cached."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("folder_path") == "/homes/#recycle":
+                return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+            if request.url.params.get("api") == "SYNO.Core.Share":
+                return httpx.Response(200, json={"success": False, "error": {"code": 105}})
+            return _async_task_side_effect()(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        status: dict[str, bool] = {}
+        out = await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status=status
+        )
+        assert out.startswith("[+] Deleted 1 item(s):"), out
+        assert "Couldn't check whether /homes has its recycle bin enabled" in out, out
+        assert "permanent" not in out, out
+        assert status == {}
+
+    @respx.mock
     async def test_a_kept_home_bin_from_an_empty_cache_is_cached(
         self, mock_client: DsmClient
     ) -> None:

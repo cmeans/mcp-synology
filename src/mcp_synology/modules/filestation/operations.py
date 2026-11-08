@@ -1501,7 +1501,12 @@ async def _delete_summary(
                 logger.debug("Recycle-bin probe on /homes unanswered: %r", e)
                 homes_answered = False
             else:
-                if definite and homes_bin is not None:
+                if not definite:
+                    # A tentative answer (no #recycle yet, and /homes's setting unreadable:
+                    # the state before the first delete its bin would keep) can't tell
+                    # (QA round 1 on #613).
+                    homes_bin = None
+                elif homes_bin is not None:
                     recycle_bin_status["homes"] = homes_bin
     kept_bins = home_keys if homes_bin else set()
     unknown_bins = home_keys if homes_bin is None else set()
