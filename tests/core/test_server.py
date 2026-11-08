@@ -1694,10 +1694,15 @@ class TestIdParameters:
 
     @staticmethod
     def _types(node: dict[str, Any]) -> set[str]:
+        branches = node.get("anyOf") or node.get("oneOf")
+        if branches:
+            return set().union(*(TestIdParameters._types(b) for b in branches)) - {"null"}
         if "items" in node:
             return TestIdParameters._types(node["items"])
         found = node.get("type", [])
-        return set(found if isinstance(found, list) else [found])
+        types = set(found if isinstance(found, list) else [found])
+        assert types, node  # a schema shape this guard can't read fails, not passes
+        return types
 
     async def _id_params(self) -> list[tuple[str, str, set[str]]]:
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))

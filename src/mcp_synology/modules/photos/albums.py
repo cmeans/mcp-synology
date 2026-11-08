@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_timestamp, synology_error_response
 from mcp_synology.modules.photos.helpers import (
+    NUMBER_IS_AN_ID,
     IdNumber,
     Photos,
     check_ids,
@@ -310,7 +311,12 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
 
     if folders := as_list("folders"):
         cond["folder_filter"] = [
-            int((await ph.folder(str(f), param="condition"))["id"]) for f in folders
+            int(
+                (await ph.folder(IdNumber(f) if type(f) is int else str(f), param="condition"))[
+                    "id"
+                ]
+            )
+            for f in folders
         ]
     if people := as_list("people"):
         cond["person"] = [
@@ -632,6 +638,8 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
             lines.append("No albums deleted.")
         if missing:
             lines.append(f"  Not found: {', '.join(missing)}")
+            if any(isinstance(v, IdNumber) for v in albums):
+                lines.append(f"  {NUMBER_IS_AN_ID}")
         return "\n".join(lines)
     except SynologyError as e:
         synology_error_response(op, e)

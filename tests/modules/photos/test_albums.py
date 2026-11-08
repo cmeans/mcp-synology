@@ -242,11 +242,15 @@ class TestChange:
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
         assert "Album 4's condition is replaced.\nMatches 3,456 item(s) now." in out
 
+    @pytest.mark.parametrize("condition", [{"people": [43]}, {"folders": [-5]}])
     @respx.mock
-    async def test_a_numeric_person_in_a_condition_is_an_id_only(self) -> None:
+    async def test_a_numeric_person_in_a_condition_is_an_id_only(
+        self, condition: dict[str, Any]
+    ) -> None:
         """#609 pre-QA: condition people=[43] (a JSON number), with no person 43 but one named
-        "43", is not found rather than that person."""
+        "43", is not found rather than that person; folders=[-5] isn't the path /-5."""
         fake = self._fake(type="condition")
+        fake.on("SYNO.Foto.Browse.Folder", "get", 2, {"folder": {"id": 77, "name": "/-5"}})
         fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
         fake.on("SYNO.Foto.Browse.Person", "get", 1, {"list": []})
         fake.on("SYNO.Foto.Browse.Person", "list", 1, {"list": [{"id": 99, "name": "43"}]})
@@ -254,9 +258,7 @@ class TestChange:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_album(
-                    client, action="set_condition", album="4", condition={"people": [43]}
-                )
+                await photo_album(client, action="set_condition", album="4", condition=condition)
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(COND)
 

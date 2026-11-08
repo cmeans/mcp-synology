@@ -162,6 +162,9 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
     return check_parts(value, param, advice)
 
 
+NUMBER_IS_AN_ID = "A number is looked up as an ID only; to give a name, pass it as text."
+
+
 class IdNumber(str):
     """An ID the caller sent as a JSON number (#609): looked up as that ID only, never as a
     name, so a missing ID can't act on an album or person whose name is those digits."""
@@ -281,6 +284,15 @@ class Photos:
         a path (`photo_request`).
         """
         text = value.strip()
+        if isinstance(value, IdNumber) and not (text.isascii() and text.isdigit()):
+            # Sent as a number (-5): an ID only, never the path /-5 (#609).
+            not_found(
+                self.operation,
+                f"no folder {text} in the {space_label(self.space)}.",
+                param=param,
+                value=value,
+                suggestion=f"{NUMBER_IS_AN_ID} list_photo_collections type=folder lists them.",
+            )
         if text.isascii() and text.isdigit():
             params: dict[str, Any] = {"id": int(text)}
         else:
@@ -340,7 +352,11 @@ class Photos:
         text = value.strip()
         if isinstance(value, IdNumber) and not (text.isascii() and text.isdigit()):
             not_found(
-                self.operation, f"no {kind} {text}.", param=param, value=value, suggestion=hint
+                self.operation,
+                f"no {kind} {text}.",
+                param=param,
+                value=value,
+                suggestion=f"{NUMBER_IS_AN_ID} {hint}",
             )
         if text.isascii() and text.isdigit():
             suffix, version, extra = get
@@ -359,7 +375,11 @@ class Photos:
                 return dict(found[0])
             if isinstance(value, IdNumber):
                 not_found(
-                    self.operation, f"no {kind} {text}.", param=param, value=value, suggestion=hint
+                    self.operation,
+                    f"no {kind} {text}.",
+                    param=param,
+                    value=value,
+                    suggestion=f"{NUMBER_IS_AN_ID} {hint}",
                 )
         suffix, version, extra = walk
         entries = await self.walk(suffix, params=extra, version=version, personal=personal)
