@@ -15,7 +15,7 @@ from mcp_synology.modules.photos.albums import (
     photo_album,
     photo_share_link,
 )
-from mcp_synology.modules.photos.helpers import IdNumber
+from mcp_synology.modules.photos.helpers import NUMBER_IS_AN_ID, IdNumber
 from tests.modules.photos.dsm import FakePhotos, captured, install, make_client
 
 ALBUM = "SYNO.Foto.Browse.Album"
@@ -636,10 +636,22 @@ class TestNumericIds:
             out = await delete_photo_albums(client, albums=[value])
         if deleted is None:
             assert out.startswith("No albums deleted."), out
-            assert "Not found: 43" in out
+            assert out.endswith(f"Not found: 43\n  {NUMBER_IS_AN_ID}"), out
             assert not fake.of(ALBUM, "delete")
         else:
             assert fake.one(ALBUM, "delete").params == {"id": [deleted]}
+
+    @respx.mock
+    async def test_the_number_hint_is_only_for_a_missing_number(self) -> None:
+        """QA round 1 on #611: album 7 found by number, "Trip" (text) missing: no hint."""
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": [{"id": 7, "name": "x"}]})
+        fake.on(ALBUM, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, albums=[IdNumber("7"), "Trip"])
+        assert out.endswith("Not found: Trip"), out
+        assert NUMBER_IS_AN_ID not in out
 
 
 class TestDsmErrors:
