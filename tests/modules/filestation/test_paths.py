@@ -645,7 +645,37 @@ class TestResolvePaths:
         assert (error["param"], error["value"]) == (param, raw)
         assert f"the folder {missing} doesn't exist" in error["message"], error
         assert "Nothing was created." in error["message"]
-        assert error["suggestion"] == ESCAPED_NAME_ADVICE
+        assert error["suggestion"] == (
+            f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, create it "
+            "on its own with create_folder first, then retry."
+        )
+
+    async def test_a_real_backslash_n_parent_is_refused_with_a_way_in(self) -> None:
+        """QA round 2 on #606: `C:\\new folder` can't be told from an escaped newline, so a
+        missing one isn't created as a parent; the refusal says how to make it (the cost)."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                "upload_file",
+                "dest_folder",
+                ["/video/C:\\new folder"],
+                creates_parents=True,
+            )
+        assert "create it on its own with create_folder first" in _error(exc)["suggestion"]
+
+    async def test_the_way_in_works_create_folder_takes_it_as_its_last_part(self) -> None:
+        """The way in the refusal gives: create_folder of that folder itself is checked by the
+        new-name rules, which take a backslash (#605)."""
+        got = await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "create_folder",
+            "paths",
+            ["/video/C:\\new folder"],
+            creates_parents=True,
+        )
+        assert got == ["/video/C:\\new folder"]
 
     async def test_an_existing_escaped_part_passes(self) -> None:
         """A real folder whose name holds that backslash text is usable (#605)."""

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import enum
 import unicodedata
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn
 
 import regex
 
@@ -505,7 +505,7 @@ def refuse_write_target(
     _refuse(f"{head} a whole shared folder. {detail} Nothing was {past}.", param, raw, suggestion)
 
 
-def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
+def _refuse(message: str, param: str, value: str, suggestion: str) -> NoReturn:
     error_response(
         ErrorCode.INVALID_PARAMETER,
         message,
@@ -664,14 +664,11 @@ async def _refuse_bad_created_parents(
         problem = name_problem(parts[i], parent)
         prefix = f"{parent}/{parts[i]}"
         parent = prefix
-        # A part copied from a listing that showed a name escaped (#606): created, it would be
-        # a look-alike with a literal backslash, listed just like the real folder.
-        escaped = problem is None and holds_escape(parts[i])
-        if problem is None and not escaped:
-            continue
-        # Only a definite 408: an unreadable answer leaves it to DSM.
-        if await path_exists(client, prefix) is False:
-            if escaped:
+        if problem is None:
+            # A part copied from a listing that showed a name escaped (#606): created, it would
+            # be a look-alike with a literal backslash, listed just like the real folder. Only a
+            # definite 408: an unreadable answer leaves it to DSM.
+            if holds_escape(parts[i]) and await path_exists(client, prefix) is False:
                 _refuse(
                     f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would "
                     "be created, but its name holds an escape as replies write one, so it's "
@@ -679,9 +676,14 @@ async def _refuse_bad_created_parents(
                     "folder. Nothing was created.",
                     param,
                     raw,
-                    ESCAPED_NAME_ADVICE,
+                    # `C:\\new` can't be told from an escaped newline: give that name a way in
+                    # (create_folder doesn't check its last part this way; QA round 2).
+                    f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, "
+                    "create it on its own with create_folder first, then retry.",
                 )
-            assert problem is not None
+            continue
+        # Only a definite 408: an unreadable answer leaves it to DSM.
+        if await path_exists(client, prefix) is False:
             _refuse(
                 f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would be "
                 f"created, but its name {problem}. Nothing was created.",
