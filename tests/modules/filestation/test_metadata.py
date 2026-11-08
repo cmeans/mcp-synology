@@ -10,6 +10,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import error_from_code
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
 from tests.conftest import BASE_URL
@@ -254,6 +255,26 @@ class TestGetFileInfoMissingPaths:
         else:
             assert suggestion.startswith("Check the paths with list_files or search_files")
             assert ESCAPED_NAME_ADVICE not in suggestion
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("codes", "mapped_code"), [((407, 407), 407), ((408, 407), 408)], ids=["all-407", "mixed"]
+    )
+    async def test_not_every_path_408_keeps_the_codes_own_advice(
+        self, mock_client: DsmClient, codes: tuple[int, int], mapped_code: int
+    ) -> None:
+        """QA round 3 on #606: only every path missing (408) gets the shared suggestion. A
+        path DSM won't let the user read (407), alone or beside a missing one, keeps the
+        advice of the code the error reports."""
+        paths = ["/a/x", "/a/y"]
+        self._route({p: {"code": c, "path": p} for p, c in zip(paths, codes, strict=True)})
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=paths)
+        suggestion = json.loads(str(exc_info.value))["error"]["suggestion"]
+        expected = error_from_code(mapped_code, "SYNO.FileStation.List").suggestion
+        assert expected
+        assert suggestion == expected, suggestion
+        assert not suggestion.startswith("Check the paths with list_files or search_files")
 
     @respx.mock
     async def test_mixed_shows_found_and_lists_missing(self, mock_client: DsmClient) -> None:
