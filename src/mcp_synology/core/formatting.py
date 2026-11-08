@@ -96,8 +96,9 @@ _ANY_ESCAPE = re.compile(r"\\(?:n|r|x[0-9a-f]{2}|u[0-9a-f]{4}|U[0-9a-f]{8})")
 # Advice for a path that may have been copied from a reply showing a name escaped (#604).
 ESCAPED_NAME_ADVICE = (
     "A name a reply shows with an escape (such as `\\n`, `\\x1b`, `\\u202e` or "
-    "`\\U000e0041`) holds a character these tools can't take, so they can't act on it, and "
-    "passing it as shown names nothing: rename it in DSM's File Station first."
+    "`\\U000e0041`) holds a character these tools can't take, so none of them, rename "
+    "included, can act on it, and passing it as shown names nothing: ask the user to rename it "
+    "in DSM's web interface (its File Station app) first."
 )
 
 

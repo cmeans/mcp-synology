@@ -1422,12 +1422,25 @@ def test_missing_paths_suggestion_advises_on_an_escaped_name(path: str, advised:
     """The live-test rehearsal: the escaped name as shown got "check with list_files", and
     listing again shows the same escape, so an agent could loop."""
     suggestion = missing_paths_suggestion([(path, 408)])
-    assert suggestion.startswith("Check the paths with list_files or search_files")
-    assert (ESCAPED_NAME_ADVICE in suggestion) is advised, suggestion
+    if advised:
+        # Only that advice: "check with list_files" first is what loops (pre-QA r2 on #606).
+        assert suggestion == ESCAPED_NAME_ADVICE, suggestion
+    else:
+        assert suggestion.startswith("Check the paths with list_files or search_files")
+        assert ESCAPED_NAME_ADVICE not in suggestion, suggestion
 
 
 def test_missing_paths_suggestion_gives_both_hints_once() -> None:
+    """A mixed list keeps "check with list_files" for the plain path, then the escape advice."""
     suggestion = missing_paths_suggestion([("/s/*.txt", 408), ("/s/a\\u202eb", 408)])
     assert suggestion.count("wildcard patterns") == 1
     assert suggestion.count(ESCAPED_NAME_ADVICE) == 1
     assert suggestion.endswith(ESCAPED_NAME_ADVICE)
+
+
+def test_escaped_name_advice_says_who_renames_it() -> None:
+    """Pre-QA r2 on #606: "rename it in DSM's File Station" read as the rename tool, which
+    can't reach the item either; the advice says the user does it in DSM's web interface."""
+    assert "rename included" in ESCAPED_NAME_ADVICE
+    assert "ask the user to rename it in DSM's web interface" in ESCAPED_NAME_ADVICE
+    assert "#60" not in ESCAPED_NAME_ADVICE  # no issue numbers in model-facing text

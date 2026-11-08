@@ -387,7 +387,7 @@ class TestRename:
             await rename(mock_client, path=shown_name, new_name="invoice-real")
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "not_found", error
-        assert "rename it in DSM's File Station first" in error["suggestion"], error
+        assert error["suggestion"] == ESCAPED_NAME_ADVICE, error
 
     @respx.mock
     async def test_rename_1200_missing_source_takes_one_getinfo(
@@ -3560,10 +3560,8 @@ class TestDeleteFailurePartway:
             # Mentioning list_files isn't saying to check with it: the check stays (pre-QA).
             (
                 408,
-                "Use list_files or search_files to find the correct path. A name a reply shows "
-                "with an escape (such as `\\n`, `\\x1b`, `\\u202e` or `\\U000e0041`) holds a "
-                "character these tools can't take, so they can't act on it, and passing it as "
-                f"shown names nothing: rename it in DSM's File Station first. {_RETRY_NOTE}",
+                f"Use list_files or search_files to find the correct path. {ESCAPED_NAME_ADVICE} "
+                f"{_RETRY_NOTE}",
             ),
         ],
     )

@@ -20,6 +20,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation import MODULE_INFO, register
 from mcp_synology.modules.filestation.paths import (
     BIN_ITEM_PARAMS,
@@ -617,6 +618,46 @@ class TestResolvePaths:
         error = _error(exc)
         assert (error["param"], error["value"]) == ("dest_folder", "/video/Uploads /x")
         assert "the folder '/video/Uploads ' doesn't exist" in error["message"]
+
+    @pytest.mark.parametrize(
+        ("tool", "param", "raw", "missing"),
+        [
+            ("upload_file", "dest_folder", "/video/folder\\u202efdp", "/video/folder\\u202efdp"),
+            ("create_folder", "paths", "/video/folder\\u202efdp/new", "/video/folder\\u202efdp"),
+        ],
+    )
+    async def test_a_missing_escaped_part_isnt_created_as_a_look_alike(
+        self, tool: str, param: str, raw: str, missing: str
+    ) -> None:
+        """Pre-QA r2 on #606: a folder copied from a listing that showed it escaped names
+        nothing; created, it gets a literal backslash and lists just like the real one, and
+        the upload or new folder lands in the look-alike."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                tool,
+                param,
+                [raw],
+                creates_parents=True,
+            )
+        error = _error(exc)
+        assert (error["param"], error["value"]) == (param, raw)
+        assert f"the folder {missing} doesn't exist" in error["message"], error
+        assert "Nothing was created." in error["message"]
+        assert error["suggestion"] == ESCAPED_NAME_ADVICE
+
+    async def test_an_existing_escaped_part_passes(self) -> None:
+        """A real folder whose name holds that backslash text is usable (#605)."""
+        got = await resolve_paths(
+            _FakeClient({"/video/folder\\u202efdp"}),  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/folder\\u202efdp"],
+            creates_parents=True,
+        )
+        assert got == ["/video/folder\\u202efdp"]
 
     async def test_a_padded_destination_part_that_exists_passes(self) -> None:
         client = _FakeClient({"/video/Uploads "})

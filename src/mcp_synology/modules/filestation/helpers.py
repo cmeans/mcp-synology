@@ -1031,6 +1031,9 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
 def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
     """Suggestion for a call refused because paths don't exist (adds a wildcard hint, and one for
     a name copied from a reply that showed it escaped)."""
+    if missing and all(holds_escape(path) for path, _ in missing):
+        # Listing again would show the same escape: lead with what ends the loop (pre-QA r2).
+        return ESCAPED_NAME_ADVICE
     suggestion = (
         "Check the paths with list_files or search_files, then retry with paths that exist."
     )

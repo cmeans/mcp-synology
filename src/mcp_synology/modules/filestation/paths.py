@@ -26,7 +26,12 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 import regex
 
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response, forges
+from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
+    error_response,
+    forges,
+    holds_escape,
+)
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
@@ -659,10 +664,24 @@ async def _refuse_bad_created_parents(
         problem = name_problem(parts[i], parent)
         prefix = f"{parent}/{parts[i]}"
         parent = prefix
-        if problem is None:
+        # A part copied from a listing that showed a name escaped (#606): created, it would be
+        # a look-alike with a literal backslash, listed just like the real folder.
+        escaped = problem is None and holds_escape(parts[i])
+        if problem is None and not escaped:
             continue
         # Only a definite 408: an unreadable answer leaves it to DSM.
         if await path_exists(client, prefix) is False:
+            if escaped:
+                _refuse(
+                    f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would "
+                    "be created, but its name holds an escape as replies write one, so it's "
+                    "most likely copied from a listing and would make a look-alike of another "
+                    "folder. Nothing was created.",
+                    param,
+                    raw,
+                    ESCAPED_NAME_ADVICE,
+                )
+            assert problem is not None
             _refuse(
                 f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would be "
                 f"created, but its name {problem}. Nothing was created.",
