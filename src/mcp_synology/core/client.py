@@ -136,7 +136,7 @@ def _loads_or_refuse(content: bytes, label: str) -> Any:
         raise DsmReplyError(
             f"{label}: DSM's reply has two names that read the same once escaped: one holds a "
             "control character, line or paragraph separator, bidi control or tag character, the "
-            "other a backslash where that is shown (#604).",
+            "other a backslash where that is shown.",
             retryable=False,
             suggestion="Rename one of the two items on the NAS (in DSM). Trying again won't help.",
         ) from None

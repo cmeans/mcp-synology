@@ -7,6 +7,8 @@ from typing import TypeVar
 
 import httpx
 
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
+
 # The CLI commands advice names. A config `setup` writes is `<instance_id>.yaml`, which
 # `setup` and `check` don't find on their own (#481), so advice names the file. Only with
 # no config file yet is the bare command right. tests/core/test_cli_advice.py fails on a
@@ -374,9 +376,7 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     ),
     408: (
         "No such file or directory",
-        "Use list_files or search_files to find the correct path. A name listed with an escape "
-        "(`\\n`, `\\x..`, `\\u....`) holds a character the tools can't take (#604): rename "
-        "it in DSM.",
+        f"Use list_files or search_files to find the correct path. {ESCAPED_NAME_ADVICE}",
     ),
     414: ("File already exists", "Use overwrite=true to replace existing files."),
     415: (

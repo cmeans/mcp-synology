@@ -16,6 +16,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.transfer import (
     download_file,
     upload_file,
@@ -457,6 +458,30 @@ class TestDownloadFile:
         assert err["message"] == "Download failed: /video/x.mkv doesn't exist on the NAS."
         assert calls == ["getinfo"]  # no download sent
         assert list(tmp_path.iterdir()) == []
+        assert "can't act on it" not in err["suggestion"]  # a plain path gets no escape advice
+
+    @respx.mock
+    async def test_download_missing_escaped_name_says_it_cant_be_used(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#604: a name copied from a reply that showed it escaped names nothing, and listing
+        again shows the same escape, so the advice says so (the live-test rehearsal)."""
+        self._route(
+            httpx.Response(
+                200, json={"success": True, "data": {"files": [{"code": 408, "path": "/v/x"}]}}
+            ),
+            httpx.Response(502, text="<html>DSM error page</html>"),
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client,
+                path="/video/invoice\\u202efdp.exe",
+                dest_folder=str(tmp_path),
+                filename="invoice.pdf",  # its own name, with a backslash, is refused locally
+            )
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "not_found"
+        assert err["suggestion"].endswith(ESCAPED_NAME_ADVICE), err["suggestion"]
 
     @respx.mock
     @pytest.mark.parametrize("status", [502, 504])

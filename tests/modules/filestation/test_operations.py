@@ -15,6 +15,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.operations import (
     copy_files,
     create_folder,
@@ -371,6 +372,22 @@ class TestRename:
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "not_found" and error["value"] == "video/*.txt", error
         assert "Paths are literal, not wildcard patterns" in error["suggestion"]
+
+    @respx.mock
+    async def test_rename_1200_missing_escaped_name_says_it_cant_be_used(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#604, the live-test rehearsal on seska: rename of the escaped name as listed got
+        "doesn't exist" and "check with list_files", which lists the same escape again."""
+        shown_name = "/video/invoice\\u202efdp.exe"
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({shown_name: "missing"})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path=shown_name, new_name="invoice-real")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+        assert error["suggestion"] == ESCAPED_NAME_ADVICE, error
 
     @respx.mock
     async def test_rename_1200_missing_source_takes_one_getinfo(
@@ -1563,6 +1580,24 @@ class TestCopyMoveRestorePreCheck:
         assert "destination folder /w/no-dir doesn't exist" in error["message"]
         assert "Nothing was" in error["message"]
         assert error["param"] == "dest_folder" and "create_folder" in error["suggestion"]
+        assert "start" not in calls, calls
+
+    @respx.mock
+    @pytest.mark.parametrize("op", [copy_files, move_files])
+    async def test_missing_escaped_destination_isnt_told_to_create_it(
+        self, mock_client: DsmClient, op: Any
+    ) -> None:
+        """Pre-QA on #606: a destination copied from a listing that showed it escaped names
+        nothing, and create_folder would make a look-alike with a literal backslash, which
+        lists just like the real one; the copy or move would land there."""
+        dest = "/w/folder\\u202efdp"
+        side_effect, calls = self._dsm(missing={dest})
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await op(mock_client, paths=["/w/a"], dest_folder=dest)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+        assert error["suggestion"] == ESCAPED_NAME_ADVICE, error
         assert "start" not in calls, calls
 
     @respx.mock
@@ -3525,9 +3560,8 @@ class TestDeleteFailurePartway:
             # Mentioning list_files isn't saying to check with it: the check stays (pre-QA).
             (
                 408,
-                "Use list_files or search_files to find the correct path. A name listed with an "
-                "escape (`\\n`, `\\x..`, `\\u....`) holds a character the tools can't take "
-                f"(#604): rename it in DSM. {_RETRY_NOTE}",
+                f"Use list_files or search_files to find the correct path. {ESCAPED_NAME_ADVICE} "
+                f"{_RETRY_NOTE}",
             ),
         ],
     )

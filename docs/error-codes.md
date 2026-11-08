@@ -219,6 +219,7 @@ Common causes:
 - For local-side errors: the local file (upload) or destination folder
   (download) does not exist or is given as a relative path that resolves
   somewhere unexpected.
+- A path copied from a reply that showed a name escaped (`report\nmore`, `invoice\u202efdp.exe`): the item's name holds the character itself, so the name as shown matches nothing, and listing again shows the same escape. The suggestion says so, and that the item must be renamed in DSM's File Station before the tools can act on it; for a missing `dest_folder` it replaces the advice to create the folder, which would make a look-alike with a literal backslash, and `upload_file` or `create_folder` refuses (`invalid_parameter`) to create a missing parent folder named that way (#606). `get_file_info` with some paths found gives the advice once after its `Not found` lines.
 - `list_files` on a path DSM answers 408 for: "… doesn't exist on the NAS." A file gets `invalid_parameter` instead (below), and a folder that `getinfo` sees gets `filestation_error` (below).
 - For Download Station tasks: the task ID doesn't exist, or the task belongs to
   another user. DSM answers both the same way, and an account that isn't a
@@ -325,7 +326,11 @@ Common causes:
   local file name that isn't UTF-8), or is `#recycle` directly in a shared folder or a user's home folder
   (#510); or a copy, move or restore would put a folder named `#recycle` there; or an
   upload or `create_folder` would create a missing parent folder under such a name. Give
-  a plain name. Paths themselves are taken exactly, so an existing item named with such
+  a plain name. An upload or `create_folder` also won't create a missing parent folder whose
+  name holds an escape as replies write one (`folder\u202efdp`, or a real `C:\new`, which
+  reads the same): it's most likely copied from a listing, and would make a look-alike. If
+  the name really holds that backslash, create that folder on its own with `create_folder`
+  first (#606). Paths themselves are taken exactly, so an existing item named with such
   whitespace is still reached by its exact path.
 - `create_folder` given a shared folder itself (`/video`) (#510): give the full path of a
   folder inside a shared folder.

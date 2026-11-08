@@ -12,12 +12,14 @@ import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
     error_response,
     format_key_value,
     format_size,
     format_status,
     format_table,
     format_timestamp,
+    holds_escape,
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
@@ -125,13 +127,21 @@ async def get_file_info(
             retryable=False,
             param="paths",
             value=paths,
-            suggestion=mapped.suggestion or "Check the paths with list_files or search_files.",
+            # Every path missing (408): the shared suggestion, which leads with the escaped-name
+            # advice when the paths hold escapes instead of "check with list_files" (#606).
+            suggestion=missing_paths_suggestion(missing)
+            if all(code == 408 for _, code in missing)
+            else mapped.suggestion or "Check the paths with list_files or search_files.",
         )
 
     notes = "".join(
         "\n" + format_status(f"Not found: {shown(path)} (DSM error {code})", success=False)
         for path, code in missing
     )
+    if any(holds_escape(path) for path, _ in missing):
+        # Some paths found: the missing ones get only a note, and listing again would show the
+        # same escape, so the note carries the advice once (pre-QA r4 on #606).
+        notes += "\n" + format_status(ESCAPED_NAME_ADVICE, success=False)
 
     if len(files) == 1:
         return _format_single_info(files[0]) + notes

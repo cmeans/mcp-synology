@@ -10,6 +10,8 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import error_from_code
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
 from tests.conftest import BASE_URL
 
@@ -236,6 +238,45 @@ class TestGetFileInfoMissingPaths:
         assert "/a/y" in body["error"]["message"]
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("path", "escaped"), [("/a/invoice\\u202efdp.exe", True), ("/a/plain.txt", False)]
+    )
+    async def test_all_missing_gets_the_shared_suggestion(
+        self, mock_client: DsmClient, path: str, escaped: bool
+    ) -> None:
+        """Pre-QA r3 on #606: DSM's 408 advice starts with "check with list_files", which loops
+        for a name copied escaped; every path missing gets the shared suggestion instead."""
+        self._route({path: self._missing(path)})
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=[path])
+        suggestion = json.loads(str(exc_info.value))["error"]["suggestion"]
+        if escaped:
+            assert suggestion == ESCAPED_NAME_ADVICE, suggestion
+        else:
+            assert suggestion.startswith("Check the paths with list_files or search_files")
+            assert ESCAPED_NAME_ADVICE not in suggestion
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("codes", "mapped_code"), [((407, 407), 407), ((408, 407), 408)], ids=["all-407", "mixed"]
+    )
+    async def test_not_every_path_408_keeps_the_codes_own_advice(
+        self, mock_client: DsmClient, codes: tuple[int, int], mapped_code: int
+    ) -> None:
+        """QA round 3 on #606: only every path missing (408) gets the shared suggestion. A
+        path DSM won't let the user read (407), alone or beside a missing one, keeps the
+        advice of the code the error reports."""
+        paths = ["/a/x", "/a/y"]
+        self._route({p: {"code": c, "path": p} for p, c in zip(paths, codes, strict=True)})
+        with pytest.raises(ToolError) as exc_info:
+            await get_file_info(mock_client, paths=paths)
+        suggestion = json.loads(str(exc_info.value))["error"]["suggestion"]
+        expected = error_from_code(mapped_code, "SYNO.FileStation.List").suggestion
+        assert expected
+        assert suggestion == expected, suggestion
+        assert not suggestion.startswith("Check the paths with list_files or search_files")
+
+    @respx.mock
     async def test_mixed_shows_found_and_lists_missing(self, mock_client: DsmClient) -> None:
         self._route(
             {"/a/real.txt": self._found("/a/real.txt"), "/a/gone": self._missing("/a/gone")}
@@ -244,6 +285,18 @@ class TestGetFileInfoMissingPaths:
         assert "real.txt" in result
         assert "Not found: /a/gone" in result
         assert "Name:  \n" not in result  # no blank card for the missing path
+
+    @respx.mock
+    @pytest.mark.parametrize(("gone", "advised"), [("/a/inv\\u202efdp", True), ("/a/gone", False)])
+    async def test_mixed_with_an_escaped_missing_path_gives_the_advice(
+        self, mock_client: DsmClient, gone: str, advised: bool
+    ) -> None:
+        """Pre-QA r4 on #606: a found path beside an escaped missing one got only a "Not found"
+        note, and listing again shows the same escape; the note carries the advice once."""
+        self._route({"/a/real.txt": self._found("/a/real.txt"), gone: self._missing(gone)})
+        result = await get_file_info(mock_client, paths=["/a/real.txt", gone])
+        assert "real.txt" in result
+        assert result.count(ESCAPED_NAME_ADVICE) == (1 if advised else 0), result
 
     @respx.mock
     async def test_missing_path_never_rendered_as_a_file(self, mock_client: DsmClient) -> None:

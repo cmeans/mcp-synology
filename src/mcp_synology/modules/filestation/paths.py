@@ -21,12 +21,17 @@ from __future__ import annotations
 
 import enum
 import unicodedata
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn
 
 import regex
 
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response, forges
+from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
+    error_response,
+    forges,
+    holds_escape,
+)
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
@@ -500,7 +505,7 @@ def refuse_write_target(
     _refuse(f"{head} a whole shared folder. {detail} Nothing was {past}.", param, raw, suggestion)
 
 
-def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
+def _refuse(message: str, param: str, value: str, suggestion: str) -> NoReturn:
     error_response(
         ErrorCode.INVALID_PARAMETER,
         message,
@@ -651,7 +656,8 @@ async def _refuse_bad_created_parents(
     ``force_parent``) under a name `name_problem` refuses: padded (DSM makes
     ``/video/Uploads `` beside ``Uploads`` and reports success; vdsm DSM 7.1 and 7.4.1),
     with a control or invisible character, or ``#recycle`` where it would be a bin (pre-QA
-    on #510). Only such parts are looked up, so an ordinary path costs no request; the
+    on #510), or one holding an escape as replies write it, most likely copied from a listing
+    (#606). Only such parts are looked up, so an ordinary path costs no request; the
     parent is built as the walk goes, not re-joined for every part (pre-QA r4)."""
     parts = normalized.split("/")[1:]
     parent = "/" + parts[0] if parts else "/"
@@ -660,6 +666,24 @@ async def _refuse_bad_created_parents(
         prefix = f"{parent}/{parts[i]}"
         parent = prefix
         if problem is None:
+            # A part copied from a listing that showed a name escaped (#606): created, it would
+            # be a look-alike with a literal backslash, listed just like the real folder. Only a
+            # definite 408: an unreadable answer leaves it to DSM.
+            if holds_escape(parts[i]) and await path_exists(client, prefix) is False:
+                _refuse(
+                    f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would "
+                    "be created, but its name holds an escape as replies write one, so it's "
+                    "most likely copied from a listing and would make a look-alike of another "
+                    "folder. Nothing was created.",
+                    param,
+                    raw,
+                    # `C:\\new` can't be told from an escaped newline: give that name a way in
+                    # (create_folder doesn't check its last part this way; QA round 2). A
+                    # caller's own advice (a config setting's) comes first, as below.
+                    suggestion
+                    or f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, "
+                    "create it on its own with create_folder first, then retry.",
+                )
             continue
         # Only a definite 408: an unreadable answer leaves it to DSM.
         if await path_exists(client, prefix) is False:

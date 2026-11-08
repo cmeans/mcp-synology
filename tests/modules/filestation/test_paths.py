@@ -20,6 +20,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation import MODULE_INFO, register
 from mcp_synology.modules.filestation.paths import (
     BIN_ITEM_PARAMS,
@@ -617,6 +618,76 @@ class TestResolvePaths:
         error = _error(exc)
         assert (error["param"], error["value"]) == ("dest_folder", "/video/Uploads /x")
         assert "the folder '/video/Uploads ' doesn't exist" in error["message"]
+
+    @pytest.mark.parametrize(
+        ("tool", "param", "raw", "missing"),
+        [
+            ("upload_file", "dest_folder", "/video/folder\\u202efdp", "/video/folder\\u202efdp"),
+            ("create_folder", "paths", "/video/folder\\u202efdp/new", "/video/folder\\u202efdp"),
+        ],
+    )
+    async def test_a_missing_escaped_part_isnt_created_as_a_look_alike(
+        self, tool: str, param: str, raw: str, missing: str
+    ) -> None:
+        """Pre-QA r2 on #606: a folder copied from a listing that showed it escaped names
+        nothing; created, it gets a literal backslash and lists just like the real one, and
+        the upload or new folder lands in the look-alike."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                tool,
+                param,
+                [raw],
+                creates_parents=True,
+            )
+        error = _error(exc)
+        assert (error["param"], error["value"]) == (param, raw)
+        assert f"the folder {missing} doesn't exist" in error["message"], error
+        assert "Nothing was created." in error["message"]
+        assert error["suggestion"] == (
+            f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, create it "
+            "on its own with create_folder first, then retry."
+        )
+
+    async def test_a_real_backslash_n_parent_is_refused_with_a_way_in(self) -> None:
+        """QA round 2 on #606: `C:\\new folder` can't be told from an escaped newline, so a
+        missing one isn't created as a parent; the refusal says how to make it (the cost)."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                "upload_file",
+                "dest_folder",
+                ["/video/C:\\new folder"],
+                creates_parents=True,
+            )
+        assert "create it on its own with create_folder first" in _error(exc)["suggestion"]
+
+    async def test_the_way_in_works_create_folder_takes_it_as_its_last_part(self) -> None:
+        """The way in the refusal gives: create_folder of that folder itself is checked by the
+        new-name rules, which take a backslash (#605)."""
+        got = await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "create_folder",
+            "paths",
+            ["/video/C:\\new folder"],
+            creates_parents=True,
+        )
+        assert got == ["/video/C:\\new folder"]
+
+    async def test_an_existing_escaped_part_passes(self) -> None:
+        """A real folder whose name holds that backslash text is usable (#605)."""
+        got = await resolve_paths(
+            _FakeClient({"/video/folder\\u202efdp"}),  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/folder\\u202efdp"],
+            creates_parents=True,
+        )
+        assert got == ["/video/folder\\u202efdp"]
 
     async def test_a_padded_destination_part_that_exists_passes(self) -> None:
         client = _FakeClient({"/video/Uploads "})
@@ -1830,6 +1901,40 @@ async def test_an_unreadable_parent_answer_is_left_to_dsm() -> None:
         creates_parents=True,
     )
     assert got == ["/video/Uploads "]
+
+
+async def test_an_unreadable_escaped_parent_answer_is_left_to_dsm() -> None:
+    """The escaped-part refusal (#606) is like the padded one: only a definite 408 refuses."""
+    got = await resolve_paths(
+        _FakeClient(codes={"/video/folder\\u202efdp": 407}),  # type: ignore[arg-type]
+        set(),
+        "upload_file",
+        "dest_folder",
+        ["/video/folder\\u202efdp/x"],
+        creates_parents=True,
+    )
+    assert got == ["/video/folder\\u202efdp/x"]
+
+
+async def test_a_settings_escaped_parent_gets_the_callers_advice() -> None:
+    """Pre-QA r3 on #606: a path from `default_upload_dir` gets the caller's advice (fix the
+    setting), as a padded part does, not the copied-from-a-listing advice."""
+    with pytest.raises(ToolError) as exc:
+        await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/C:\\new/x"],
+            error_param="default_upload_dir",
+            suggestion="Fix default_upload_dir in the filestation settings, or pass dest_folder.",
+            creates_parents=True,
+        )
+    error = _error(exc)
+    assert error["param"] == "default_upload_dir"
+    assert error["suggestion"] == (
+        "Fix default_upload_dir in the filestation settings, or pass dest_folder."
+    )
 
 
 @pytest.mark.parametrize("stall", [None, "timeout"])
