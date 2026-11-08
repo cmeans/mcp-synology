@@ -679,7 +679,10 @@ class TestDeleteFiles:
         assert kept.startswith("[+] Deleted 1 item(s):"), kept
         assert "permanent" not in kept and "cannot be recovered" not in kept, kept
         assert "into /homes's own (/homes/#recycle/alice/#recycle)" in kept, kept
-        assert "share=homes" in kept
+        # A restore back into the user's bin is refused, so the advice names a dest_folder.
+        assert "share=homes brings them back with a dest_folder outside the bin" in kept
+        assert "Empty folders aren't kept in the bin." in kept
+        assert "To remove them for good, delete them in /homes/#recycle/alice/#recycle" in kept
         mixed = await delete_files(
             mock_client,
             paths=["/homes/alice/keep.txt", "/homes/alice/#recycle/x"],
@@ -699,6 +702,34 @@ class TestDeleteFiles:
             mock_client, paths=["/homes/#recycle/alice"], recycle_bin_status={"homes": True}
         )
         assert own.startswith("[+] Permanently deleted 1 item(s):"), own
+
+    @pytest.mark.parametrize("failure", ["timeout", "dsm_error"])
+    @respx.mock
+    async def test_homes_is_checked_once_and_never_hopefully(
+        self, mock_client: DsmClient, failure: str
+    ) -> None:
+        """#610 pre-QA: /homes is probed once per call, however many home bins it touches,
+        and a probe that can't tell (no answer, or a DSM error other than 408) is "couldn't
+        check", not ensure_recycle_status's hopeful "can still be recovered" (#255)."""
+        probes: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("folder_path") == "/homes/#recycle":
+                probes.append("homes")
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("no answer")
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            return _async_task_side_effect()(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        out = await delete_files(
+            mock_client,
+            paths=["/homes/alice/#recycle/x", "/homes/bob/#recycle/y"],
+            recycle_bin_status={},
+        )
+        assert probes == ["homes"], probes
+        assert out.count("Couldn't check whether /homes has its recycle bin enabled") == 2, out
+        assert "can still be recovered" not in out and "permanent" not in out, out
 
     @respx.mock
     async def test_a_home_bin_through_homes_when_homes_doesnt_answer(

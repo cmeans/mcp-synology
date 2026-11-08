@@ -39,6 +39,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     path_exists,
     paths_isdir,
+    probe_recycle_status,
     shown,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -1460,8 +1461,8 @@ async def _delete_summary(
     # (/homes/<user>/#recycle/…) is, to DSM, a folder inside the homes share, so a delete there
     # goes into the homes share's own bin when that's on (/homes/#recycle/<user>/#recycle/…:
     # seska DSM 7.1.1, found in the 0.11.0rc2 live test, #610) and is permanent only when it's
-    # off (vdsm, all four versions; vdsm can't turn it on: Share set answers 403). Keyed by
-    # the bin's folder below the root: "video", or "homes/alice".
+    # off (vdsm, all four versions; Share set answered 403 for turning it on, on DSM 7.1 and
+    # 7.4.1). Keyed by the bin's folder below the root: "video", or "homes/alice".
     in_bin: dict[str, list[str]] = {}
     outside_bin: list[str] = []
     for p in normalized:
@@ -1509,21 +1510,24 @@ async def _delete_summary(
             else:
                 shares_without_recycle.add(share_name)
 
-    # A home bin through /homes follows the homes share's own bin (#610).
-    kept_bins: set[str] = set()
-    unknown_bins: set[str] = set()
-    for key in in_bin:
-        if "/" not in key:
-            continue
-        if recycle_bin_status is None:
-            unknown_bins.add(key)
-            continue
-        try:
-            if await ensure_recycle_status(client, "homes", recycle_bin_status):
-                kept_bins.add(key)
-        except httpx.TransportError as e:
-            logger.debug("Recycle-bin probe on /homes unanswered: %r", e)
-            unknown_bins.add(key)
+    # A home bin through /homes follows the homes share's own bin (#610), checked once per
+    # call. Unlike ensure_recycle_status's hopeful default (#255), a probe that can't tell
+    # (no answer, or a DSM error) is "couldn't check", never "can still be recovered".
+    home_keys = {key for key in in_bin if "/" in key}
+    homes_bin: bool | None = None
+    if home_keys and recycle_bin_status is not None:
+        if "homes" in recycle_bin_status:
+            homes_bin = recycle_bin_status["homes"]
+        else:
+            try:
+                homes_bin, definite = await probe_recycle_status(client, "homes")
+            except httpx.TransportError as e:
+                logger.debug("Recycle-bin probe on /homes unanswered: %r", e)
+            else:
+                if definite and homes_bin is not None:
+                    recycle_bin_status["homes"] = homes_bin
+    kept_bins = home_keys if homes_bin else set()
+    unknown_bins = home_keys if homes_bin is None else set()
 
     # Shares where this call deleted from a bin for good (a home bin kept in /homes's isn't).
     bin_shares = {key.split("/")[0] for key in in_bin if key not in kept_bins | unknown_bins}
@@ -1549,21 +1553,23 @@ async def _delete_summary(
     )
     for share, bin_paths in sorted(in_bin.items()):
         user = share.split("/", 1)[1] if "/" in share else ""
+        kept = f"/homes/#recycle/{user}/#recycle"
         if share in kept_bins:
             lines.append(
                 f"\nRecycle bin is enabled on /homes, so these went from {user}'s home recycle "
-                f"bin into /homes's own (/homes/#recycle/{user}/#recycle) and can still be "
-                "recovered there with list_recycle_bin and restore_from_recycle_bin "
-                "(share=homes):"
+                f"bin into /homes's own ({kept}). They can still be recovered: "
+                "list_recycle_bin share=homes finds them, and restore_from_recycle_bin "
+                "share=homes brings them back with a dest_folder outside the bin. Empty "
+                f"folders aren't kept in the bin. To remove them for good, delete them in {kept} "
+                "after the user agrees:"
             )
             lines.extend(f"  {p}" for p in bin_paths)
             continue
         if share in unknown_bins:
             lines.append(
-                f"\nCouldn't check whether /homes has its recycle bin enabled (DSM didn't "
-                f"answer): if it is, these went from {user}'s home recycle bin into "
-                f"/homes/#recycle/{user}/#recycle; list_recycle_bin share=homes shows whether "
-                "they can be recovered:"
+                f"\nCouldn't check whether /homes has its recycle bin enabled: if it is, these "
+                f"went from {user}'s home recycle bin into {kept}, and list_recycle_bin "
+                "share=homes shows whether they can be recovered:"
             )
             lines.extend(f"  {p}" for p in bin_paths)
             continue

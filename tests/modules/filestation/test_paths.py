@@ -161,6 +161,14 @@ class TestRefuseWriteTarget:
         if path.casefold().startswith("/home/"):
             assert "other users'" not in error["message"]
             assert "Control Panel" not in error["suggestion"]
+        if operation == "Delete" and path.casefold().startswith("/homes/"):
+            # #610: through /homes, deleted items go into /homes's own bin when that's on.
+            assert error["message"].endswith(
+                "Deleting it would remove everything in the bin: into /homes's own recycle bin "
+                "if that's on, otherwise permanently. Nothing was deleted."
+            ), error["message"]
+            assert "for good, list" not in error["suggestion"], error["suggestion"]
+            assert "they go to /homes/#recycle/alice/#recycle" in error["suggestion"]
 
     @pytest.mark.parametrize("operation", ["Delete", "Move", "Rename"])
     @pytest.mark.parametrize("path", ["/homes/alice", "/Homes/alice"])

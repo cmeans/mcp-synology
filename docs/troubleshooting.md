@@ -148,7 +148,9 @@ no second copy (seen on DSM 7.1.1, #220). One exception: an administrator deleti
 bin through `/homes` (`/homes/<user>/#recycle/…`). When the `homes` share's own bin is on, DSM keeps
 those items in `/homes/#recycle/<user>/#recycle`, and `delete_files` says so (#610).
 
-**What to do:** nothing can bring it back from the NAS; restore from a backup or snapshot.
+**What to do:** nothing can bring it back from the NAS; restore from a backup or snapshot. For the
+`/homes` exception, `list_recycle_bin share=homes` finds the items, and `restore_from_recycle_bin
+share=homes` with a `dest_folder` outside the bin brings them back.
 
 ---
 
