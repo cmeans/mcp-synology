@@ -144,7 +144,9 @@ search didn't find nothing; it has no result (#121).
 ### Something deleted inside `#recycle` can't be restored
 
 **Why:** deleting inside a share's recycle bin (`/<share>/#recycle/…`) is permanent: DSM keeps
-no second copy (seen on DSM 7.1.1, #220).
+no second copy (seen on DSM 7.1.1, #220). One exception: an administrator deleting inside a user's home
+bin through `/homes` (`/homes/<user>/#recycle/…`). When the `homes` share's own bin is on, DSM keeps
+those items in `/homes/#recycle/<user>/#recycle`, and `delete_files` says so (#610).
 
 **What to do:** nothing can bring it back from the NAS; restore from a backup or snapshot.
 

@@ -1455,8 +1455,12 @@ async def _delete_summary(
     recycle_bin_status: dict[str, bool] | None,
 ) -> str:
     """The result text of a finished delete_files call."""
-    # A path inside a bin (/<share>/#recycle/…, or a user's /homes/<user>/#recycle/…) is
-    # gone for good whatever the share's setting: DSM keeps no second copy (#220). Keyed by
+    # A path inside a share's bin (/<share>/#recycle/…) is gone for good whatever the share's
+    # setting: DSM keeps no second copy (#220). A user's home bin reached through /homes
+    # (/homes/<user>/#recycle/…) is, to DSM, a folder inside the homes share, so a delete there
+    # goes into the homes share's own bin when that's on (/homes/#recycle/<user>/#recycle/…:
+    # seska DSM 7.1.1, found in the 0.11.0rc2 live test, #610) and is permanent only when it's
+    # off (vdsm, all four versions; vdsm can't turn it on: Share set answers 403). Keyed by
     # the bin's folder below the root: "video", or "homes/alice".
     in_bin: dict[str, list[str]] = {}
     outside_bin: list[str] = []
@@ -1467,7 +1471,6 @@ async def _delete_summary(
             in_bin.setdefault("/".join(parts[:at]), []).append(p)
         else:
             outside_bin.append(p)
-    bin_shares = {key.split("/")[0] for key in in_bin}
 
     # Determine recycle bin status per share. Probes lazily on first observation
     # via `ensure_recycle_status` so the dict stays empty until we actually need
@@ -1506,7 +1509,25 @@ async def _delete_summary(
             else:
                 shares_without_recycle.add(share_name)
 
-    has_recycle = bool(shares_with_recycle or shares_unknown)
+    # A home bin through /homes follows the homes share's own bin (#610).
+    kept_bins: set[str] = set()
+    unknown_bins: set[str] = set()
+    for key in in_bin:
+        if "/" not in key:
+            continue
+        if recycle_bin_status is None:
+            unknown_bins.add(key)
+            continue
+        try:
+            if await ensure_recycle_status(client, "homes", recycle_bin_status):
+                kept_bins.add(key)
+        except httpx.TransportError as e:
+            logger.debug("Recycle-bin probe on /homes unanswered: %r", e)
+            unknown_bins.add(key)
+
+    # Shares where this call deleted from a bin for good (a home bin kept in /homes's isn't).
+    bin_shares = {key.split("/")[0] for key in in_bin if key not in kept_bins | unknown_bins}
+    has_recycle = bool(shares_with_recycle or shares_unknown or kept_bins or unknown_bins)
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
@@ -1527,6 +1548,25 @@ async def _delete_summary(
         for share in sorted(shares_with_recycle)
     )
     for share, bin_paths in sorted(in_bin.items()):
+        user = share.split("/", 1)[1] if "/" in share else ""
+        if share in kept_bins:
+            lines.append(
+                f"\nRecycle bin is enabled on /homes, so these went from {user}'s home recycle "
+                f"bin into /homes's own (/homes/#recycle/{user}/#recycle) and can still be "
+                "recovered there with list_recycle_bin and restore_from_recycle_bin "
+                "(share=homes):"
+            )
+            lines.extend(f"  {p}" for p in bin_paths)
+            continue
+        if share in unknown_bins:
+            lines.append(
+                f"\nCouldn't check whether /homes has its recycle bin enabled (DSM didn't "
+                f"answer): if it is, these went from {user}'s home recycle bin into "
+                f"/homes/#recycle/{user}/#recycle; list_recycle_bin share=homes shows whether "
+                "they can be recovered:"
+            )
+            lines.extend(f"  {p}" for p in bin_paths)
+            continue
         # Name the bin items only when the call also deleted others, so it's clear
         # which ones are gone for good.
         if outside_bin:

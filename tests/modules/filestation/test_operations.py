@@ -664,28 +664,60 @@ class TestDeleteFiles:
         assert "cannot be recovered" in result
 
     @respx.mock
-    async def test_delete_from_a_users_home_bin_through_homes_is_permanent(
+    async def test_a_home_bin_through_homes_follows_the_homes_bin(
         self, mock_client: DsmClient
     ) -> None:
-        """A user's home bin is /homes/<user>/#recycle to an administrator: the same folder
-        the user sees as /home/#recycle (pre-QA on #479; vdsm, all four versions)."""
+        """A user's home bin is /homes/<user>/#recycle to an administrator (pre-QA on #479), and
+        to DSM a folder inside the homes share: a delete there goes into /homes's own bin when
+        that's on (seska DSM 7.1.1, 0.11.0rc2 live test, #610: the reply said "permanent" and
+        the items were in /homes/#recycle/<user>/#recycle), and is permanent when it's off
+        (vdsm, all four versions)."""
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
-        result = await delete_files(
+        kept = await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status={"homes": True}
+        )
+        assert kept.startswith("[+] Deleted 1 item(s):"), kept
+        assert "permanent" not in kept and "cannot be recovered" not in kept, kept
+        assert "into /homes's own (/homes/#recycle/alice/#recycle)" in kept, kept
+        assert "share=homes" in kept
+        mixed = await delete_files(
             mock_client,
             paths=["/homes/alice/keep.txt", "/homes/alice/#recycle/x"],
             recycle_bin_status={"homes": True},
         )
-        assert result.startswith("[+] Deleted 2 item(s):")
-        recoverable, _, permanent = result.partition("⚠")
-        assert "except the items deleted from the recycle bin itself" in recoverable
-        assert "Deleted from the recycle bin on /homes/alice" in permanent
-        assert "/homes/alice/#recycle/x" in permanent
-        assert "/homes/alice/keep.txt" not in permanent
-        only_bin = await delete_files(
-            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status={"homes": True}
+        assert mixed.startswith("[+] Deleted 2 item(s):"), mixed
+        assert "except the items deleted from the recycle bin itself" not in mixed, mixed
+        assert "\u26a0" not in mixed, mixed
+        gone = await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status={"homes": False}
         )
-        assert only_bin.startswith("[+] Permanently deleted 1 item(s):"), only_bin
-        assert "can be recovered" not in only_bin
+        assert gone.startswith("[+] Permanently deleted 1 item(s):"), gone
+        assert "Deleted from the recycle bin on /homes/alice" in gone
+        assert "can be recovered" not in gone
+        # /homes's own bin is still a share's bin: deleting in it is permanent.
+        own = await delete_files(
+            mock_client, paths=["/homes/#recycle/alice"], recycle_bin_status={"homes": True}
+        )
+        assert own.startswith("[+] Permanently deleted 1 item(s):"), own
+
+    @respx.mock
+    async def test_a_home_bin_through_homes_when_homes_doesnt_answer(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#610: /homes's bin can't be checked: neither "permanent" nor "can be recovered"."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("folder_path") == "/homes/#recycle":
+                raise httpx.ReadTimeout("no answer")
+            return _async_task_side_effect()(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        out = await delete_files(
+            mock_client, paths=["/homes/alice/#recycle/x"], recycle_bin_status={}
+        )
+        assert out.startswith("[+] Deleted 1 item(s):"), out
+        assert "Couldn't check whether /homes has its recycle bin enabled" in out, out
+        assert "permanent" not in out, out
 
     # The bin folder itself is refused since #479: TestShareRootSourcesRefused.
 
