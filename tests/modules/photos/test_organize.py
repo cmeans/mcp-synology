@@ -10,7 +10,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.helpers import NUMBER_IS_AN_ID, IdNumber
+from mcp_synology.modules.photos.helpers import IdNumber
 from mcp_synology.modules.photos.organize import (
     edit_person,
     edit_photo,
@@ -686,7 +686,8 @@ class TestPeople:
                 await merge_people(client, target="12", merge=[IdNumber("43")])
         assert _error(exc)["code"] == "not_found"
         assert "no person 43" in _error(exc)["message"]
-        assert _error(exc)["suggestion"].startswith(NUMBER_IS_AN_ID), _error(exc)
+        # Not a hint to resend the digits as text: that would match the person named "43".
+        assert "as text" not in _error(exc)["suggestion"], _error(exc)
         assert not fake.of(PERSON, "merge")
 
     @respx.mock

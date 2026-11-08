@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_timestamp, synology_error_response
 from mcp_synology.modules.photos.helpers import (
-    NUMBER_IS_AN_ID,
     IdNumber,
     Photos,
     check_ids,
@@ -598,7 +597,6 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
         ph = Photos(client, "personal", op)
         found: dict[int, str] = {}
         missing: list[str] = []
-        missing_number = False  # a missing one was sent as a number (QA round 1 on #611)
         existing = await ph.walk("Browse.Album", version=2, personal=True)
         by_id = {int(a["id"]): a for a in existing}
         for value in albums:
@@ -614,7 +612,6 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
                 ]
             if not matches:
                 missing.append(text)
-                missing_number = missing_number or isinstance(value, IdNumber)
             elif len(matches) > 1:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(
@@ -640,8 +637,6 @@ async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
             lines.append("No albums deleted.")
         if missing:
             lines.append(f"  Not found: {', '.join(missing)}")
-            if missing_number:
-                lines.append(f"  {NUMBER_IS_AN_ID}")
         return "\n".join(lines)
     except SynologyError as e:
         synology_error_response(op, e)

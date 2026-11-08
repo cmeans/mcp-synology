@@ -162,9 +162,6 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
     return check_parts(value, param, advice)
 
 
-NUMBER_IS_AN_ID = "A number is looked up as an ID only; to give a name, pass it as text."
-
-
 class IdNumber(str):
     """An ID the caller sent as a JSON number (#609): looked up as that ID only, never as a
     name, so a missing ID can't act on an album or person whose name is those digits."""
@@ -291,7 +288,7 @@ class Photos:
                 f"no folder {text} in the {space_label(self.space)}.",
                 param=param,
                 value=value,
-                suggestion=f"{NUMBER_IS_AN_ID} list_photo_collections type=folder lists them.",
+                suggestion="list_photo_collections type=folder lists them.",
             )
         if text.isascii() and text.isdigit():
             params: dict[str, Any] = {"id": int(text)}
@@ -356,7 +353,7 @@ class Photos:
                 f"no {kind} {text}.",
                 param=param,
                 value=value,
-                suggestion=f"{NUMBER_IS_AN_ID} {hint}",
+                suggestion=hint,
             )
         if text.isascii() and text.isdigit():
             suffix, version, extra = get
@@ -365,9 +362,11 @@ class Photos:
                     suffix, "get", {"id": [int(text)], **extra}, version=version, personal=personal
                 )
             except SynologyError as e:
-                # A setup or permission problem is the answer; anything else (an
-                # unknown ID's error) falls through to the name lookup.
-                if e.code in SETUP_CODES:
+                # A setup or permission problem is the answer, and so is no DSM answer at
+                # all (a proxy's 502, a reply that isn't DSM's: code None), which isn't an
+                # unknown ID (pre-QA r3 on #611). A DSM code for an unknown ID falls through
+                # to the name lookup.
+                if e.code in SETUP_CODES or e.code is None:
                     raise
                 data = {}
             found = data.get("list", [])
@@ -379,7 +378,7 @@ class Photos:
                     f"no {kind} {text}.",
                     param=param,
                     value=value,
-                    suggestion=f"{NUMBER_IS_AN_ID} {hint}",
+                    suggestion=hint,
                 )
         suffix, version, extra = walk
         entries = await self.walk(suffix, params=extra, version=version, personal=personal)
