@@ -6686,3 +6686,81 @@ async def test_a_started_source_keeps_its_record_after_its_call_returns(
     assert isinstance(restored, ToolError), restored
     assert "another move call through this server is landing in '/s/y'" in str(restored)
     assert starts == ["/a/b"]
+
+
+class TestOverwriteSaysWhatItReplaced:
+    """#620 (0.11.0rc3 live test): a copy or move with overwrite=true read like a plain one,
+    whether or not it replaced something. The reply now says what was already there."""
+
+    @staticmethod
+    def _dsm(existing: dict[str, bool], lookups: list[str]) -> object:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "getinfo":
+                path = params["path"]
+                lookups.append(path)
+                is_source = path.startswith("/w/src/")
+                if is_source or path == "/w/dst" or path in existing:
+                    isdir = path == "/w/dst" or existing.get(path, False)
+                    entry: dict[str, object] = {
+                        "isdir": isdir,
+                        "name": path.rsplit("/", 1)[-1],
+                        "path": path,
+                    }
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {"finished": True, "processed_size": 10, "skipstatus": None},
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_a_replaced_file_and_a_merged_folder_are_named(
+        self, mock_client: DsmClient
+    ) -> None:
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/dst/a.txt": False, "/w/dst/f": True}, lookups)
+        )
+        result = await copy_files(
+            mock_client,
+            paths=["/w/src/a.txt", "/w/src/f", "/w/src/new.txt"],
+            dest_folder="/w/dst",
+            overwrite=True,
+        )
+        assert "\nReplaced what was already there: a.txt" in result, result
+        assert (
+            "\nMerged into the folder(s) already there, replacing files with the same names: f"
+        ) in result, result
+        assert "new.txt" not in result.split("Replaced")[1], result
+
+    @respx.mock
+    async def test_nothing_there_says_nothing_extra(self, mock_client: DsmClient) -> None:
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({}, lookups))
+        result = await move_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "Replaced" not in result and "Merged" not in result, result
+
+    @respx.mock
+    async def test_without_overwrite_the_destination_isnt_looked_up(
+        self, mock_client: DsmClient
+    ) -> None:
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/dst/a.txt": False}, lookups)
+        )
+        await copy_files(mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst")
+        assert "/w/dst/a.txt" not in lookups

@@ -947,6 +947,19 @@ async def _copy_move(
     await _refuse_missing_destination(
         client, operation, dest, anything_done=bool(already_done or already_skipped)
     )
+    # With overwrite, which sources' names are already at the destination, so the reply can
+    # say what was replaced or merged into (#620, 0.11.0rc3 live test: an overwrite read like
+    # a plain copy). Only the reply's wording depends on it: a lookup that fails leaves it
+    # unsaid.
+    already_there: dict[str, bool] = {}
+    if overwrite:
+        targets = {q: f"{dest}/{q.rsplit('/', 1)[-1]}" for q in normalized}
+        try:
+            kinds = await paths_isdir(client, list(targets.values()))
+        except Exception as e:  # noqa: BLE001 - never fail the copy over a reply note
+            logger.debug("Couldn't check the destination for existing names: %s", e)
+            kinds = {}
+        already_there = {q: kinds[t] for q, t in targets.items() if t in kinds}
 
     total_processed = 0
     done = list(already_done or [])
@@ -1134,6 +1147,7 @@ async def _copy_move(
             earlier=[
                 q for q in [*done, *skipped_so_far] if q not in normalized and went.get(q) == dest
             ],
+            replaced=already_there,
         )
         return text, False
 
@@ -1148,8 +1162,11 @@ async def _copy_move_summary(
     *,
     only_named_sources_removed: bool = False,
     earlier: Sequence[str] = (),
+    replaced: dict[str, bool] | None = None,
 ) -> str:
-    """The result text of a finished copy or move (a restore rewords it, ``_as_restore``)."""
+    """The result text of a finished copy or move (a restore rewords it, ``_as_restore``).
+    ``replaced``: sources whose name was already at the destination (with overwrite), and
+    whether that was a folder (#620)."""
     verb = "Copied" if not remove_src else "Moved"
     ok = [p for p in normalized if p not in skipped_paths]
 
@@ -1162,6 +1179,17 @@ async def _copy_move_summary(
     else:
         lines = await _skip_report(
             client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
+        )
+
+    gone_over = {p: isdir for p, isdir in (replaced or {}).items() if p in ok}
+    over_files = [name(p) for p, isdir in gone_over.items() if not isdir]
+    over_folders = [name(p) for p, isdir in gone_over.items() if isdir]
+    if over_files:
+        lines.append(f"\nReplaced what was already there: {', '.join(over_files)}")
+    if over_folders:
+        lines.append(
+            "\nMerged into the folder(s) already there, replacing files with the same names: "
+            + ", ".join(over_folders)
         )
 
     if total_processed > 0:

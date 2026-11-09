@@ -250,6 +250,30 @@ class TestUploadFile:
         assert "[+]" in result
         assert "test.txt" in result
 
+    @pytest.mark.parametrize(("there", "said"), [(True, True), (False, False), (None, False)])
+    @respx.mock
+    async def test_overwrite_says_when_it_replaced_a_file(
+        self, mock_client: DsmClient, tmp_path: Path, there: bool | None, said: bool
+    ) -> None:
+        """#620 (0.11.0rc3 live test): an overwrite read like a plain upload. ``there``: the
+        file was there (True), wasn't (False), or the lookup failed (None: nothing said)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("updated content")
+        info: dict[str, object]
+        if there is None:
+            info = {"success": False, "error": {"code": 119}}
+        elif there:
+            info = {"success": True, "data": {"files": [{"isdir": False, "path": "/v/test.txt"}]}}
+        else:
+            info = {"success": True, "data": {"files": [{"code": 408, "path": "/v/test.txt"}]}}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=info)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        result = await upload_file(
+            mock_client, local_path=str(local_file), dest_folder="/v", overwrite=True
+        )
+        assert result.startswith("[+] Uploaded test.txt"), result
+        assert ("It replaced the test.txt that was there." in result) is said, result
+
     @respx.mock
     async def test_upload_custom_filename(self, mock_client: DsmClient, tmp_path: Path) -> None:
         local_file = tmp_path / "test.txt"
