@@ -282,7 +282,7 @@ The same 12 tasks, word for word, with Opus added. What changed from the setup a
 | t04b | ✅ ¹ | ✅ ¹ | ✅ ¹ |
 | t05 | ✅ | ✅ | ❌ ² |
 | t06 | ✅ | ✅ | — ² |
-| t07 | OPUS_T07 | SONNET_T07 | ✅ |
+| t07 | ✅ | ✅ | ✅ |
 | t08b | ✅ | ✅ | ✅ |
 | t09 | ✅ | ✅ | ✅ |
 | t10 | ✅ | ✅ | ✅ |

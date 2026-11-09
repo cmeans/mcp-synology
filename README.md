@@ -96,8 +96,8 @@ Every model that has run the tools here, with what it was tested on and how it d
 
 | Model | Client | Tested on | Results | Fit for |
 |---|---|---|---|---|
-| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0rc4: Claude Code 43 of 43 steps, claude.ai 78 of 79 (the one miss was the server's: a stop that took DSM 60 s to answer, fixed in #632). Comparison: OPUS_CMP | Everything, writes and deletes included |
-| **Claude Sonnet 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 12 of 12. 0.11.0: SONNET_CMP | Everything, writes and deletes included |
+| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0rc4: Claude Code 43 of 43 steps, claude.ai 78 of 79 (the one miss was the server's: a stop that took DSM 60 s to answer, fixed in #632). Comparison (0.11.0): 12 of 12 | Everything, writes and deletes included |
+| **Claude Sonnet 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 12 of 12. 0.11.0: 12 of 12 | Everything, writes and deletes included |
 | **Claude Haiku 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 11 of 12. 0.11.0: 9 of 11 scored. Both runs missed the same task: it didn't match a download by its source URL, so it deleted nothing. In 0.11.0 it also refused a copy, reading the server's connection-name line as forbidding a request that didn't name the NAS (#633) | Reads; check its writes, and confirm deletes yourself |
 | **Muse Wonder** | Meta Muse (Power Plan) | 0.11.0's live rounds (rc2 to rc4) | rc4: 61 of 62 steps. The miss: it changed an album that wasn't shared yet and didn't follow the reply's "Use action=share first". In rc2 and rc3 its misses found two server bugs (Photos IDs and names, fixed in #615) | Reads and writes; it follows most hints in replies, not all |
 | **Muse Spark** | Meta Muse (free plan) | 0.10.0's live rounds | No fails in rc5 or rc10 | Reads and writes, in the steps tested |
