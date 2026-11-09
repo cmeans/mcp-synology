@@ -248,7 +248,7 @@ class TestFolders:
                 await Photos(client, "personal", "Op").folder(Ref(param, name=value))
         err = _error(exc)
         assert (err["code"], err["param"]) == ("invalid_parameter", param)
-        assert "`/` for the space's root" in err["message"]
+        assert "the space's root is written `/`" in err["message"]
         assert not fake.calls
 
     @respx.mock

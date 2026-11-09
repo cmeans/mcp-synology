@@ -164,9 +164,13 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
         # Not the root: a client that fills an unset argument with "" would otherwise land a
         # write there, which the required folders exist to prevent (QA round 1 on #615). The
         # root is written `/`.
+        what = {
+            "condition": "an entry in the condition's folder_paths",
+            "folder_paths": "an entry in folder_paths",
+        }.get(param, param)
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{param} is empty: pass a folder path, `/` for the space's root.",
+            f"{what} is empty: pass a folder path (the space's root is written `/`).",
             retryable=False,
             param=param,
             value=value,

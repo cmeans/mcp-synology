@@ -1743,8 +1743,8 @@ class TestIdParameters:
         the album named 9876543; #616: "the album named 43" deleted album 43; #617: the folder
         path `2024` was folder ID 2024. An ID and a name or path never share a parameter: an
         ID parameter (`*_id`, `*_ids`, `ids`) takes a number only, a path parameter
-        (`*_path`, `*_paths`, all in `FOLDER_PARAMS`) text only, and the only parameters
-        taking a number or text are names, where a number is that name."""
+        (`*_path`, `*_paths`, all in `FOLDER_PARAMS`) text only, and a name parameter text
+        only in its schema (a number sent there is still that name); no union anywhere."""
         tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
         photos = {t.name for t in PHOTOS_INFO.tools}
         both, ids, paths = [], [], []
@@ -2766,6 +2766,16 @@ class TestValidationErrorsQuoteNothing:
                 {"folder_ids": ["/Trips"]},
                 "delete_photo_folders failed: `folder_ids` must be an ID, a whole number; a path "
                 "goes in `folder_paths`. Nothing was done.",
+            ),
+            (
+                "delete_photo_albums",
+                {"album_ids": 5},
+                "delete_photo_albums failed: `album_ids` must be a list. Nothing was done.",
+            ),
+            (
+                "pause_download",
+                {"task_ids": [1]},
+                "pause_download failed: `task_ids` must be text. Nothing was done.",
             ),
             (
                 "delete_photos",

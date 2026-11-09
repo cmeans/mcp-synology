@@ -10,11 +10,13 @@ import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.modules.photos.albums import (
+    _permission,
     album_line,
     delete_photo_albums,
     photo_album,
     photo_share_link,
 )
+from mcp_synology.modules.photos.helpers import Photos
 from tests.modules.photos.dsm import FakePhotos, captured, install, make_client
 
 ALBUM = "SYNO.Foto.Browse.Album"
@@ -637,6 +639,22 @@ class TestShareLink:
         err = _error(exc)
         assert err["param"] == "members" and "value" not in err
         assert "SYSTEM" not in str(exc.value) and "members[0]" in err["message"]
+
+
+class TestMemberNotFound:
+    @respx.mock
+    async def test_an_unknown_member_quotes_only_its_name(self) -> None:
+        """Pre-QA r6 on #615: the not-found refusal echoes the name it couldn't find, never the
+        rest of the member."""
+        install(FakePhotos().on("SYNO.Foto.Sharing.Misc", "list_user_group", 1, {"list": []}))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await _permission(
+                    Photos(client, "personal", "Op"), None, [{"name": "nobody", "role": "view"}]
+                )
+        err = _error(exc)
+        assert (err["code"], err["value"]) == ("not_found", "nobody"), err
 
 
 class TestConditionKeys:

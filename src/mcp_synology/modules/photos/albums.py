@@ -451,9 +451,10 @@ async def photo_share_link(
     if expires is not None:
         expiration = parse_expires(op, expires)
     for i, member in enumerate(members or []):
-        # Keys first, and no member echoed in any refusal: the caller wrote them, keys and
-        # values (pre-QA r5 and QA round 1 on #615). A dropped key would leave the default:
-        # `{"name": "bob", "Role": "none"}`, meant to remove bob, gave him view access.
+        # Keys first, and no member's keys or other fields echoed in a refusal: the caller wrote
+        # them (pre-QA r5 and QA round 1 on #615); only a name DSM doesn't know is quoted back.
+        # A dropped key would leave the default: `{"name": "bob", "Role": "none"}`, meant to
+        # remove bob, gave him view access.
         where = f"members[{i}]"
         if not isinstance(member, dict):
             invalid(op, f"{where} must be an object with name, type and role.", param="members")

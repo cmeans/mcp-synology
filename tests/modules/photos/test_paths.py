@@ -202,5 +202,7 @@ async def test_an_empty_path_is_refused_everywhere(
     assert err["code"] == "invalid_parameter", err
     # Refused as empty (photo_request's create says the path is required, which it checks
     # first), never looked up as the root.
-    assert "`/` for the space's root" in err["message"] or "needs folder_path" in err["message"]
+    assert (
+        "the space's root is written `/`" in err["message"] or "needs folder_path" in err["message"]
+    )
     assert all(c.params != {"id": 0} for c in fake.of(FOLDER)), fake.calls

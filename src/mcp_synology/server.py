@@ -536,7 +536,10 @@ def _validation_error_response(tool: str, error: ValidationError, accepted: set[
             if err["type"] == "missing"
             else _VALIDATION_MESSAGES.get(err["type"], "has a value of the wrong type or form")
         )
-        if err["type"] != "missing" and field.endswith(("_id", "_ids")):
+        if err["type"] == "value_error" and field.endswith(("_id", "_ids")):
+            # Only `_photo_id`'s refusal (a value that isn't an ID); "must be a list" and
+            # "must be text" stay as they are (pre-QA r6 on #615: a bare ID for an ID list was
+            # told to go in the name list).
             # The likeliest mistake since #615's split: a name in an ID field. Name its twin
             # (QA round 1 on #615).
             plural = field.endswith("_ids")
