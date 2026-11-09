@@ -29,6 +29,11 @@ makes sure it can't pass for the server's own text.
   /photos` is listed as it is: changing names would make the listing wrong, and no list of
   phrases is complete. Whether the model acts on it is the model's call, which the label and
   the instructions inform.
+- **It doesn't see inside downloaded files.** No tool returns a file's contents or an image,
+  but `download_file` and `download_photos` save them where the client can open them. A
+  document's text, or an image holding written instructions or a QR code, reaches the model
+  through the client's own file reading, with no label and no escaping. Treat what's in a
+  downloaded file as you would anything from the NAS.
 - **It can't stop a model from following text.** A model may still act on planted text. Use a
   read-only connection (`permission: read`) where you don't need writes, and an account with
   only the shared folders it needs.
