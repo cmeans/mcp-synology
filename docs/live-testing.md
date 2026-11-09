@@ -33,13 +33,14 @@ real output. "Found" names the release candidate under test (not a published rel
 ## Clients tested, and how they differ
 
 Run at least two clients. They differ in ways that change what a test can show. What
-follows is what we observed in the 0.10.0rc5 test; clients change, so check again.
+follows is what we observed (0.10.0rc5, and 0.11.0's rounds where a row says so); clients
+change, so check again.
 
 | Client | How it reaches the server | What we observed |
 |---|---|---|
 | **Claude Code** | Starts the server itself (stdio); one server process for the session | The server's instructions reached the model. No short reply limit: it aborts a call only after 30 minutes idle by default. The session and caches stayed in memory, so after the first call a read cost one DSM round trip. Good for checking instructions, long operations (`file_task` hand-offs) and parallel calls |
 | **claude.ai, through a local device bridge** (the desktop app) | The app starts the server on the user's machine; claude.ai reaches it through the bridge | **The server's instructions didn't reach the model** (shown with blind questions), so anything the model must know has to be in tool descriptions and replies. Tool titles and annotations were dropped too. Replies were cut off after about 60 s, and the bridge dropped once for about a minute |
-| **Meta Muse**, an agent on a remote machine (its own VM) calling tools from scripts: free plan (Muse Spark) for 0.10.0, Power Plan (Muse Wonder) for 0.11.0 | By default each call starts a fresh server process, logs in, makes one call and exits; in our setup over plain HTTP through a VPN. [docs/muse.md](muse.md) has the instructions that make it keep one long-lived session instead | Nothing kept in memory carried over between calls (caches, session). Every call paid a process start and a login. The harness didn't show the model the tool schemas, so it retried on argument names (`path` vs `paths`); those are harness errors, not findings. Plain HTTP showed the server's plain-HTTP warnings |
+| **Meta Muse**, an agent on a remote machine (its own VM) calling tools from scripts: free plan (Muse Spark) for 0.10.0, Power Plan (Muse Wonder) for 0.11.0 | By default each call starts a fresh server process, logs in, makes one call and exits; in our setup over plain HTTP through a VPN. [docs/muse.md](muse.md) has the instructions that make it keep one long-lived session instead | **0.10.0rc5 (free plan, one process per call):** nothing kept in memory carried over between calls (caches, session), and every call paid a process start and a login. The harness didn't show the model the tool schemas, so it retried on argument names (`path` vs `paths`); those are harness errors, not findings. **0.11.0 (Power Plan, with [docs/muse.md](muse.md)'s daemon):** one long-lived session, and a catalog of every tool's description and parameters written for the model to read. In both, plain HTTP showed the server's plain-HTTP warnings |
 
 ## 1. Build the candidate
 

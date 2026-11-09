@@ -3,8 +3,7 @@
 A tool reply carries text that someone else may have written: file and folder names, album
 and person names, a photo's description, a download's title. Anyone who can name something on
 the NAS (another user, a shared folder's owner, a torrent's author) can put words in front of
-the model. (No tool returns a file's contents. A file the model reads through its client's
-own tools doesn't come through mcp-synology, so it carries no label.) mcp-synology
+the model. (A downloaded file's contents are another matter: see "What it doesn't do".) mcp-synology
 can't tell an instruction from a name by its wording, so it treats all such text as data, and
 makes sure it can't pass for the server's own text.
 

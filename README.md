@@ -103,7 +103,7 @@ At the end, it prints the `check` command for the config it wrote, and a JSON sn
 {
   "mcpServers": {
     "synology-nas": {
-      "command": "uvx",
+      "command": "/Users/you/.local/bin/uvx",
       "args": ["mcp-synology", "serve", "--config", "~/.config/mcp-synology/nas.yaml"]
     }
   }
@@ -118,7 +118,7 @@ The config file is named after the connection's instance ID, which `setup` takes
 claude mcp add synology -- uvx mcp-synology serve --config ~/.config/mcp-synology/<name>.yaml
 ```
 
-**Other clients:** any client that starts a local (stdio) server: the command is `uvx`, with the arguments `mcp-synology serve --config <your config file>`.
+**Other clients:** any client that starts a local (stdio) server: the command is `uvx` (its full path, which `which uvx` prints, for an app started outside a shell), with the arguments `mcp-synology serve --config <your config file>`.
 
 On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
@@ -441,7 +441,7 @@ File names, folder and album names, descriptions and a download's title may have
 - control, line-break and bidirectional characters in that text are escaped, so a name can't write a line that looks like the server's;
 - a tool call is refused when it carries such characters (except a Photos description and Download Station's URIs, which are escaped wherever they're shown), an argument the tool doesn't take, or text the MCP SDK would turn into something else. The MCP layer's own type checks never quote the value sent, and an unknown argument's name is never repeated, except a renamed parameter's old name, from the server's own table; a tool's own refusal may quote what it refused, after the character check, so it can't start a line of its own.
 
-Wording isn't filtered: whether a model acts on planted text is up to the model. Nor does the server see inside the files it downloads: a document's text, or an image with written instructions or a QR code, reaches the model through the client's own file reading, unlabeled. Each release candidate's live test plants some to check. [docs/prompt-injection.md](docs/prompt-injection.md) has each guard, why it exists and its tests.
+Wording isn't filtered: whether a model acts on planted text is up to the model, and each release candidate's live test plants some in names and descriptions to check. Nor does the server see inside the files it downloads: a document's text, or an image with written instructions or a QR code, reaches the model through the client's own file reading, unlabeled. [docs/prompt-injection.md](docs/prompt-injection.md) has each guard, why it exists and its tests.
 
 ## Configuration
 
