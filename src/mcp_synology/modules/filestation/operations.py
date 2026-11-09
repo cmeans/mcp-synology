@@ -1012,24 +1012,24 @@ async def _copy_move(
 
 
 def _with_replaced_note(
-    refused: ToolError,
+    error: ToolError,
     operation: str,
     done: list[str],
     replaced: dict[str, bool],
     went: dict[str, str],
     dest: str,
 ) -> ToolError:
-    """``refused`` with what the items already done replaced or merged into (#620), for a call
+    """``error`` with what the items already done replaced or merged into (#620), for a call
     that failed after them; unchanged when none did."""
     files = [where_it_went(q, went, dest) for q in done if replaced.get(q) is False]
     folders = [where_it_went(q, went, dest) for q in done if replaced.get(q) is True]
     if not files and not folders:
-        return refused
+        return error
     try:
-        body = json.loads(str(refused))
+        body = json.loads(str(error))
         message = body["error"]["message"]
     except (ValueError, KeyError, TypeError):
-        return refused
+        return error
     lead = f"Of what was {_PAST_TENSE.get(operation, 'processed')}, "
     note = []
     if files:
