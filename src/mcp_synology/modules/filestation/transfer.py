@@ -376,6 +376,10 @@ async def download_file(
             suggestion="Use overwrite=true to replace the existing file.",
         )
 
+    # With overwrite, the reply says a local file was replaced (#625, as upload_file does
+    # for #620): the download alone read like a new file.
+    replaced = overwrite and os.path.lexists(dest_file)
+
     if nas_file_size:
         free_space = shutil.disk_usage(local_dir).free
         if nas_file_size > free_space:
@@ -469,6 +473,9 @@ async def download_file(
         result = format_status(
             f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
         )
+
+    if replaced:
+        result += f"\n    It replaced the {dest_file.name} that was there."
 
     if bytes_written >= _LARGE_FILE_THRESHOLD:
         result += (

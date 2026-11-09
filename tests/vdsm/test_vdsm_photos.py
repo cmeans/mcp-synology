@@ -733,6 +733,17 @@ async def test_copy_move_delete(photos: DsmClient) -> None:
             destination_path=dst,
         )
         assert out.startswith(f"Nothing was copied to {dst}") and "1 skipped (already there)" in out
+        # #625: DSM's overwrite counter counts the replaced item, so the reply says so.
+        out = await copy_or_move(
+            photos,
+            operation="copy",
+            ids=[ids["beach-sunset.jpg"]],
+            folder_ids=None,
+            destination_path=dst,
+            on_conflict="overwrite",
+        )
+        assert out.startswith(f"Copied 1 item(s) to {dst}"), out
+        assert "0 skipped (already there), 1 overwritten" in out, out
         out = await copy_or_move(
             photos,
             operation="move",

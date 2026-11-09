@@ -382,6 +382,21 @@ class TestDownloadFile:
         )
         assert "[+]" in result
         assert existing.read_bytes() == new_content
+        # #625: an overwrite says it replaced the file, as upload_file does (#620).
+        assert result.splitlines()[1:] == ["    It replaced the movie.mkv that was there."]
+
+    @respx.mock
+    async def test_download_overwrite_with_nothing_there_says_nothing_extra(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        result = await download_file(
+            mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert result.startswith("[+] Downloaded movie.mkv"), result
+        assert "replaced" not in result, result
 
     @respx.mock
     async def test_download_custom_filename(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -582,10 +597,11 @@ class TestDownloadFile:
         assert err["code"] == "already_exists"
         assert str(tmp_path / "shows.zip") in err["message"]
         assert calls == ["getinfo"]
-        await download_file(
+        out = await download_file(
             mock_client, path="/video/shows", dest_folder=str(tmp_path), overwrite=True
         )
         assert (tmp_path / "shows.zip").read_bytes() == b"PK\x03\x04"
+        assert "\n    It replaced the shows.zip that was there." in out, out
 
     @respx.mock
     @pytest.mark.parametrize(
