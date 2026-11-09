@@ -123,6 +123,8 @@ class TestOriginals:
             "(kept)" in out
         )
         assert "overwrite=true" not in out
+        # A kept file is one a client can open too (#640).
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA
 
     @respx.mock
     async def test_overwrite_replaces(self, tmp_path: Path) -> None:
