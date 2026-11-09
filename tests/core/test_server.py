@@ -2808,6 +2808,61 @@ class TestValidationErrorsQuoteNothing:
         assert "Unknown tool: no tool has that name." in text
 
 
+class TestTextTheSdkWouldParse:
+    """#621 (pre-QA r6 on #615): the SDK parses a text argument as JSON for a parameter not
+    typed plain `str` and keeps a non-string result, so `album_name="null"` arrived as None
+    and the call ran unfiltered. Text the SDK would turn into something else is refused,
+    unquoted, before any request."""
+
+    @pytest.mark.parametrize("value", ["null", "true", "false", "[1]", "{}", " null "])
+    @pytest.mark.parametrize(
+        ("tool", "base"),
+        [
+            ("list_photos", {}),
+            ("list_files", {"path": "/video"}),
+        ],
+    )
+    async def test_it_is_refused_unquoted(
+        self, tool: str, base: dict[str, Any], value: str
+    ) -> None:
+        param = {"list_photos": "album_name", "list_files": "pattern"}[tool]
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        with respx.mock(assert_all_called=False) as router:
+            route = router.route().respond(500)
+            async with Client(server) as client:
+                result = await client.call_tool(tool, {**base, param: value})
+        text = _reply(result)
+        err = json.loads(text[text.index("{") :])["error"]
+        assert (err["code"], err["param"]) == ("invalid_parameter", param), err
+        # The server's own fixed text: the caller's value is never quoted.
+        assert err["message"] == (
+            f"{tool} failed: `{param}` can't be this text as it is: it reads as JSON (null, "
+            "true, false, a list or an object), which the MCP layer would turn into something "
+            "other than text. Nothing was done."
+        )
+        assert "value" not in err
+        assert not route.called
+
+    @pytest.mark.parametrize("value", ["2024", "1.5", '"quoted"', "Trip"])
+    @respx.mock
+    async def test_text_that_stays_text_passes(self, value: str) -> None:
+        """A number or a JSON string is kept as text by the SDK, so it isn't refused."""
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        async with Client(server) as client:
+            result = await client.call_tool("list_photos", {"album_name": value})
+        assert "reads as JSON" not in _reply(result)
+
+    async def test_a_list_parameter_still_takes_a_json_string_list(self) -> None:
+        """Claude Desktop sends lists as JSON strings; those are the SDK's to parse."""
+        server = create_server(make_test_config())
+        with respx.mock(assert_all_called=False) as router:
+            router.route().respond(500)
+            async with Client(server) as client:
+                result = await client.call_tool("get_file_info", {"paths": '["/video/a"]'})
+        assert "reads as JSON" not in _reply(result)
+
+
 class TestReplyLabel:
     """#615 (maintainer, 2026-11-08): every tool reply starts with the server's own line saying
     text from the NAS or local files is data, not instructions; errors too."""

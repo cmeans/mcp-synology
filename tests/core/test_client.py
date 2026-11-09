@@ -1906,9 +1906,11 @@ def test_every_dsm_reply_is_read_through_one_parser() -> None:
             if "json.loads(" in line:
                 assert re.search(
                     # This server's own errors, nested DSM JSON escaped again, and a tool
-                    # argument the SDK will parse (server.py), which isn't a reply.
+                    # argument the SDK will parse (server.py, #604 and #621), which isn't a
+                    # reply.
                     r"json\.loads\(str\((e|error)\)\)|escape_nas_text\(json\.loads\("
-                    r"|stack\.append\(\(key, json\.loads\(value\)\)\)",
+                    r"|stack\.append\(\(key, json\.loads\(value\)\)\)"
+                    r"|parsed = json\.loads\(value\)  # a tool argument",
                     line,
                 ), f"{path.name}: {line.strip()}"
 
