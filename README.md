@@ -41,7 +41,7 @@ Once it's connected, ask in plain words, for example:
 
 **Security at a glance:**
 
-- Each module is READ-only unless its config says `permission: write`; the tools that delete or replace are marked so your client can ask before running them (where the client passes those marks on).
+- Each module is READ-only unless its config says `permission: write` (or `admin`, the same); the tools that delete or replace are marked so your client can ask before running them (where the client passes those marks on).
 - Local files: uploads and downloads use only the folders you list (your Downloads folder by default).
 - `setup` uses HTTPS unless you decline, and stores the password in the OS keyring, tied to the NAS's host and port.
 - Text from the NAS is marked as data, not instructions: [docs/prompt-injection.md](docs/prompt-injection.md).
@@ -97,7 +97,7 @@ At the end, it prints the `check` command for the config it wrote, and a JSON sn
 
 ### 2. Add it to your MCP client
 
-**Claude Desktop:** open **Settings → Developer → Edit Config**, which opens `claude_desktop_config.json`, add the snippet `setup` printed, and restart the app. It looks like this, with the full path to `uvx` and to your config, and the server named `synology-<name>`:
+**Claude Desktop:** open **Settings → Developer → Edit Config**, which opens `claude_desktop_config.json`, add the snippet `setup` printed, and restart the app. It looks like this, with the full path to `uvx` and to your config, and the server named `synology-` plus the connection's alias if you set one, otherwise its instance ID:
 
 ```json
 {
@@ -206,7 +206,7 @@ Credentials come from environment variables first, then the config file, then th
 Every module is configured the same way, under `modules:`:
 
 - **`enabled`**: `true` (the default) or `false`. Listing a module is enough to load it: for every module, a name with nothing under it (`filestation:`) is the same as `filestation: {}`, enabled at `read` with no settings, and an empty `settings:` is the same as no settings. `enabled: false` keeps its block in the file without loading it.
-- **`permission`**: `read` (the default) registers the READ tools only; `write` adds the WRITE tools. `admin` is also accepted and is the same as `write`. It doesn't refer to the DSM account: an admin account doesn't need it.
+- **`permission`**: `read` (the default) registers the READ tools only; `write` adds the WRITE tools. `admin` is also accepted and is the same as `write`. It doesn't refer to the DSM account: an administrator account doesn't need it.
 - **`settings`**: the module's own options, listed in its section. A setting the module doesn't know is ignored with a warning that names the valid ones, so a config written for a newer version still loads. Any other key next to these three is an error, so a typo such as `permision` stops the server instead of being ignored.
 
 ### System
@@ -224,7 +224,7 @@ modules:
 
 **Settings:** none.
 
-**Tools.** `get_system_info` gives every account the model, serial number, DSM version, RAM, uptime, the NAS's local time and code page, and the temperature where the NAS has a sensor. An administrator account also gets the CPU, time zone and current UTC offset, NTP server, firmware date, DSM's update-ready and crash flags, eSATA port, attached USB, SATA and PCIe devices, and redundant power on models that report it; any other account gets a line naming what needs an administrator. `get_resource_usage` shows live CPU load, memory usage, disk I/O and network throughput, and needs an admin account.
+**Tools.** `get_system_info` gives every account the model, serial number, DSM version, RAM, uptime, the NAS's local time and code page, and the temperature where the NAS has a sensor. An administrator account also gets the CPU, time zone and current UTC offset, NTP server, firmware date, DSM's update-ready and crash flags, eSATA port, attached USB, SATA and PCIe devices, and redundant power on models that report it; any other account gets a line naming what needs an administrator. `get_resource_usage` shows live CPU load, memory usage, disk I/O and network throughput, and needs an administrator account.
 
 **Accounts.** Any account can use `get_system_info`; an administrator account sees more (above). `get_resource_usage` needs an administrator account.
 
@@ -380,9 +380,9 @@ modules:
 
 **Accounts other than administrators.** All of these are enforced or reported by the tools:
 
-- **First-time setup.** Download Station doesn't start the tasks of an account other than an administrator until that user has a default destination; until then they wait forever. A user who has never opened Download Station has none. Set it once with `set_download_config(default_destination="<share>")`, which DSM applies to that user only. Until then, `create_download` with an explicit `destination` still creates the task but warns that it won't start. Without a `destination`, it refuses and says what to set. That refusal applies to any account, admin included, whenever there's no default destination to fall back on.
+- **First-time setup.** Download Station doesn't start the tasks of an account other than an administrator until that user has a default destination; until then they wait forever. A user who has never opened Download Station has none. Set it once with `set_download_config(default_destination="<share>")`, which DSM applies to that user only. Until then, `create_download` with an explicit `destination` still creates the task but warns that it won't start. Without a `destination`, it refuses and says what to set. That refusal applies to any account, administrator included, whenever there's no default destination to fall back on.
 - **Own tasks only.** `list_downloads` and the other task tools see only the user's own tasks.
-- **Settings.** `get_download_config` shows the user's own view, not the NAS-wide settings. `set_download_config` can change only the user's own `default_destination`; the speed limits are NAS-wide and are refused, because DSM accepts and then silently ignores them from a non-admin.
+- **Settings.** `get_download_config` shows the user's own view, not the NAS-wide settings. `set_download_config` can change only the user's own `default_destination`; the speed limits are NAS-wide and are refused, because DSM accepts and then silently ignores them from any other account.
 - **Schedule.** The weekly plan and limited-speed rates in `get_schedule` / `set_schedule` need an administrator. Any other account can still turn the schedule on or off, and that switch is NAS-wide.
 
 **Known limits:**
@@ -439,7 +439,7 @@ File names, folder and album names, descriptions and a download's title may have
 
 - every reply starts with a line saying the text in it comes from the NAS or local files and isn't instructions, and the server instructions tell the model not to follow instructions found in it and to tell you about them;
 - control, line-break and bidirectional characters in that text are escaped, so a name can't write a line that looks like the server's;
-- a tool call is refused when it carries such characters, an argument the tool doesn't take, or text the MCP SDK would turn into something else; validation errors never repeat the values sent, and the unknown-argument refusal doesn't name the argument.
+- a tool call is refused when it carries such characters (except a Photos description and Download Station's URIs, which are escaped wherever they're shown), an argument the tool doesn't take, or text the MCP SDK would turn into something else. The MCP layer's own type checks never quote the value sent, and an unknown argument's name is never repeated; a tool's own refusal may quote what it refused, after the character check, so it can't start a line of its own.
 
 Wording isn't filtered: whether a model acts on planted text is up to the model. Each release candidate's live test plants some to check. [docs/prompt-injection.md](docs/prompt-injection.md) has each guard, why it exists and its tests.
 
@@ -645,7 +645,7 @@ Every model that has run the tools here, with what it was tested on and how it d
 | **Muse Wonder** | Meta Muse (Power Plan) | 0.11.0's live rounds (three release candidates) | Last round: 61 passed, 0 failed, 1 surprise. The surprise: it changed an album that wasn't shared and didn't follow the reply's "Use action=share first". In the earlier rounds its misses found two server bugs (Photos IDs and names), fixed in 0.11.0 | Reads and writes; it follows most hints in replies, not all |
 | **Muse Spark** | Meta Muse (free plan) | 0.10.0's live rounds | No fails in the rounds recorded | Reads and writes |
 
-The comparison holds the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station, on a virtual DSM 7.2.2 restored fresh for each model, as a non-admin user. The tasks, how each was graded and the per-task results are in [Comparing models](docs/live-testing.md#comparing-models).
+The comparison holds the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station, on a virtual DSM 7.2.2 restored fresh for each model, as a user who isn't an administrator. The tasks, how each was graded and the per-task results are in [Comparing models](docs/live-testing.md#comparing-models).
 
 ## Troubleshooting
 
