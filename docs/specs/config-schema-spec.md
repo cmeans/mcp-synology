@@ -473,7 +473,10 @@ schema_version: 1
 # connection block can be omitted entirely — SYNOLOGY_HOST env var
 # provides the host, port defaults from SYNOLOGY_HTTPS, etc. Set
 # SYNOLOGY_HTTPS=true unless the network is trusted: without it the password
-# crosses the network in cleartext.
+# crosses the network in cleartext. DSM's default certificate is self-signed:
+# install one the container trusts (docs/https.md), or set it off here:
+# connection:
+#   verify_ssl: false
 
 modules:
   filestation:
@@ -484,6 +487,7 @@ modules:
 With environment variables:
 ```
 SYNOLOGY_HOST=192.168.1.100
+SYNOLOGY_HTTPS=true
 SYNOLOGY_USERNAME=mcp-service
 SYNOLOGY_PASSWORD=secret
 SYNOLOGY_DEVICE_ID=AbCdEf123456

@@ -48,6 +48,9 @@ dev = [
     "types-PyYAML>=6.0",
     "types-regex>=2026.9.29",
     "respx>=0.22",
+    # tests/test_readme.py builds the wheel metadata with the build backend (#487)
+    "hatchling>=1.27",
+    "hatch-fancy-pypi-readme>=25.1",
 ]
 vdsm = [
     "testcontainers>=4.0",
@@ -66,7 +69,7 @@ Documentation = "https://github.com/cmeans/mcp-synology/tree/main/docs"
 # PyPI shows the README as the project page, where a relative link resolves against
 # pypi.org and breaks (#487). The build rewrites each one to the GitHub file at this
 # release's tag, so the page links to the docs as they were when it was published.
-# tests/test_readme.py checks the built text.
+# tests/test_readme.py builds the wheel's metadata and checks its long description.
 [tool.hatch.metadata.hooks.fancy-pypi-readme]
 content-type = "text/markdown"
 

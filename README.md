@@ -428,10 +428,20 @@ Spec: [`docs/specs/storage-module-spec.md`](docs/specs/storage-module-spec.md).
 - **Permission tiers**: READ or WRITE per module, enforced at tool registration. Tiers control what the server can do on the NAS. Tools that write on this machine (`download_file`, `download_photos`) are annotated as destructive so your client can confirm them, and so is every WRITE tool except `create_folder`, `rename`, `upload_photos`, `create_download`, `pause_download` and `resume_download`. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
 - **Long operations keep running**: a large delete, copy, move or recycle-bin restore reports progress while the call waits, and if it's still running when the wait ends (30 s by default) the NAS keeps working on it: the reply gives a handle for `file_task`, which checks on it, lists running operations or stops one. See [File Station](#file-station). Photos' `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` also hand off, after `task_timeout` (default 30 s, up to 600), with a `photos:<id>` handle for `photo_task`
 - **Local path confinement**: tools that read or write files on this machine use only the folders you list, by default your Downloads folder. See [Local paths](#local-paths)
-- **Text from the NAS is data**: file names, descriptions, album names and other text in a reply may have been written by someone else. Every reply says so on its first line, the server instructions tell the model not to follow instructions in it, and control and bidirectional characters in it are escaped so a name can't pose as the server's own line. Wording isn't filtered. See [docs/prompt-injection.md](docs/prompt-injection.md)
+- **Text from the NAS is data**: see [below](#text-from-the-nas-is-data)
 - **2FA support**: auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials**: OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS**: manage multiple NAS devices with separate configs, credentials, and state
+
+## Text from the NAS is data
+
+File names, folder and album names, descriptions, a download's title and a file's text may have been written by someone else, and they reach the model in tool replies. mcp-synology can't tell an instruction from a name, so it marks all such text as data:
+
+- every reply starts with a line saying the text in it comes from the NAS or local files and isn't instructions, and the server instructions tell the model not to follow instructions found in it and to tell you about them;
+- control, line-break and bidirectional characters in that text are escaped, so a name can't write a line that looks like the server's;
+- a tool call is refused when it carries such characters, an argument the tool doesn't take, or text the MCP SDK would turn into something else; and errors never repeat the values sent.
+
+Wording isn't filtered: whether a model acts on planted text is up to the model. Each release candidate's live test plants some to check. [docs/prompt-injection.md](docs/prompt-injection.md) has each guard, why it exists and its tests.
 
 ## Configuration
 
@@ -629,7 +639,7 @@ Every model that has run the tools here, with what it was tested on and how it d
 
 | Model | Client | Tested on | Results | Fit for |
 |---|---|---|---|---|
-| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0's last round: Claude Code 43 of 43 steps, claude.ai 78 of 79 (the one miss was the server's: a stop that took DSM 60 s to answer, fixed in this release). Comparison (0.11.0): 12 of 12 | Everything, writes and deletes included |
+| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0's last round: Claude Code 43 of 43 steps, claude.ai 78 of 79 (the one miss was the server's: a stop DSM was slow to answer, fixed in this release). Comparison (0.11.0): 12 of 12 | Everything, writes and deletes included |
 | **Claude Sonnet 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 12 of 12. 0.11.0: 12 of 12 | Everything, writes and deletes included |
 | **Claude Haiku 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 11 of 12. 0.11.0: 9 of 11 (a twelfth task depended on one it missed, so it isn't scored). Both runs missed the same task: it didn't match a download by its source URL, so it deleted nothing. In 0.11.0 it also refused a copy, reading the server's connection-name line as forbidding a request that didn't name the NAS | Reads; check its writes, and confirm deletes yourself |
 | **Muse Wonder** | Meta Muse (Power Plan) | 0.11.0's live rounds (three release candidates) | Last round: 61 of 62 steps. The miss: it changed an album that wasn't shared and didn't follow the reply's "Use action=share first". In the earlier rounds its misses found two server bugs (Photos IDs and names), fixed in this release | Reads and writes; it follows most hints in replies, not all |
