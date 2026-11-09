@@ -38,6 +38,12 @@ _ALBUM_ACTIONS = (
     "create_smart",
     "set_condition",
 )
+# Condition keys renamed in 0.11.0 (#615): an ID and a name or path in separate keys.
+_RENAMED_CONDITION_KEYS = {
+    "people": ("person_ids", "person_names"),
+    "folders": ("folder_ids", "folder_paths"),
+}
+_MEMBER_KEYS = ("name", "type", "role")
 _CONDITION_KEYS = (
     "folder_ids",
     "folder_paths",
@@ -296,13 +302,21 @@ def condition_id(op: str, value: object, key: str) -> Ref:
 async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
     """The tool's condition (names, dates) as DSM's (IDs, Unix times, policies)."""
     op = ph.operation
-    unknown = sorted(set(given) - set(_CONDITION_KEYS))
+    unknown = [k for k in given if k not in _CONDITION_KEYS]
     if unknown:
+        # The server's own text only, as for unknown arguments (#615): a renamed key's
+        # replacements, never a key the caller wrote, which could carry an instruction.
+        renamed = [k for k in _RENAMED_CONDITION_KEYS if k in unknown]
+        parts = [
+            f"`{k}` is now `{_RENAMED_CONDITION_KEYS[k][0]}` or `{_RENAMED_CONDITION_KEYS[k][1]}`."
+            for k in renamed
+        ]
+        if len(unknown) > len(renamed):
+            parts.append(f"{len(unknown) - len(renamed)} key(s) aren't condition keys.")
         invalid(
             op,
-            f"unknown condition key(s): {', '.join(unknown)}.",
+            "condition: " + " ".join(parts),
             param="condition",
-            value=given,
             valid=list(_CONDITION_KEYS),
         )
     useful = [
@@ -439,6 +453,16 @@ async def photo_share_link(
     for member in members or []:
         if not isinstance(member, dict) or not member.get("name"):
             invalid(op, "each member needs a name.", param="members", value=member)
+        if any(k not in _MEMBER_KEYS for k in member):
+            # Dropped, it would leave the default: `{"name": "bob", "Role": "none"}`, meant to
+            # remove bob, gave him view access (pre-QA r5 on #615). Not echoed: the caller
+            # wrote it.
+            invalid(
+                op,
+                "a member has a key other than name, type and role; nothing was changed.",
+                param="members",
+                valid=list(_MEMBER_KEYS),
+            )
         if member.get("type", "user") not in ("user", "group"):
             invalid(op, "member type must be user or group.", param="members", value=member)
         if member.get("role", "view") not in _ROLES:

@@ -394,8 +394,9 @@ async def upload_photos(
     op = "Upload photos"
     sp = check_space(op, space)
     album = one_ref(op, "album", album_id, album_name, required=False)
-    # Required, the root included (`folder_path="/"`): a folder argument lost on the way (an
-    # old name a client dropped) mustn't upload into the root instead (#615).
+    # Required, the root included (`folder_path="/"`), checked below after the local paths: a
+    # folder argument lost on the way (an old name a client dropped) mustn't upload into the
+    # root instead (#615).
     folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
     if on_duplicate not in _DUPLICATE:
         invalid(
