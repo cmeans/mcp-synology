@@ -61,7 +61,7 @@ What's not covered yet, in short:
 - **File Station:** compress and extract, share links, favorites, thumbnails, MD5 checksums, permissions and ownership changes, mounting remote folders.
 - **Synology Photos:** timeline and similar-photo views, video streaming, Shared Space folder permissions, face-level People edits, guest uploads to photo requests, Photos' own settings.
 - **Download Station:** BT search, RSS feeds, choosing files inside a torrent, editing a torrent's trackers, settings other than speed limits and the default destination.
-- **Storage:** no WRITE tools yet (phase 2: scrubbing, S.M.A.R.T. tests, hot spares, settings, snapshots); no iSCSI LUNs and SAN Manager, Hyper Backup or Task Scheduler. Never anything that wipes disks or changes a pool's layout.
+- **Storage:** no WRITE tools (no scrubbing, S.M.A.R.T. tests, hot spares, settings or snapshot changes); no iSCSI LUNs and SAN Manager, Hyper Backup or Task Scheduler. Never anything that wipes disks or changes a pool's layout.
 
 ## Testing
 
@@ -409,12 +409,12 @@ Spec: [`docs/specs/downloadstation-module-spec.md`](docs/specs/downloadstation-m
 See the health of the NAS's storage: storage pools and RAID, volumes and free space, disks with S.M.A.R.T., SSD caches, external drives and share snapshots.
 
 - **READ:** `get_storage_overview`, `list_storage_pools`, `list_volumes`, `get_volume`, `list_disks`, `get_disk`, `list_ssd_caches`, `get_storage_schedules`, `get_storage_settings`, `list_external_storage`, `list_snapshots`
-- **WRITE:** none yet (phase 2)
+- **WRITE:** none
 
 ```yaml
 modules:
   storage:
-    enabled: true   # no write tools yet, so no permission is needed
+    enabled: true   # no write tools, so no permission is needed
 ```
 
 **Settings:** none.
@@ -425,7 +425,7 @@ modules:
 
 **DSM versions:** 7.1 – 7.4.1, the same tools on each. A volume's encryption and lock state, a snapshot's immutable flag and the drive database version appear from DSM 7.2.2. A section a NAS doesn't support (deduplication on some models, for example) is left out with a note.
 
-**Not covered:** no WRITE tools yet: phase 2 plans data scrubbing, S.M.A.R.T. tests, hot spares, storage settings, TRIM and snapshot management. iSCSI LUNs and SAN Manager, Hyper Backup and Task Scheduler aren't covered. Anything that wipes disks or changes a pool's layout (creating, deleting, expanding or repairing pools and volumes, secure erase) is left out on purpose.
+**Not covered:** no WRITE tools: no data scrubbing, S.M.A.R.T. tests, hot spares, storage settings, TRIM or snapshot management. iSCSI LUNs and SAN Manager, Hyper Backup and Task Scheduler aren't covered. Anything that wipes disks or changes a pool's layout (creating, deleting, expanding or repairing pools and volumes, secure erase) is left out on purpose.
 
 Spec: [`docs/specs/storage-module-spec.md`](docs/specs/storage-module-spec.md).
 
