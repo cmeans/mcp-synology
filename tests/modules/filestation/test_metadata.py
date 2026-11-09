@@ -264,16 +264,22 @@ class TestGetFileInfoMissingPaths:
         self, mock_client: DsmClient, codes: tuple[int, int], mapped_code: int
     ) -> None:
         """QA round 3 on #606: only every path missing (408) gets the shared suggestion. A
-        path DSM won't let the user read (407), alone or beside a missing one, keeps the
-        advice of the code the error reports."""
+        path DSM won't let the user read (407), alone or beside a missing one, keeps its
+        code's own advice; beside a missing one, after 408's (pre-QA r3 on #623)."""
         paths = ["/a/x", "/a/y"]
         self._route({p: {"code": c, "path": p} for p, c in zip(paths, codes, strict=True)})
         with pytest.raises(ToolError) as exc_info:
             await get_file_info(mock_client, paths=paths)
         suggestion = json.loads(str(exc_info.value))["error"]["suggestion"]
+        err = json.loads(str(exc_info.value))["error"]
         expected = error_from_code(mapped_code, "SYNO.FileStation.List").suggestion
         assert expected
-        assert suggestion == expected, suggestion
+        perm = error_from_code(407, "SYNO.FileStation.List").suggestion
+        if mapped_code == 407:
+            assert (err["code"], suggestion) == ("permission_denied", expected), err
+        else:
+            assert err["code"] == "not_found", err
+            assert suggestion == f"{expected} For one with no permission: {perm}", suggestion
         assert not suggestion.startswith("Check the paths with list_files or search_files")
 
     @respx.mock

@@ -35,12 +35,14 @@ from mcp_synology.modules.filestation.helpers import (
     ensure_recycle_status,
     find_missing_paths,
     missing_paths_suggestion,
+    missing_text,
     name_key,
     normalize_path,
     path_exists,
     paths_isdir,
     probe_recycle_status,
     shown,
+    unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
     ResolvedPath,
@@ -423,15 +425,17 @@ async def _refuse_missing_sources(
     except SynologyError as e:
         synology_error_response(f"{operation} files", e)
     if missing:
+        # Each path in words, and the code DSM gave (#620: a 407 was called "not found").
+        err_code, suggestion = unreadable_paths_error(missing)
         error_response(
-            ErrorCode.NOT_FOUND,
-            f"{operation} files refused: not found: "
-            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in missing)
+            err_code,
+            f"{operation} files refused: "
+            + "; ".join(missing_text(p, c) for p, c in missing)
             + f". Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
             retryable=False,
             param="paths",
             value=original,
-            suggestion=missing_paths_suggestion(missing),
+            suggestion=suggestion,
         )
 
 
@@ -961,11 +965,11 @@ async def _copy_move(
             for q in normalized
             if (t := f"{dest}/{q.rsplit('/', 1)[-1]}") != q and not made_here(t)
         }
-    # One request per target, all sent at once, before the checks below: awaited only for the
-    # reply, after every task started, so this call's landing records and starts aren't
-    # delayed (#597; pre-QA on #623 measured a parallel call slipping in when they were).
-    # At most a few at once: an overwrite of hundreds of items mustn't burst requests at DSM
-    # ahead of the checks that share the connection pool (pre-QA r2 on #623).
+    # One request per target, started before the checks below and awaited after this call's
+    # landing records and before its first start, so the records aren't delayed (#597; pre-QA
+    # on #623 measured a parallel call slipping in when they were) and the lookups can't see
+    # this call's own landing. At most 4 at once: an overwrite of hundreds of items mustn't
+    # burst requests at DSM ahead of the checks that share the connection pool (pre-QA r2).
     gate = asyncio.Semaphore(4)
 
     async def look(target: str) -> dict[str, bool]:
@@ -1000,9 +1004,9 @@ async def _copy_move(
         )
     finally:
         for future in lookups.values():
+            # Stops one still waiting; on one that failed, cancel() also marks its exception
+            # as seen, so asyncio never logs it as never retrieved.
             future.cancel()
-            if future.done() and not future.cancelled():
-                future.exception()  # retrieved, so an unawaited failure isn't logged
 
 
 async def _replaced(
@@ -1276,6 +1280,9 @@ async def _copy_move_summary(
             "\nMerged into the folder(s) already there, replacing files with the same names: "
             + ", ".join(over_folders)
         )
+    if over_files or over_folders:
+        # As the tools' descriptions warn: vdsm's /home kept no copy (pre-QA r3 on #623).
+        lines.append("A file replaced this way may not be in the recycle bin.")
 
     if total_processed > 0:
         lines.append(f"\nTotal size: {format_size(total_processed)}")
@@ -1481,15 +1488,16 @@ async def delete_files(
     except SynologyError as e:
         synology_error_response("Delete files", e)
     if missing:
+        err_code, suggestion = unreadable_paths_error(missing)
         error_response(
-            ErrorCode.NOT_FOUND,
-            "Delete files refused: not found: "
-            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in missing)
+            err_code,
+            "Delete files refused: "
+            + "; ".join(missing_text(p, c) for p, c in missing)
             + ". Nothing was deleted.",
             retryable=False,
             param="paths",
             value=paths,
-            suggestion=missing_paths_suggestion(missing),
+            suggestion=suggestion,
         )
 
     # Pin to v2 — v3 uses JSON request format with different parameter encoding.

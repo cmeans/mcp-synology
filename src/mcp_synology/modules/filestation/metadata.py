@@ -24,10 +24,12 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
+    missing_text,
     normalize_path,
     shown,
     task_request,
     unanswered_status_response,
+    unreadable_paths_error,
     validate_additional,
 )
 
@@ -50,15 +52,6 @@ async def _stop_dirsize_task(client: DsmClient, taskid: str) -> None:
         logger.warning("DirSize task cleanup failed for %s: %s", taskid, e)
     except Exception:
         logger.warning("DirSize task cleanup failed for %s", taskid, exc_info=True)
-
-
-def _missing_text(path: str, code: int) -> str:
-    """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
-    model to translate DSM's code), keeping the code."""
-    why = {408: "doesn't exist", 407: "no permission", 105: "no permission"}.get(
-        code, "can't be read"
-    )
-    return f"{shown(path)}: {why} (DSM error {code})"
 
 
 async def get_file_info(
@@ -127,25 +120,23 @@ async def get_file_info(
                 files.append(entry)
 
     if missing and not files:
-        codes = {code for _, code in missing}
-        mapped = error_from_code(codes.pop() if len(codes) == 1 else 408, "SYNO.FileStation.List")
+        # The code and advice follow what DSM said for each path (#620); a missing one gets
+        # the shared suggestion, which leads with the escaped-name advice when the paths hold
+        # escapes instead of "check with list_files" (#606).
+        err_code, suggestion = unreadable_paths_error(missing)
         error_response(
-            mapped.error_code,
+            err_code,
             "Get file info failed: "
-            + "; ".join(_missing_text(path, code) for path, code in missing)
+            + "; ".join(missing_text(path, code) for path, code in missing)
             + ".",
             retryable=False,
             param="paths",
             value=paths,
-            # Every path missing (408): the shared suggestion, which leads with the escaped-name
-            # advice when the paths hold escapes instead of "check with list_files" (#606).
-            suggestion=missing_paths_suggestion(missing)
-            if all(code == 408 for _, code in missing)
-            else mapped.suggestion or "Check the paths with list_files or search_files.",
+            suggestion=suggestion,
         )
 
     notes = "".join(
-        "\n" + format_status(_missing_text(path, code), success=False) for path, code in missing
+        "\n" + format_status(missing_text(path, code), success=False) for path, code in missing
     )
     if any(holds_escape(path) for path, _ in missing):
         # Some paths found: the missing ones get only a note, and listing again would show the

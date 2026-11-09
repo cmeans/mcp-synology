@@ -15,7 +15,7 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
+from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
     ESCAPED_NAME_ADVICE,
     RGI_FLAG_TAGS,
@@ -1026,6 +1026,45 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
             if isinstance(entry.get("isdir"), bool):
                 kinds[path] = entry["isdir"]
     return kinds
+
+
+_NO_PERMISSION = frozenset({105, 407})
+
+
+def missing_text(path: str, code: int) -> str:
+    """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
+    model to translate DSM's code; a 407 was called "not found"), keeping the code."""
+    why = (
+        "no permission"
+        if code in _NO_PERMISSION
+        else {408: "doesn't exist"}.get(code, "can't be read")
+    )
+    return f"{shown(path)}: {why} (DSM error {code})"
+
+
+def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, str]:
+    """The error code and suggestion for paths ``getinfo`` answered with a code (#620): every
+    path refused for permission is ``permission_denied``, every missing one ``not_found``;
+    a mix gets each kind's own advice (408's, not the shared "retry with paths that exist",
+    which a path refused for permission can't follow: QA round 3 on #606)."""
+    codes = [code for _, code in missing]
+    perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
+    if codes and all(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, perm
+    if all(code == 408 for code in codes):
+        return ErrorCode.NOT_FOUND, missing_paths_suggestion(missing)
+    parts = []
+    if 408 in codes:
+        parts.append(error_from_code(408, "SYNO.FileStation.List").suggestion or "")
+    if any(code in _NO_PERMISSION for code in codes):
+        parts.append(f"For one with no permission: {perm}")
+    if any(code != 408 and code not in _NO_PERMISSION for code in codes):
+        parts.append("One that can't be read may answer on a retry.")
+    if 408 in codes:
+        return ErrorCode.NOT_FOUND, " ".join(parts)
+    if any(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, " ".join(parts)
+    return error_from_code(codes[0], "SYNO.FileStation.List").error_code, " ".join(parts)
 
 
 def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
