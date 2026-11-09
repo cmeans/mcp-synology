@@ -439,7 +439,7 @@ File names, folder and album names, descriptions and a download's title may have
 
 - every reply starts with a line saying the text in it comes from the NAS or local files and isn't instructions, and the server instructions tell the model not to follow instructions found in it and to tell you about them;
 - control, line-break and bidirectional characters in that text are escaped, so a name can't write a line that looks like the server's;
-- a tool call is refused when it carries such characters (except a Photos description and Download Station's URIs, which are escaped wherever they're shown), an argument the tool doesn't take, or text the MCP SDK would turn into something else. The MCP layer's own type checks never quote the value sent, and an unknown argument's name is never repeated; a tool's own refusal may quote what it refused, after the character check, so it can't start a line of its own.
+- a tool call is refused when it carries such characters (except a Photos description and Download Station's URIs, which are escaped wherever they're shown), an argument the tool doesn't take, or text the MCP SDK would turn into something else. The MCP layer's own type checks never quote the value sent, and an unknown argument's name is never repeated, except a renamed parameter's old name, from the server's own table; a tool's own refusal may quote what it refused, after the character check, so it can't start a line of its own.
 
 Wording isn't filtered: whether a model acts on planted text is up to the model. Each release candidate's live test plants some to check. [docs/prompt-injection.md](docs/prompt-injection.md) has each guard, why it exists and its tests.
 
