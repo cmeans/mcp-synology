@@ -1629,6 +1629,75 @@ class TestFileTask:
         ), text
 
     @respx.mock
+    async def test_a_slow_stop_of_a_task_already_gone_isnt_called_stopped(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA on #632: the reads before the stop already said 599 (the stop is sent
+        anyway, QA round 2 on #590); gone after it isn't the stop working."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("method") == "stop":
+                raise httpx.ReadTimeout("slow")
+            return _err(599)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert text.startswith("DSM has no task with this handle:"), text
+        assert "A stop was sent, but DSM can't confirm it." in text
+        assert "Stopped" not in text
+
+    @respx.mock
+    async def test_one_599_after_a_slow_stop_isnt_a_verdict(self, mock_client: DsmClient) -> None:
+        """Pre-QA on #632 (#521's rule): a 599 that passes is read again."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        statuses = [_ok(RUNNING), _err(599), _ok(RUNNING)]
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("method") == "stop":
+                raise httpx.ReadTimeout("slow")
+            return statuses.pop(0)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert "DSM hasn't confirmed it yet: the task still shows as running" in text, text
+        assert not statuses
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("after", "why"),
+        [
+            (httpx.Response(502, text="bad gateway"), "DSM's answer to a status check couldn't"),
+            (httpx.Response(200, text="<html>login</html>"), "DSM's answer to a status check"),
+            (_ok([1]), "DSM's answer to a status check couldn't be read"),  # type: ignore[arg-type]
+            (_err(105), "a status check got DSM error 105"),
+        ],
+        ids=["http-502", "not-dsm", "not-an-object", "dsm-code"],
+    )
+    async def test_an_unreadable_status_after_a_slow_stop_says_it_isnt_known(
+        self, mock_client: DsmClient, after: httpx.Response, why: str
+    ) -> None:
+        """Pre-QA on #632: these went to a "Stop task failed" error (retryable, no word of the
+        stop sent) or a raw AttributeError."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._slow_stop(after))
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert text.startswith(
+            "A stop was sent for the copy of `copy:FileStation_C1`, but DSM was slow to answer it "
+            "and "
+        ), text
+        assert why in text, text
+        assert "whether it stopped isn't known" in text
+
+    @respx.mock
     async def test_a_slow_stop_and_status_says_it_isnt_known(self, mock_client: DsmClient) -> None:
         from mcp_synology.modules.filestation.tasks import file_task
 

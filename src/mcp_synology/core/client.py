@@ -640,8 +640,8 @@ class DsmClient:
         only. Write and pool keep the client's default, and so does connect unless
         ``read_timeout`` is shorter: then it's the connect timeout too, or an unreachable
         NAS would still take the client's default to fail (#545). File Station task stops
-        use 90 s (#245): DSM 7.1 sometimes answers a Delete ``stop`` only after ~60 s,
-        although the stop takes effect at once.
+        use ``tasks.STOP_WAIT`` (15 s, #630): DSM 7.1 sometimes answers a ``stop`` only after
+        ~60 s, although the stop takes effect at once, so the task's status decides.
         """
 
         # Resolve API path and version

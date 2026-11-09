@@ -199,7 +199,7 @@ async def _stopped_at_exit(client: DsmClient, records: TaskRecords) -> AsyncIter
             except Exception as e:
                 reply = f"{type(e).__name__}: {e}"
             print(f"cleanup stop {handle}: {reply}")
-        # Fail here, not in a later test, if a task outlives its test (90 s: see _stop).
+        # Fail here, not in a later test, if a task outlives its test (90 s: a late stop).
         deadline = time.monotonic() + 90
         while handles:
             listing = await file_task(client, records=records)
@@ -225,20 +225,18 @@ async def _until_finished(
 
 
 async def _stop(client: DsmClient, records: TaskRecords, handle: str, expected: str) -> None:
-    """Stop a running task: "Stopped ...", or DSM 7.1's late answer as a structured timeout.
+    """Stop a running task: "Stopped ...", or a reply for DSM 7.1's late answer.
 
     DSM 7.1 sometimes answers a Delete ``stop`` only after about 60 s, although the
     delete halts at once (the file count froze at the stop; seen in 4 of 7 full 7.1
-    runs, never on 7.2.2). With the 30 s client timeout, file_task then reports a
-    ``timeout`` saying the stop may or may not have taken effect.
+    runs, never on 7.2.2). file_task waits ``STOP_WAIT`` (15 s) for the answer, then the
+    task's status decides (#630): "Stopped …" when the task is gone, or "A stop was sent …
+    hasn't confirmed it yet" while it still shows as running, never a claim it stopped.
     """
-    try:
-        stopped = await file_task(client, records=records, handle=handle, action="stop")
-    except ToolError as e:
-        error = json.loads(str(e))["error"]
-        assert error["code"] == "timeout", error
-        assert "The stop may or may not have taken effect." in error["message"], error
-        print(f"stop of {handle} answered late (DSM 7.1 stall): {error['message']}")
+    stopped = await file_task(client, records=records, handle=handle, action="stop")
+    if stopped.startswith("A stop was sent for the "):
+        assert "Stopped" not in stopped, stopped
+        print(f"stop of {handle} answered late (DSM 7.1 stall): {stopped}")
         return
     assert stopped.startswith(expected), stopped
 
