@@ -939,6 +939,30 @@ class TestDownloadIsTheFile:
         assert [p.name for p in tmp_path.iterdir()] == ["movie.mkv"]
 
     @respx.mock
+    async def test_the_retry_after_a_new_login_checks_the_size_too(self, tmp_path: Path) -> None:
+        """The download sent again after the session envelope keeps expected_size: a short
+        body then is refused as it would be the first time."""
+        from mcp_synology.core.errors import DsmReplyError
+
+        envelope = httpx.Response(200, content=b'{"success": false, "error": {"code": 119}}')
+        short = httpx.Response(
+            200, content=b"y" * 10, headers={"content-type": "application/octet-stream"}
+        )
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=[envelope, short])
+
+        async def reauth() -> None:
+            return None
+
+        dest = tmp_path / "movie.mkv"
+        dest.write_bytes(b"the user's file")
+        client = make_client(make_api_cache())
+        async with client:
+            client.set_re_auth_callback(reauth)
+            with pytest.raises(DsmReplyError):
+                await client.download("/video/movie.mkv", dest, expected_size=1000)
+        self._untouched(tmp_path, dest)
+
+    @respx.mock
     @pytest.mark.parametrize(("api", "method"), _DOWNLOADS)
     @pytest.mark.parametrize(
         "ctype", ["application/octet-stream", "application/force-download", "image/jpeg"]
