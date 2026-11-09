@@ -321,21 +321,35 @@ _RENAMED = {
 }
 
 
+def _sdk_parses(raw: object) -> bool:
+    """Whether the SDK reads a string argument for this parameter (its served, uncompacted
+    schema) as JSON first: for every parameter not typed plain ``str`` (its ``pre_parse_json``
+    checks ``annotation is not str``). A plain ``str``, ``Annotated`` included, is served as a
+    bare ``{"type": "string"}``; an optional one has ``anyOf``, a ``Literal`` ``enum`` or
+    ``const``. ``tests/core/test_server.py`` checks this against the SDK's rule for every
+    tool."""
+    if not isinstance(raw, dict):
+        return True
+    return raw.get("type") != "string" or any(k in raw for k in ("anyOf", "enum", "const"))
+
+
 def _refuse_text_the_sdk_would_parse(
-    tool: str, arguments: dict[str, Any], schemas: dict[str, Any]
+    tool: str, arguments: dict[str, Any], schemas: dict[str, Any], parsed_text: set[str]
 ) -> None:
     """Refuse text for a text parameter that the SDK would read as JSON and replace (#621).
 
     The SDK parses a string argument as JSON for any parameter not typed plain ``str``, for
     clients that send a list as a JSON string, and keeps the result unless it's a string or a
     number: `"null"` becomes None, so `album_name="null"` was dropped and the call ran
-    without it; `"true"` and `"[1]"` became a bool and a list. For a parameter the schema says
-    is text, that's never what the caller meant, so it's refused, without quoting the text."""
+    without it; `"true"` and `"[1]"` became a bool and a list. For such a parameter that the
+    schema says is text (``parsed_text``), that's never what the caller meant, so it's
+    refused, without quoting the text. A plain ``str`` parameter gets its text as sent
+    (`rename new_name="[2024]"`), so it's left alone."""
     for key, value in arguments.items():
         schema = schemas.get(key)
         if not isinstance(value, str) or not isinstance(schema, dict):
             continue
-        if schema.get("type") != "string":
+        if key not in parsed_text or schema.get("type") != "string":
             continue
         try:
             parsed = json.loads(value)  # a tool argument, as the SDK would parse it
@@ -349,8 +363,9 @@ def _refuse_text_the_sdk_would_parse(
                 "something other than text. Nothing was done.",
                 retryable=False,
                 param=key,
-                suggestion="For a name or path the NAS really has, rename it in DSM; otherwise "
-                "pass the text you meant.",
+                suggestion="This exact text can't be passed here. For a name on the NAS, use "
+                "the item's ID where the tool takes one, or rename it in DSM; for a password, "
+                "choose another; otherwise check the value is the one you meant.",
             )
 
 
@@ -471,14 +486,18 @@ class _SynologyServer(MCPServer):
                 )
         return _labeled(result)
 
-    async def _parameters(self, name: str) -> dict[str, Any] | None:
-        """Tool ``name``'s parameters and their schemas as served (compacted), from the
+    async def _parameters(self, name: str) -> tuple[dict[str, Any], set[str]] | None:
+        """Tool ``name``'s parameters and their schemas as served (compacted), and the ones
+        whose string arguments the SDK reads as JSON first (``_sdk_parses``), from the
         documented ``list_tools()``; None for an unknown tool."""
         for tool in await super().list_tools():
             if tool.name == name:
+                raw = (tool.input_schema or {}).get("properties", {})
                 schema = _compact_schema(tool.input_schema or {})
                 properties = schema.get("properties", {})
-                return dict(properties) if isinstance(properties, dict) else {}
+                compact = dict(properties) if isinstance(properties, dict) else {}
+                raws = raw if isinstance(raw, dict) else {}
+                return compact, {k for k in compact if _sdk_parses(raws.get(k))}
         return None
 
     async def _take_update_notice(self) -> str:
@@ -516,14 +535,15 @@ class _SynologyServer(MCPServer):
         if forges(name):
             # The SDK echoes an unknown tool's name ("Unknown tool: ..."), raw.
             raise ToolError("Unknown tool: its name has a character a reply can't show as is.")
-        accepted = await self._parameters(name)
-        if accepted is None:
+        parameters = await self._parameters(name)
+        if parameters is None:
             # The SDK's "Unknown tool: <name>" quotes the caller's text (#619).
             raise ToolError("Unknown tool: no tool has that name. List the tools again.")
+        accepted, parsed_text = parameters
         try:
             # First, so the forging check below names only the tool's own parameters.
             _refuse_unknown_arguments(name, arguments, set(accepted))
-            _refuse_text_the_sdk_would_parse(name, arguments, accepted)
+            _refuse_text_the_sdk_would_parse(name, arguments, accepted, parsed_text)
             _refuse_forging_arguments(arguments)
         except ToolError as refused:
             raise ToolError(f"{prefix}{refused}") from None

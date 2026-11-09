@@ -31,6 +31,7 @@ from mcp_synology.server import (
     REPLY_LABEL,
     SharedClientManager,
     _compact_schema,
+    _sdk_parses,
     _strip_html_comments,
     _SynologyServer,
     config_notices,
@@ -2926,6 +2927,47 @@ class TestTextTheSdkWouldParse:
         async with Client(server) as client:
             result = await client.call_tool("list_photos", {"album_name": value})
         assert "reads as JSON" not in _reply(result)
+
+    @pytest.mark.parametrize("value", ["[2024]", "true", "null", "{}"])
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            ("rename", {"path": "/video/a"}),
+            ("list_files", {}),
+            ("get_download_info", {}),
+        ],
+    )
+    async def test_a_plain_str_parameter_gets_its_text_as_sent(
+        self, tool: str, args: dict[str, Any], value: str
+    ) -> None:
+        """Pre-QA on #622: the SDK leaves a plain `str` argument as given, so a folder named
+        `[2024]` can still be a rename's new name; the text reaches DSM unchanged."""
+        param = {"rename": "new_name", "list_files": "path", "get_download_info": "task_id"}[tool]
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        with respx.mock(assert_all_called=False) as router:
+            route = router.route().respond(500)
+            async with Client(server) as client:
+                result = await client.call_tool(tool, {**args, param: value})
+        assert "reads as JSON" not in _reply(result)
+        assert route.called
+
+    async def test_the_parameters_checked_are_the_ones_the_sdk_parses(self) -> None:
+        """`_sdk_parses` reads the served schema; the SDK decides by the annotation
+        (`pre_parse_json`: `annotation is not str`). They must agree on every parameter of
+        every tool, or text is refused that would arrive as sent, or let through to be
+        replaced."""
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        # The SDK's own list, before the compaction (#163) drops `anyOf` null.
+        served = {t.name: t for t in await MCPServer.list_tools(server)}
+        checked = 0
+        for name, tool in server._tool_manager._tools.items():
+            raw = (served[name].input_schema or {}).get("properties", {})
+            for field_name, field in tool.fn_metadata.arg_model.model_fields.items():
+                key = field.alias or field_name
+                sdk = field.annotation is not str
+                assert _sdk_parses(raw.get(key)) is sdk, (name, key, raw.get(key))
+                checked += 1
+        assert checked > 200, checked
 
     async def test_a_list_parameter_still_takes_a_json_string_list(self) -> None:
         """Claude Desktop sends lists as JSON strings; those are the SDK's to parse."""
