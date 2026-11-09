@@ -478,10 +478,12 @@ class _SynologyServer(MCPServer):
             # The SDK echoes an unknown tool's name ("Unknown tool: ..."), raw.
             raise ToolError("Unknown tool: its name has a character a reply can't show as is.")
         accepted = await self._parameters(name)
+        if accepted is None:
+            # The SDK's "Unknown tool: <name>" quotes the caller's text (#619).
+            raise ToolError("Unknown tool: no tool has that name. List the tools again.")
         try:
-            if accepted is not None:
-                # First, so the forging check below names only the tool's own parameters.
-                _refuse_unknown_arguments(name, arguments, accepted)
+            # First, so the forging check below names only the tool's own parameters.
+            _refuse_unknown_arguments(name, arguments, accepted)
             _refuse_forging_arguments(arguments)
         except ToolError as refused:
             raise ToolError(f"{prefix}{refused}") from None
@@ -508,6 +510,58 @@ class _SynologyServer(MCPServer):
             # the SDK's ERROR-level log with the traceback, which a plain ToolError (logged
             # at INFO) would lose (#114).
             raise UnexpectedToolError(f"{prefix}{text or type(cause).__name__}") from cause
+        except ToolError as exc:
+            if not isinstance(exc.__cause__, ValidationError):
+                raise
+            # pydantic's message quotes the arguments, values included: a password came
+            # back in the reply (#619). Rewritten with the fields and what's wrong only; the
+            # cause stays, so the SDK still logs just the field names.
+            try:
+                _validation_error_response(name, exc.__cause__)
+            except ToolError as structured:
+                raise ToolError(f"{prefix}{structured}") from exc.__cause__
+
+
+def _validation_error_response(tool: str, error: ValidationError) -> NoReturn:
+    """``error`` (the SDK's argument validation) as a structured error that names each field
+    and what's wrong with it, never the value: pydantic's own text quotes the input, a
+    password included (#619). Only the top-level field is named: it's one of the tool's own
+    parameters (unknown ones are refused before this), while a deeper location could hold a
+    key the caller wrote."""
+    problems: dict[str, str] = {}
+    for err in error.errors(include_url=False, include_input=False, include_context=False):
+        field = str(err["loc"][0]) if err["loc"] else "arguments"
+        message = (
+            "is required"
+            if err["type"] == "missing"
+            else _VALIDATION_MESSAGES.get(err["type"], "has a value of the wrong type or form")
+        )
+        problems.setdefault(field, message)
+    text = "; ".join(f"`{field}` {message}" for field, message in problems.items())
+    error_response(
+        ErrorCode.INVALID_PARAMETER,
+        f"{tool} failed: {text}. Nothing was done.",
+        retryable=False,
+        param=next(iter(problems), None),
+        suggestion="Check those parameters against the tool's input schema and try again.",
+    )
+
+
+# pydantic error types the reply explains in words of its own, never pydantic's message (which
+# can quote the input).
+_VALIDATION_MESSAGES = {
+    "int_type": "must be a whole number",
+    "int_parsing": "must be a whole number",
+    "int_from_float": "must be a whole number",
+    "string_type": "must be text",
+    "bool_type": "must be true or false",
+    "bool_parsing": "must be true or false",
+    "list_type": "must be a list",
+    "dict_type": "must be an object",
+    "float_type": "must be a number",
+    "float_parsing": "must be a number",
+    "value_error": "has a value it doesn't take",
+}
 
 
 def _labeled(result: CallToolResult) -> CallToolResult:
