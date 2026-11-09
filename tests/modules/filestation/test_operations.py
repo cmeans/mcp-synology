@@ -7235,9 +7235,9 @@ class TestSourcesDsmWontShow:
         ), message
 
     @staticmethod
-    def _failing_second(exists: dict[str, bool]) -> Any:
-        """getinfo from ``exists`` (path -> isdir; others 408); the second start's task fails
-        with 1004."""
+    def _failing_second(exists: dict[str, bool], fail_at: int = 2) -> Any:
+        """getinfo from ``exists`` (path -> isdir; others 408); the ``fail_at``-th start's
+        task fails with 1004."""
         starts: list[str] = []
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -7255,8 +7255,8 @@ class TestSourcesDsmWontShow:
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
                 data: dict[str, Any] = {"finished": True, "processed_size": 1}
-                if len(starts) == 2:
-                    data = {"finished": True, "error": {"code": 1004}, "path": starts[1]}
+                if len(starts) == fail_at:
+                    data = {"finished": True, "error": {"code": 1004}, "path": starts[-1]}
                 return httpx.Response(200, json={"success": True, "data": data})
             return httpx.Response(200, json={"success": True, "data": {}})
 
@@ -7412,3 +7412,92 @@ class TestSourcesDsmWontShow:
             "Merged into the folder(s) already there, replacing files with the same names:\n  a"
             in out
         ), out
+
+    @respx.mock
+    async def test_the_failure_note_names_the_other_kind_and_unchecked_items(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r6 on #623: on a failure, a kind mismatch is named without the recycle-bin
+        line, and a failed lookup isn't read as "nothing was there"."""
+        base = self._failing_second(
+            {
+                "/w/dst": True,
+                "/w/dst/f": True,
+                "/w/src/f": False,
+                "/w/src/u.txt": False,
+                "/w/src/g": False,
+            },
+            fail_at=3,
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("path") == "/w/dst/u.txt":
+                return httpx.Response(502, text="bad gateway")
+            return base(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/f", "/w/src/u.txt", "/w/src/g"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/f, /w/src/u.txt. Of what was copied, "
+            "these met an item of the other kind (a file or a folder) under the same name, and "
+            "what DSM did with it isn't known: /w/src/f; for these, whether anything was "
+            "already there couldn't be checked: /w/src/u.txt."
+        ), message
+        assert "recycle bin" not in message, message
+
+    @respx.mock
+    async def test_a_not_started_name_cant_move_the_note(self, mock_client: DsmClient) -> None:
+        """Pre-QA r6 on #623: the note went before the last ". Not started: " in the message,
+        which a source's own name could hold. A name with ", " is quoted in the note."""
+        evil = "/w/src/b. Not started: c"
+        exists = {
+            "/w/dst": True,
+            "/w/dst/a, b": False,
+            "/w/src/a, b": False,
+            "/w/src/f": False,
+            evil: False,
+        }
+        starts: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                starts.append(p["path"])
+                if len(starts) == 2:
+                    raise httpx.ConnectError("down")
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data = {"finished": True, "processed_size": 1}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a, b", "/w/src/f", evil],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert (
+            "Already copied before this failure: /w/src/a, b. Of what was copied, these "
+            "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
+            "be in the recycle bin. Not started: "
+        ) in message, message
+        assert message.endswith("Not started: /w/src/b. Not started: c."), message

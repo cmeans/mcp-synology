@@ -954,7 +954,7 @@ async def _copy_move(
     # run after, it delayed this call's landing records and let a parallel call start a task
     # this one replaced (#597; pre-QA on #623). Not a target that is the source itself, nor one
     # in or at a folder this call re-created (`fresh`), nor one an earlier item of the call
-    # landed: those weren't there before. A lookup that fails leaves the note unsaid.
+    # landed: those weren't there before. A lookup that fails is listed as unchecked.
     def made_here(path: str) -> bool:
         """``path`` is, or is inside, a folder this call made (``fresh`` lists the parents it
         made too, and only those: QA round 1 on #623)."""
@@ -1021,44 +1021,59 @@ def _with_replaced_note(
     went: dict[str, str],
     dest: str,
 ) -> ToolError:
-    """``error`` with what the items already done replaced or merged into (#620), for a call
-    that failed after them; unchanged when none did."""
+    """``error`` with what the items already done met at the destination (#620), for a call
+    that failed after them; unchanged when nothing is to be said."""
 
     def of(kind: str) -> list[str]:
-        return [where_it_went(q, went, dest) for q in done if replaced.get(q) == kind]
+        # A name holding ", " is quoted, so a list can't read it as two (QA round 1 on #623).
+        return [
+            _escaped_repr(n) if ", " in n else n
+            for n in (where_it_went(q, went, dest) for q in done if replaced.get(q) == kind)
+        ]
 
     files, folders = of(_REPLACED_FILE), of(_MERGED)
-    other = of(_FILE_THERE) + of(_FOLDER_THERE)
-    if not files and not folders and not other:
+    other, unchecked = of(_FILE_THERE) + of(_FOLDER_THERE), of(_UNCHECKED)
+    if not (files or folders or other or unchecked):
         return error
     try:
         body = json.loads(str(error))
         message = body["error"]["message"]
     except (ValueError, KeyError, TypeError):
         return error
-    lead = f"Of what was {_PAST_TENSE.get(operation, 'processed')}, "
-    note = []
+    past = _PAST_TENSE.get(operation, "processed")
+    clauses = []
     if files:
-        note.append(f"{lead}these replaced what was already there: {', '.join(files)}")
+        clauses.append(f"these replaced what was already there: {', '.join(files)}")
     if folders:
-        merged = (
+        clauses.append(
             "these merged into the folder(s) already there, replacing files with the same "
             f"names: {', '.join(folders)}"
         )
-        note.append(merged if files else lead + merged)
     if other:
-        mismatch = (
+        clauses.append(
             "these met an item of the other kind (a file or a folder) under the same name, "
             f"and what DSM did with it isn't known: {', '.join(other)}"
         )
-        note.append(mismatch if note else lead + mismatch)
-    added = f"{'; '.join(note)}. A file replaced this way may not be in the recycle bin."
-    # With the items done, before what wasn't started, which ends the message (#587).
-    head, sep, tail = message.rpartition(". Not started: ")
-    if sep:
-        body["error"]["message"] = f"{head}. {added} Not started: {tail}"
+    if unchecked:
+        clauses.append(
+            f"for these, whether anything was already there couldn't be checked: "
+            f"{', '.join(unchecked)}"
+        )
+    added = f"Of what was {past}, {'; '.join(clauses)}"
+    if files or folders:
+        added += ". A file replaced this way may not be in the recycle bin"
+    # Right after the list of what was done, which this call wrote (_already_done), so a
+    # name holding ". Not started: " can't move it (pre-QA r6 on #623); otherwise at the end.
+    anchor = f"Already {past} before this failure: " + ", ".join(
+        where_it_went(q, went, dest) for q in done
+    )
+    at = message.rfind(anchor)
+    if at >= 0:
+        end = at + len(anchor)
+        # What follows the list starts with its period; a message ending there gets one.
+        body["error"]["message"] = f"{message[:end]}. {added}{message[end:] or '.'}"
     else:
-        body["error"]["message"] = f"{_unstop(message)}. {added}"
+        body["error"]["message"] = f"{_unstop(message)}. {added}."
     return ToolError(json.dumps(body))
 
 
