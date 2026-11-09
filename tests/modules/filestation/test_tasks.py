@@ -1639,6 +1639,65 @@ class TestFileTask:
         assert later.startswith("Move finished:"), later
 
     @respx.mock
+    @pytest.mark.parametrize("finished_before_stop", [False, True], ids=["meanwhile", "before"])
+    async def test_a_stop_s_final_result_keeps_to_the_deadline(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, finished_before_stop: bool
+    ) -> None:
+        """QA round 1 on #632: a delete that finished (during a slow stop, or before it) gets
+        the delete's own summary, whose recycle-bin probe takes the client's default timeout;
+        the reply still comes by the deadline, saying what wasn't checked, and a later
+        file_task gives the full result."""
+        import time as real_time
+
+        import mcp_synology.modules.filestation.tasks as tasks
+        from mcp_synology.modules.filestation.tasks import Handle, TaskRecord, file_task
+
+        monkeypatch.setattr(tasks, "STOP_DEADLINE", 1.5)
+        slow = {"probe": True}
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "stop":
+                raise httpx.ReadTimeout("slow")
+            if method == "status":
+                return _ok(DELETE_FINISHED if finished_before_stop else RUNNING)
+            if params.get("api") == "SYNO.FileStation.List":  # the recycle-bin probe
+                if slow["probe"]:
+                    await asyncio.sleep(10)
+                return _ok({"files": [], "total": 0, "offset": 0})
+            return _ok({})
+
+        statuses = iter([RUNNING, DELETE_FINISHED])
+
+        async def respond_meanwhile(request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("method") == "status":
+                return _ok(next(statuses, DELETE_FINISHED))
+            return await respond(request)
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=respond if finished_before_stop else respond_meanwhile
+        )
+        records = TaskRecords()
+        h = Handle("delete", "FileStation_D1")
+        records.add(TaskRecord(handle=h, paths=["/s/a"], recursive=True, recycle={}))
+        started = real_time.monotonic()
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert real_time.monotonic() - started < 5, text
+        assert "DSM was too slow to check the details" in text, text
+        assert "file_task with this handle shows them" in text
+        # Later, with DSM quick again, the remembered result gets its full summary.
+        slow["probe"] = False
+        route.side_effect = lambda request: (
+            _err(599)
+            if dict(request.url.params).get("method") == "status"
+            else _ok({"files": [], "total": 0, "offset": 0})
+        )
+        later = await file_task(mock_client, records=records, handle=str(h))
+        assert "DSM was too slow" not in later, later
+        assert later.startswith("[+] Deleted"), later
+
+    @respx.mock
     async def test_a_slow_stop_of_a_task_already_gone_isnt_called_stopped(
         self, mock_client: DsmClient
     ) -> None:

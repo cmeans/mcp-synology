@@ -1191,6 +1191,25 @@ async def file_task(
         """A request's read timeout during a stop: STOP_WAIT, or less as the deadline nears."""
         return max(1.0, min(STOP_WAIT, time_left()))
 
+    async def final_in_time(status: dict[str, Any]) -> str:
+        """``_final_text`` within what's left of a stop's deadline (QA round 1 on #632): its
+        summary can read the destination or the recycle bin, at the client's default timeout.
+        Out of time, the reply is what the status says, and a later file_task gives the rest
+        from the record."""
+        if deadline is None or record is None or len(record.paths) != 1:
+            return await _final_text(client, parsed, status, record)  # no request without one
+        left = time_left()
+        if left >= 1:
+            try:
+                return await asyncio.wait_for(_final_text(client, parsed, status, record), left)
+            except TimeoutError:
+                logger.debug("Final result of %s not read within the stop's deadline", parsed)
+        return (
+            f"{_generic_final(parsed, status)}\n(DSM was too slow to check the details, such as "
+            "what's at the destination or in the recycle bin: file_task with this handle shows "
+            "them.)"
+        )
+
     async def status_or_none(stop_note: str = " Nothing was stopped.") -> dict[str, Any] | None:
         """The task's status, or None when DSM keeps saying it doesn't have it (599). One 599 isn't
         a verdict (#521): a stop dropped on it would leave a running delete going. Once a final
@@ -1393,7 +1412,7 @@ async def file_task(
             )
         if now.get("finished"):
             records.set_final(parsed, now)
-            final = await _final_text(client, parsed, now, record)
+            final = await final_in_time(now)
             return (
                 "A stop was sent and DSM was slow to answer it; the task ended meanwhile, so it "
                 f"may have stopped partway: check what's left.\n{final}"
@@ -1412,7 +1431,7 @@ async def file_task(
             return gone(stop_sent=True) + earlier_skip()
         if now.get("finished"):
             records.set_final(parsed, now)
-            final = await _final_text(client, parsed, now, record)
+            final = await final_in_time(now)
             return f"{_NOT_STOPPED}\n{final}"
         return (
             f"DSM didn't accept the stop (error {refused}), and the task is still running "
@@ -1427,7 +1446,7 @@ async def file_task(
         # forgotten or another user's (vdsm 7.1 and 7.2.2), so stop alone can't tell.
         if status is None:
             if record is not None and record.final_status is not None:
-                final = await _final_text(client, parsed, record.final_status, record)
+                final = await final_in_time(record.final_status)
                 return f"{_NOT_STOPPED}\n{final}"
             # The reads may be wrong, and a task ID is unique: a stop that's lost costs nothing
             # (another user's task isn't touched, on vdsm), and one that's not sent leaves a delete
@@ -1441,7 +1460,7 @@ async def file_task(
         logger.debug("%s status before stop (%s): %s", parsed.api, parsed, status)
         if status.get("finished"):
             records.set_final(parsed, status)
-            final = await _final_text(client, parsed, status, record)
+            final = await final_in_time(status)
             return f"{_NOT_STOPPED}\n{final}"
         refused = await send_stop(seen_running=True)
         if isinstance(refused, str):
