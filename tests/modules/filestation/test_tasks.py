@@ -1639,14 +1639,15 @@ class TestFileTask:
         assert later.startswith("Move finished:"), later
 
     @respx.mock
-    @pytest.mark.parametrize("finished_before_stop", [False, True], ids=["meanwhile", "before"])
+    @pytest.mark.parametrize("path", ["meanwhile", "before", "refused", "remembered"])
     async def test_a_stop_s_final_result_keeps_to_the_deadline(
-        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, finished_before_stop: bool
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch, path: str
     ) -> None:
-        """QA round 1 on #632: a delete that finished (during a slow stop, or before it) gets
-        the delete's own summary, whose recycle-bin probe takes the client's default timeout;
-        the reply still comes by the deadline, saying what wasn't checked, and a later
-        file_task gives the full result."""
+        """QA round 1 on #632: a delete that finished (during a slow stop, before it, after a
+        refused stop, or remembered from an earlier read) gets the delete's own summary, whose
+        recycle-bin probe takes the client's default timeout; the reply still comes by the
+        deadline, saying what wasn't checked and keeping the record's earlier items (pre-QA r3),
+        and a later file_task gives the full result."""
         import time as real_time
 
         import mcp_synology.modules.filestation.tasks as tasks
@@ -1654,38 +1655,44 @@ class TestFileTask:
 
         monkeypatch.setattr(tasks, "STOP_DEADLINE", 1.5)
         slow = {"probe": True}
+        statuses = {
+            "meanwhile": [_ok(RUNNING), _ok(DELETE_FINISHED)],
+            "before": [_ok(DELETE_FINISHED)],
+            "refused": [_ok(RUNNING), _ok(DELETE_FINISHED)],
+            "remembered": [_err(599)],
+        }[path]
+        reads = iter(statuses)
 
         async def respond(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
             method = params.get("method", "")
             if method == "stop":
+                if path == "refused":
+                    return _err(401)
                 raise httpx.ReadTimeout("slow")
             if method == "status":
-                return _ok(DELETE_FINISHED if finished_before_stop else RUNNING)
+                return next(reads, statuses[-1])
             if params.get("api") == "SYNO.FileStation.List":  # the recycle-bin probe
                 if slow["probe"]:
                     await asyncio.sleep(10)
                 return _ok({"files": [], "total": 0, "offset": 0})
             return _ok({})
 
-        statuses = iter([RUNNING, DELETE_FINISHED])
-
-        async def respond_meanwhile(request: httpx.Request) -> httpx.Response:
-            if dict(request.url.params).get("method") == "status":
-                return _ok(next(statuses, DELETE_FINISHED))
-            return await respond(request)
-
-        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=respond if finished_before_stop else respond_meanwhile
-        )
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
         records = TaskRecords()
         h = Handle("delete", "FileStation_D1")
-        records.add(TaskRecord(handle=h, paths=["/s/a"], recursive=True, recycle={}))
+        record = TaskRecord(
+            handle=h, paths=["/s/a"], recursive=True, recycle={}, done_earlier=["/s/b"]
+        )
+        if path == "remembered":
+            record.final_status = DELETE_FINISHED
+        records.add(record)
         started = real_time.monotonic()
         text = await file_task(mock_client, records=records, handle=str(h), action="stop")
         assert real_time.monotonic() - started < 5, text
         assert "DSM was too slow to check the details" in text, text
         assert "file_task with this handle shows them" in text
+        assert text.endswith("Already deleted before this task: /s/b."), text
         # Later, with DSM quick again, the remembered result gets its full summary.
         slow["probe"] = False
         route.side_effect = lambda request: (
@@ -1696,6 +1703,127 @@ class TestFileTask:
         later = await file_task(mock_client, records=records, handle=str(h))
         assert "DSM was too slow" not in later, later
         assert later.startswith("[+] Deleted"), later
+
+    @respx.mock
+    async def test_a_summary_that_needs_no_request_is_whole_with_no_time_left(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Pre-QA r3 on #632: a finished move's summary sends nothing, so it's given whole even
+        when the deadline has (nearly) passed, not cut short as if DSM were slow."""
+        from mcp_synology.modules.filestation.tasks import Handle, TaskRecord, file_task
+
+        seen = {"status": 0}
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            wait = _read_timeout(request)
+            if method == "stop":
+                clock[0] += wait
+                raise httpx.ReadTimeout("slow")
+            seen["status"] += 1
+            if seen["status"] == 1:
+                clock[0] += wait
+                return _ok(RUNNING)
+            clock[0] += wait - 0.5  # finished, with 0.5 s left
+            return _ok(MOVE_FINISHED)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        h = Handle("move", "FileStation_M1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a"], dest="/s/d"))
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert "DSM was too slow" not in text, text
+        assert "[+] Moved 1 item(s) to /s/d/:" in text, text
+
+    @respx.mock
+    async def test_a_refused_stop_s_rereads_keep_to_the_deadline(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Pre-QA r3 on #632: after a refused stop, a 599 isn't read again when the deadline
+        would cut the next read short."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        seen = {"status": 0}
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            wait = _read_timeout(request)
+            if method == "stop":
+                clock[0] += wait
+                return _err(401)
+            seen["status"] += 1
+            if seen["status"] == 1:  # before the stop: one 599, read again
+                clock[0] += 9.9
+                return _err(599)
+            if seen["status"] == 2:
+                clock[0] += wait
+                return _ok(RUNNING)
+            clock[0] += min(4.0, wait)  # after it: 599s
+            return _err(599)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert clock[0] <= 45.0, clock[0]
+
+    @respx.mock
+    async def test_a_slow_stop_s_reread_takes_only_the_time_left(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Pre-QA r3 on #632: a read after a 599 that takes its whole wait still ends by the
+        deadline: its wait is what's left, not STOP_WAIT."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        seen = {"status": 0}
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            wait = _read_timeout(request)
+            if method == "stop":
+                clock[0] += wait
+                raise httpx.ReadTimeout("slow")
+            seen["status"] += 1
+            if seen["status"] == 1:
+                clock[0] += wait
+                return _ok(RUNNING)
+            if seen["status"] == 2:
+                clock[0] += 1.0
+                return _err(599)
+            clock[0] += wait
+            raise httpx.ReadTimeout("slow too")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert clock[0] <= 45.0, clock[0]
+
+    @respx.mock
+    async def test_a_stop_with_no_time_left_doesnt_read_the_status(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Pre-QA r3 on #632: a stop request that overran its wait (a re-login inside it, say)
+        leaves no time for a status read, and the reply says so."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        sent: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            sent.append(method)
+            if method == "stop":
+                clock[0] += 31.0
+                raise httpx.ReadTimeout("slow")
+            clock[0] += _read_timeout(request)
+            return _ok(RUNNING)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert sent == ["status", "stop"], sent
+        assert "there was no time left to check its status" in text, text
 
     @respx.mock
     async def test_a_slow_stop_of_a_task_already_gone_isnt_called_stopped(

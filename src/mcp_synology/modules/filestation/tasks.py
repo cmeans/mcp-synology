@@ -1198,16 +1198,18 @@ async def file_task(
         from the record."""
         if deadline is None or record is None or len(record.paths) != 1:
             return await _final_text(client, parsed, status, record)  # no request without one
-        left = time_left()
-        if left >= 1:
-            try:
-                return await asyncio.wait_for(_final_text(client, parsed, status, record), left)
-            except TimeoutError:
-                logger.debug("Final result of %s not read within the stop's deadline", parsed)
+        # Always tried: a summary that needs no request is whole even with no time left (pre-QA
+        # r3 on #632). Not 0: wait_for(coro, 0) times out before the coroutine runs.
+        try:
+            return await asyncio.wait_for(
+                _final_text(client, parsed, status, record), max(time_left(), 0.05)
+            )
+        except TimeoutError:
+            logger.debug("Final result of %s not read within the stop's deadline", parsed)
         return (
             f"{_generic_final(parsed, status)}\n(DSM was too slow to check the details, such as "
             "what's at the destination or in the recycle bin: file_task with this handle shows "
-            "them.)"
+            f"them.){earlier_skip()}"
         )
 
     async def status_or_none(stop_note: str = " Nothing was stopped.") -> dict[str, Any] | None:
