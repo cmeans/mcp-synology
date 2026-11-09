@@ -305,7 +305,7 @@ def format_key_value(
 
 
 # The last line of a download that wrote a file (#640): the server never shows a file's
-# contents, so this is the one place it can say what they are before a client opens one.
+# contents, so this is the closest place it can say what they are, before a client opens one.
 # Plural: a Photos reply or a folder's ZIP holds several files. A file kept as "already there"
 # may not be the NAS's; treating it as data errs on the safe side (pre-QA on #641).
 DOWNLOADED_CONTENTS_ARE_DATA = (
