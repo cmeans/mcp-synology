@@ -300,7 +300,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
 
     # Prompt for credentials
     click.echo()
-    username = click.prompt("DSM username").strip()
+    username = _ask_username(None)
     password = click.prompt("DSM password", hide_input=True)
 
     # Connect, validate login, fetch hostname. The keyring is written only once DSM accepts the
@@ -412,7 +412,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     if not _may_replace_entry(service, connection.host, connection.port, instance, app_config):
         return
 
-    username = click.prompt("DSM username").strip()
+    username = _ask_username(app_config.auth.username)
     password = click.prompt("DSM password", hide_input=True)
 
     # The keyring is written only once DSM accepts the login (#454).
@@ -881,6 +881,45 @@ async def _attempt_login(
     result["success"] = True
     result["sid"] = sid
     return result
+
+
+def _ask_username(config_username: str | None) -> str:
+    """The DSM username, asked for; the one the server will use when the config sets it (#624).
+
+    ``config_username`` is the loaded config's ``auth.username``, ``SYNOLOGY_USERNAME``
+    already applied and checked by the config's validation. The server takes it before the
+    keyring's (``core/auth.py``), so a different answer here would store one account's password
+    for another account's login: the server's first login would fail, counting toward DSM's
+    Auto Block, with nothing saying why. That name is offered as the default, and any other
+    answer is refused and asked again, before anything is sent or stored. A new config (None
+    here) has no username, so any answer goes, as before: the terminal's variables aren't
+    necessarily the MCP client's (``docs/credentials.md``).
+    """
+
+    def present(value: str | None) -> str | None:
+        # As the server reads each credential (core/auth.py): a blank one is unset.
+        return value if value and value.strip() else None
+
+    fixed = present(config_username)
+    if fixed is None:
+        return str(click.prompt("DSM username")).strip()
+    from_env = present(os.environ.get("SYNOLOGY_USERNAME")) is not None
+    where = "SYNOLOGY_USERNAME is set to" if from_env else "The config's auth.username is"
+    # The name exactly as the server sends it, escaped when it's padded or could move the
+    # terminal or forge a line (#541), the same in the prompt and the refusal.
+    shown = fixed if fixed.isprintable() and fixed == fixed.strip() else repr(fixed)
+    while True:
+        answer = str(
+            click.prompt(f"DSM username [{shown}]", default=fixed.strip(), show_default=False)
+        ).strip()
+        if answer == fixed.strip():
+            return fixed
+        click.echo(
+            f"{where} {shown}, and that's the account the server logs in as, so its password "
+            "is the one to store here. Answer that name exactly, or stop (Ctrl-C) and change "
+            "that setting first to use another account. Nothing was sent or stored.",
+            err=True,
+        )
 
 
 def _exit_nothing_changed() -> NoReturn:
