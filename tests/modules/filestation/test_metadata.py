@@ -279,7 +279,11 @@ class TestGetFileInfoMissingPaths:
             assert (err["code"], suggestion) == ("permission_denied", expected), err
         else:
             assert err["code"] == "not_found", err
-            assert suggestion == f"{expected} For one with no permission: {perm}", suggestion
+            # No escape in the paths, so no escaped-name advice (QA round 1 on #623).
+            assert suggestion == (
+                "Use list_files or search_files to find the correct path. "
+                f"For one with no permission: {perm}"
+            ), suggestion
         assert not suggestion.startswith("Check the paths with list_files or search_files")
 
     @respx.mock

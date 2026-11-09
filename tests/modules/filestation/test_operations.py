@@ -6735,8 +6735,11 @@ class TestOverwriteSaysWhatItReplaced:
         self, mock_client: DsmClient
     ) -> None:
         lookups: list[str] = []
+        # QA round 1: f is a folder on both sides, so it's a merge.
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=self._dsm({"/w/dst/a.txt": False, "/w/dst/f": True}, lookups)
+            side_effect=self._dsm(
+                {"/w/dst/a.txt": False, "/w/dst/f": True, "/w/src/f": True}, lookups
+            )
         )
         result = await copy_files(
             mock_client,
@@ -6744,12 +6747,52 @@ class TestOverwriteSaysWhatItReplaced:
             dest_folder="/w/dst",
             overwrite=True,
         )
-        lines = result.splitlines()
-        assert "Replaced what was already there: a.txt" in lines, result
+        tail = result.split("\n\nReplaced", 1)[1]
+        assert tail.startswith(
+            " what was already there:\n  a.txt\n\n"
+            "Merged into the folder(s) already there, replacing files with the same names:\n"
+            "  f\nA file replaced this way may not be in the recycle bin."
+        ), result
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("source_is_dir", "target_is_dir"), [(False, True), (True, False)], ids=["file", "folder"]
+    )
+    async def test_the_other_kind_under_the_name_isnt_called_replaced_or_merged(
+        self, mock_client: DsmClient, source_is_dir: bool, target_is_dir: bool
+    ) -> None:
+        """QA round 1 on #623: a file onto a same-named folder read as "Merged"; what DSM
+        does with the other kind isn't captured, so the reply says that."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/dst/f": target_is_dir, "/w/src/f": source_is_dir}, [])
+        )
+        result = await copy_files(
+            mock_client, paths=["/w/src/f"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "Replaced" not in result and "Merged" not in result, result
         assert (
-            "Merged into the folder(s) already there, replacing files with the same names: f"
-        ) in lines, result
-        assert "A file replaced this way may not be in the recycle bin." in lines, result
+            "\nAlready there as the other kind (a file for a folder, or a folder for a file); "
+            "what DSM did with it isn't known:\n  f"
+        ) in result, result
+        assert "recycle bin" not in result, result
+
+    @respx.mock
+    async def test_a_failed_lookup_says_it_couldnt_check(self, mock_client: DsmClient) -> None:
+        """QA round 1 on #623: with no line for a failed lookup, "nothing said" read as
+        "nothing was there"."""
+        base = self._dsm({}, [])
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("path") == "/w/dst/a.txt":
+                return httpx.Response(502, text="bad gateway")
+            return base(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        result = await copy_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "\nCouldn't check whether anything was already there for:\n  a.txt" in result
+        assert "Replaced" not in result, result
 
     @respx.mock
     async def test_nothing_there_says_nothing_extra(self, mock_client: DsmClient) -> None:
@@ -7142,8 +7185,10 @@ class TestSourcesDsmWontShow:
             "/w/locked: no permission (DSM error 407). Nothing was copied."
         )
         perm = error_from_code(407, "SYNO.FileStation.List").suggestion
-        missing = error_from_code(408, "SYNO.FileStation.List").suggestion
-        assert err["suggestion"] == f"{missing} For one with no permission: {perm}"
+        assert err["suggestion"] == (
+            "Use list_files or search_files to find the correct path. "
+            f"For one with no permission: {perm}"
+        )
 
     @respx.mock
     async def test_a_call_failing_later_names_what_done_items_replaced(

@@ -1030,6 +1030,7 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
 
 _NO_PERMISSION = frozenset({105, 407})
 _CHECK_ACCESS = "check it and the account's access to it in DSM."
+_OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."
 
 
 def missing_text(path: str, code: int) -> str:
@@ -1046,33 +1047,39 @@ def missing_text(path: str, code: int) -> str:
 def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, str]:
     """The error code and suggestion for paths ``getinfo`` answered with a code (#620): every
     path refused for permission is ``permission_denied``, every missing one ``not_found``;
-    a mix gets each kind's own advice (408's, not the shared "retry with paths that exist",
-    which a path refused for permission can't follow: QA round 3 on #606)."""
+    a mix gets each kind's own advice (not the shared "retry with paths that exist", which a
+    path refused for permission can't follow: QA round 3 on #606). A per-path code other
+    than 408, 105 or 407 gets one fixed message under ``filestation_error``: the generic
+    mapping of such a code (a session code's "re-authentication will be attempted", 599's
+    "background task") doesn't fit a path's entry (QA round 1 on #623)."""
     codes = [code for _, code in missing]
     perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
     if codes and all(code in _NO_PERMISSION for code in codes):
         return ErrorCode.PERMISSION_DENIED, perm
     if all(code == 408 for code in codes):
         return ErrorCode.NOT_FOUND, missing_paths_suggestion(missing)
-    if not any(code == 408 or code in _NO_PERMISSION for code in codes):
-        # Only other codes: the first code's own advice, as before #620 (pre-QA r5 on #623).
-        mapped = error_from_code(codes[0], "SYNO.FileStation.List")
-        return mapped.error_code, mapped.suggestion or (
-            "Check the paths and the account's access to them in DSM."
-        )
+    gone = [m for m in missing if m[1] == 408]
     parts = []
-    if 408 in codes:
-        parts.append(error_from_code(408, "SYNO.FileStation.List").suggestion or "")
-        wildcard = _wildcard_hint([m for m in missing if m[1] == 408])
+    if gone:
+        parts.append("Use list_files or search_files to find the correct path.")
+        wildcard = _wildcard_hint(gone)
         if wildcard:
             parts.append(wildcard)
+        if any(holds_escape(path) for path, _ in gone):
+            parts.append(ESCAPED_NAME_ADVICE)
     if any(code in _NO_PERMISSION for code in codes):
         parts.append(f"For one with no permission: {perm}")
     if any(code != 408 and code not in _NO_PERMISSION for code in codes):
-        parts.append(f"For one DSM gave another code for: {_CHECK_ACCESS}")
-    if 408 in codes:
+        parts.append(
+            _OTHER_CODE
+            if len(parts) == 0
+            else f"For one DSM gave another code for: {_CHECK_ACCESS}"
+        )
+    if gone:
         return ErrorCode.NOT_FOUND, " ".join(parts)
-    return ErrorCode.PERMISSION_DENIED, " ".join(parts)
+    if any(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, " ".join(parts)
+    return ErrorCode.FILESTATION_ERROR, " ".join(parts)
 
 
 def _wildcard_hint(missing: list[tuple[str, int]]) -> str:

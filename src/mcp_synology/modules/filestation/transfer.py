@@ -165,8 +165,9 @@ async def upload_file(
 
     # With overwrite, whether a file of that name was there, so the reply can say it was
     # replaced (#620, 0.11.0rc3 live test: an overwrite read like a plain upload). Only a hint:
-    # a lookup that fails leaves it unsaid, never the upload undone.
+    # a lookup that fails says so (QA round 1 on #623), and never stops the upload.
     replaced = False
+    unchecked = False
     if overwrite:
         try:
             # A file only: what DSM's Upload does with a same-named folder isn't captured,
@@ -175,6 +176,7 @@ async def upload_file(
             replaced = kinds.get(f"{dest}/{effective_name}") is False
         except Exception as e:  # noqa: BLE001 - only the reply's wording depends on it
             logger.debug("Couldn't check for an existing %s: %s", effective_name, e)
+            unchecked = True
 
     try:
         data = await client.upload(
@@ -210,7 +212,14 @@ async def upload_file(
 
     result = format_status(f"Uploaded {effective_name} ({format_size(file_size)}) to {dest}/")
     if replaced:
-        result += f"\n    It replaced the {effective_name} that was there."
+        # Whether DSM's Upload keeps the old file in the recycle bin isn't probed; say what
+        # copy, move and restore say (QA round 1 on #623).
+        result += (
+            f"\n    It replaced the {effective_name} that was there. A file replaced this way "
+            "may not be in the recycle bin."
+        )
+    elif unchecked:
+        result += f"\n    Couldn't check whether a file named {effective_name} was already there."
 
     if file_size >= _LARGE_FILE_THRESHOLD:
         result += (

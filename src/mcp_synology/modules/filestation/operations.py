@@ -908,7 +908,7 @@ async def _copy_move(
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
     fresh: Sequence[str] = (),
-    replaced_so_far: dict[str, bool] | None = None,
+    replaced_so_far: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     """Shared implementation for copy and move operations.
 
@@ -956,8 +956,9 @@ async def _copy_move(
     # in or at a folder this call re-created (`fresh`), nor one an earlier item of the call
     # landed: those weren't there before. A lookup that fails leaves the note unsaid.
     def made_here(path: str) -> bool:
-        """``path`` is, or is inside, a folder this call re-created (its parents too)."""
-        return any(f == path or f.startswith(path + "/") or path.startswith(f + "/") for f in fresh)
+        """``path`` is, or is inside, a folder this call made (``fresh`` lists the parents it
+        made too, and only those: QA round 1 on #623)."""
+        return any(f == path or path.startswith(f + "/") for f in fresh)
 
     targets: dict[str, str] = {}
     if overwrite:
@@ -973,11 +974,12 @@ async def _copy_move(
     # burst requests at DSM ahead of the checks that share the connection pool (pre-QA r2).
     gate = asyncio.Semaphore(4)
 
-    async def look(target: str) -> dict[str, bool]:
+    async def look(source: str, target: str) -> dict[str, bool]:
+        # The source's kind too: a file onto a same-named folder isn't a merge (QA round 1).
         async with gate:
-            return await paths_isdir(client, [target])
+            return await paths_isdir(client, [target, source])
 
-    lookups = {q: asyncio.ensure_future(look(t)) for q, t in targets.items()}
+    lookups = {q: asyncio.ensure_future(look(q, t)) for q, t in targets.items()}
     try:
         if check_sources:
             await _refuse_missing_sources(client, operation, normalized, paths)
@@ -1015,15 +1017,19 @@ def _with_replaced_note(
     error: ToolError,
     operation: str,
     done: list[str],
-    replaced: dict[str, bool],
+    replaced: dict[str, str],
     went: dict[str, str],
     dest: str,
 ) -> ToolError:
     """``error`` with what the items already done replaced or merged into (#620), for a call
     that failed after them; unchanged when none did."""
-    files = [where_it_went(q, went, dest) for q in done if replaced.get(q) is False]
-    folders = [where_it_went(q, went, dest) for q in done if replaced.get(q) is True]
-    if not files and not folders:
+
+    def of(kind: str) -> list[str]:
+        return [where_it_went(q, went, dest) for q in done if replaced.get(q) == kind]
+
+    files, folders = of(_REPLACED_FILE), of(_MERGED)
+    other = of(_FILE_THERE) + of(_FOLDER_THERE)
+    if not files and not folders and not other:
         return error
     try:
         body = json.loads(str(error))
@@ -1040,6 +1046,12 @@ def _with_replaced_note(
             f"names: {', '.join(folders)}"
         )
         note.append(merged if files else lead + merged)
+    if other:
+        mismatch = (
+            "these met an item of the other kind (a file or a folder) under the same name, "
+            f"and what DSM did with it isn't known: {', '.join(other)}"
+        )
+        note.append(mismatch if note else lead + mismatch)
     added = f"{'; '.join(note)}. A file replaced this way may not be in the recycle bin."
     # With the items done, before what wasn't started, which ends the message (#587).
     head, sep, tail = message.rpartition(". Not started: ")
@@ -1050,19 +1062,39 @@ def _with_replaced_note(
     return ToolError(json.dumps(body))
 
 
+# What a source's name met at the destination (#620): a file it replaced (`file`), a folder it
+# merged into (`folder`), something of the other kind (`file-there`, `folder-there`: what DSM
+# did with it isn't captured), or a lookup that failed (`unchecked`).
+_REPLACED_FILE, _MERGED, _FILE_THERE, _FOLDER_THERE, _UNCHECKED = (
+    "file",
+    "folder",
+    "file-there",
+    "folder-there",
+    "unchecked",
+)
+
+
 async def _replaced(
     lookups: Mapping[str, asyncio.Future[dict[str, bool]]], targets: dict[str, str]
-) -> dict[str, bool]:
-    """Which sources' names were already at the destination, and whether as a folder (#620)."""
-    found: dict[str, bool] = {}
+) -> dict[str, str]:
+    """What each source's name met at the destination (#620), by source; a name with nothing
+    there is left out."""
+    found: dict[str, str] = {}
     for q, future in lookups.items():
         try:
             kinds = await future
         except Exception as e:  # noqa: BLE001 - never fail the copy over a reply note
             logger.debug("Couldn't check the destination for %s: %s", targets[q], e)
+            found[q] = _UNCHECKED
             continue
-        if targets[q] in kinds:
-            found[q] = kinds[targets[q]]
+        there = kinds.get(targets[q])
+        if there is None:
+            continue
+        source_is_dir = kinds.get(q)
+        if there:
+            found[q] = _MERGED if source_is_dir is True else _FOLDER_THERE
+        else:
+            found[q] = _REPLACED_FILE if source_is_dir is False else _FILE_THERE
     return found
 
 
@@ -1085,7 +1117,7 @@ async def _copy_move_tasks(
     on_progress: ProgressCallback | None,
     lookups: Mapping[str, asyncio.Future[dict[str, bool]]],
     targets: dict[str, str],
-    replaced_so_far: dict[str, bool] | None = None,
+    replaced_so_far: dict[str, str] | None = None,
 ) -> tuple[str, bool]:
     """``_copy_move``'s tasks, once its checks passed: start each source, wait, hand off."""
     total_processed = 0
@@ -1303,7 +1335,7 @@ async def _copy_move_summary(
     *,
     only_named_sources_removed: bool = False,
     earlier: Sequence[str] = (),
-    replaced: dict[str, bool] | None = None,
+    replaced: dict[str, str] | None = None,
 ) -> str:
     """The result text of a finished copy or move (a restore rewords it, ``_as_restore``).
     ``replaced``: sources whose name was already at the destination (with overwrite), and
@@ -1322,18 +1354,29 @@ async def _copy_move_summary(
             client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
         )
 
-    gone_over = {p: isdir for p, isdir in (replaced or {}).items() if p in ok}
-    # shown(): a padded name, or one with a comma, is unambiguous in the list (pre-QA r5).
-    over_files = [shown(name(p)) for p, isdir in gone_over.items() if not isdir]
-    over_folders = [shown(name(p)) for p, isdir in gone_over.items() if isdir]
-    if over_files:
-        lines.append(f"\nReplaced what was already there: {', '.join(over_files)}")
-    if over_folders:
-        lines.append(
-            "\nMerged into the folder(s) already there, replacing files with the same names: "
-            + ", ".join(over_folders)
-        )
-    if over_files or over_folders:
+    met = {p: kind for p, kind in (replaced or {}).items() if p in ok}
+
+    def listed(heading: str, kinds: tuple[str, ...]) -> bool:
+        # One name a line, as the copied block lists them: a name holding ", " can't be read
+        # as two (QA round 1 on #623); shown() makes padding visible.
+        names = [shown(name(p)) for p, kind in met.items() if kind in kinds]
+        if names:
+            lines.append(f"\n{heading}")
+            lines.extend(f"  {n}" for n in names)
+        return bool(names)
+
+    replaced_any = listed("Replaced what was already there:", (_REPLACED_FILE,))
+    merged_any = listed(
+        "Merged into the folder(s) already there, replacing files with the same names:",
+        (_MERGED,),
+    )
+    listed(
+        "Already there as the other kind (a file for a folder, or a folder for a file); what "
+        "DSM did with it isn't known:",
+        (_FILE_THERE, _FOLDER_THERE),
+    )
+    listed("Couldn't check whether anything was already there for:", (_UNCHECKED,))
+    if replaced_any or merged_any:
         # As the tools' descriptions warn: vdsm's /home kept no copy (pre-QA r3 on #623).
         lines.append("A file replaced this way may not be in the recycle bin.")
 
@@ -1880,8 +1923,10 @@ async def restore_from_recycle_bin(
                 skipped=[],
                 later=None,
             )
-        recreated = (
-            [] if dest_folder else await _recreate_missing_folders(client, restore_destinations)
+        recreated, made = (
+            ([], [])
+            if dest_folder
+            else await _recreate_missing_folders(client, restore_destinations)
         )
         note = (
             f"\nRe-created {', '.join(recreated)} (no longer there) to restore into."
@@ -1897,7 +1942,7 @@ async def restore_from_recycle_bin(
             restored: list[str] = []
             restored_skipped: list[str] = []
             restored_to: dict[str, str] = {}
-            restored_replaced: dict[str, bool] = {}
+            restored_replaced: dict[str, str] = {}
             for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
                 r, handed_off = await _copy_move(
                     client,
@@ -1914,7 +1959,7 @@ async def restore_from_recycle_bin(
                     later=full_paths[i + 1 :],
                     records=records,
                     on_progress=on_progress,
-                    fresh=recreated,
+                    fresh=made,
                     replaced_so_far=restored_replaced,
                 )
                 if handed_off:
@@ -1961,7 +2006,7 @@ async def restore_from_recycle_bin(
             check_sources=False,
             records=records,
             on_progress=on_progress,
-            fresh=recreated,
+            fresh=made,
         )
         if handed_off:
             return result + note
@@ -1970,22 +2015,35 @@ async def restore_from_recycle_bin(
         return _as_restore(result, share_name) + note
 
 
-async def _recreate_missing_folders(client: DsmClient, folders: list[str]) -> list[str]:
-    """Create the inferred restore destinations that no longer exist; return them.
+async def _recreate_missing_folders(
+    client: DsmClient, folders: list[str]
+) -> tuple[list[str], list[str]]:
+    """Create the inferred restore destinations that no longer exist; return them, and every
+    folder the call made, the missing parents ``force_parent`` created along the way too.
 
     A file restored out of a folder that was deleted with it has no original folder to
     go back to, and DSM refuses that move with 1002 "Destination error" (DSM 7.1 and
     7.3.2, #333). The spec always said a missing parent is re-created; this does it,
-    deepest first, since ``force_parent`` creates the folders above it.
+    deepest first, since ``force_parent`` creates the folders above it. The parents are
+    looked up with the destinations, so a parent that was already there isn't counted as
+    made (QA round 1 on #623: its overwrite note was dropped).
     """
+    wanted = sorted(set(folders))
+    parents = sorted(
+        {
+            "/".join(path.split("/")[:i])
+            for path in wanted
+            for i in range(3, path.count("/") + 1)  # below the share: /<share>/a, ...
+        }
+        - set(wanted)
+    )
     try:
-        missing = [
-            path
-            for path, code in await find_missing_paths(client, sorted(set(folders)))
-            if code == 408
-        ]
+        gone = {
+            path for path, code in await find_missing_paths(client, wanted + parents) if code == 408
+        }
     except SynologyError as e:
         synology_error_response("Restore files", e)
+    missing = [path for path in wanted if path in gone]
     created: list[str] = []
     for path in sorted(missing, key=lambda p: p.count("/"), reverse=True):
         if any(done.startswith(path + "/") for done in created):
@@ -2004,4 +2062,9 @@ async def _recreate_missing_folders(client: DsmClient, folders: list[str]) -> li
         except SynologyError as e:
             synology_error_response("Restore files", e)
         created.append(path)
-    return sorted(created)
+    made = set(created) | {
+        parent
+        for parent in parents
+        if parent in gone and any(path.startswith(parent + "/") for path in created)
+    }
+    return sorted(created), sorted(made)

@@ -277,7 +277,14 @@ class TestUploadFile:
             mock_client, local_path=str(local_file), dest_folder="/v", overwrite=True
         )
         assert result.startswith("[+] Uploaded test.txt"), result
-        assert ("It replaced the test.txt that was there." in result) is said, result
+        assert (
+            "\n    It replaced the test.txt that was there. A file replaced this way may not be "
+            "in the recycle bin." in result
+        ) is said, result
+        # A failed lookup says so (QA round 1 on #623).
+        assert ("Couldn't check whether a file named test.txt was already there." in result) is (
+            there is None
+        ), result
 
     @respx.mock
     async def test_upload_custom_filename(self, mock_client: DsmClient, tmp_path: Path) -> None:
