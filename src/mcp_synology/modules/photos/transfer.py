@@ -268,7 +268,8 @@ async def _download_one(
     if os.path.lexists(dest) and not overwrite:
         return _existing(dest, item, size), False
     # With overwrite, the line says a local file was replaced (#625): it read like a new
-    # one. Names are unique within a call, so it's never this call's own file.
+    # one. Names are unique within a call, so it's never this call's own file. Checked before
+    # the download starts; a file that appears while it streams is replaced without the note.
     replaced = os.path.lexists(dest)
     if size == "original":
         api, method, version = ph.api("Download"), "download", 1
