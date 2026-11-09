@@ -7364,3 +7364,51 @@ class TestSourcesDsmWontShow:
             "folder(s) already there, replacing files with the same names: /w/src/f. A file "
             "replaced this way may not be in the recycle bin."
         ), message
+
+    @respx.mock
+    async def test_a_restore_keeps_the_note_for_a_parent_that_was_there(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA round 1 on #623: a parent of a re-created folder was counted as made even when
+        it was there, so restoring ``a`` into the existing /s/a said nothing."""
+        exists = {
+            "/s": True,
+            "/s/a": True,
+            "/s/#recycle/a": True,
+            "/s/#recycle/a/b/f.txt": False,
+        }
+        created: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            api, method = p.get("api", ""), p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if api == "SYNO.FileStation.CreateFolder":
+                folder = f"{p['folder_path']}/{json.loads(p['name'])}"
+                created.append(folder)
+                exists[folder] = True
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": folder}]}}
+                )
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data = {"finished": True, "processed_size": 1}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        out = await restore_from_recycle_bin(
+            mock_client, share="s", paths=["a/b/f.txt", "a"], overwrite=True
+        )
+        assert created == ["/s/a/b"], created
+        assert (
+            "Merged into the folder(s) already there, replacing files with the same names:\n  a"
+            in out
+        ), out
