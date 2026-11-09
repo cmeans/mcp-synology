@@ -116,7 +116,8 @@ def test_coverage_table_lists_only_implemented_modules() -> None:
     # The section's first table: its "|" lines up to the first line that isn't one.
     section = README.split("## Supported modules", 1)[1].split("\n## ", 1)[0]
     lines = section.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.lstrip().startswith("|"))
+    start = next((i for i, line in enumerate(lines) if line.lstrip().startswith("|")), None)
+    assert start is not None, "no table under ## Supported modules"
     end = next(
         (i for i in range(start, len(lines)) if not lines[i].lstrip().startswith("|")),
         len(lines),
