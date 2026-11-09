@@ -1214,9 +1214,13 @@ class TestFileTask:
             ("SYNO.FileStation.CopyMove", "stop"),
         ]
         assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
-        assert [_read_timeout(c.request) for c in route.calls] == [30, STOP_WAIT]
-        # The stop waits STOP_WAIT (#630); connect is capped at it, as for any read timeout.
-        assert [c.request.extensions["timeout"]["connect"] for c in route.calls] == [30, STOP_WAIT]
+        # Every request of a stop waits at most STOP_WAIT (#630), the status read before it
+        # too; connect is capped at it, as for any read timeout.
+        assert [_read_timeout(c.request) for c in route.calls] == [STOP_WAIT, STOP_WAIT]
+        assert [c.request.extensions["timeout"]["connect"] for c in route.calls] == [
+            STOP_WAIT,
+            STOP_WAIT,
+        ]
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
         )
@@ -1276,7 +1280,6 @@ class TestFileTask:
         [
             (httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
              "the answer wasn't a DSM reply (Content-Type text/html).", True),
-            (httpx.Response(502, text="Bad Gateway"), "DSM answered HTTP 502.", True),
             (httpx.Response(403, text="Forbidden"), "DSM answered HTTP 403.", False),
             (httpx.Response(414, text="Too long"), "HTTP 414 (Request-URI Too Large).", False),
         ],
@@ -1621,12 +1624,17 @@ class TestFileTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
             side_effect=self._slow_stop(_ok(MOVE_FINISHED))
         )
+        records = TaskRecords()
         text = await file_task(
-            mock_client, records=TaskRecords(), handle="move:FileStation_M1", action="stop"
+            mock_client, records=records, handle="move:FileStation_M1", action="stop"
         )
         assert text.startswith(
-            "A stop was sent and DSM was slow to answer it; the task ended meanwhile.\n"
+            "A stop was sent and DSM was slow to answer it; the task ended meanwhile, so it may "
+            "have stopped partway: check what's left.\n"
         ), text
+        # Remembered: a later status read gives the same result (DSM forgets it after one read).
+        later = await file_task(mock_client, records=records, handle="move:FileStation_M1")
+        assert later.startswith("Move finished:"), later
 
     @respx.mock
     async def test_a_slow_stop_of_a_task_already_gone_isnt_called_stopped(
@@ -1696,6 +1704,97 @@ class TestFileTask:
         ), text
         assert why in text, text
         assert "whether it stopped isn't known" in text
+
+    @respx.mock
+    @pytest.mark.parametrize("status", [502, 504])
+    async def test_a_proxy_giving_up_on_the_stop_is_a_slow_stop(
+        self, mock_client: DsmClient, status: int
+    ) -> None:
+        """Pre-QA r2 on #632: a proxy's 502/504 on the stop is the same slow stop."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        statuses = [_ok(RUNNING), _err(599)]
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("method") == "stop":
+                return httpx.Response(status, text="gateway")
+            return statuses.pop(0) if statuses else _err(599)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert text.startswith("Stopped copy of `copy:FileStation_C1`; it may be partly done."), (
+            text
+        )
+
+    @respx.mock
+    async def test_a_stop_ends_by_its_deadline(
+        self, mock_client: DsmClient, clock: list[float]
+    ) -> None:
+        """Pre-QA r2 on #632: every request of a stop takes the time left before STOP_DEADLINE,
+        at most STOP_WAIT, and none starts once it's nearly gone; DSM taking each read's whole
+        timeout can't push the reply past an MCP client's 60 s limit."""
+        from mcp_synology.modules.filestation.tasks import STOP_DEADLINE, file_task
+
+        timeouts: list[float] = []
+        first = {"status": True}
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            wait = _read_timeout(request)
+            timeouts.append(wait)
+            clock[0] += wait  # DSM takes the whole timeout every time
+            if method == "stop":
+                raise httpx.ReadTimeout("slow")
+            if first["status"]:
+                first["status"] = False
+                return _ok(RUNNING)
+            raise httpx.ReadTimeout("slow too")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert clock[0] <= STOP_DEADLINE, (clock[0], timeouts)
+        assert all(t <= STOP_WAIT for t in timeouts), timeouts
+        assert "whether it stopped isn't known" in text, text
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("after", "start"),
+        [
+            (_err(599), "Stopped copy of /s/a; it may be partly done."),
+            (_ok(RUNNING), "A stop was sent for the copy of /s/a, but DSM hasn't confirmed it"),
+            (httpx.ReadTimeout("slow too"), "A stop was sent for the copy of /s/a, but DSM was"),
+        ],
+        ids=["gone", "running", "unknown"],
+    )
+    async def test_a_slow_stop_s_reply_keeps_what_was_done_earlier(
+        self, mock_client: DsmClient, after: Any, start: str
+    ) -> None:
+        """Pre-QA r2 on #632: each slow-stop reply keeps the record's earlier items."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        h = Handle("copy", "FileStation_C1")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a"], dest="/s/d", done_earlier=["/s/b"]))
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._slow_stop(after))
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert text.startswith(start), text
+        assert "Already copied before this task: /s/b" in text, text
+
+    @respx.mock
+    async def test_a_slow_stop_s_status_reads_wait_stop_wait(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._slow_stop(_ok(RUNNING))
+        )
+        await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert [_read_timeout(c.request) for c in route.calls] == [STOP_WAIT] * 3
 
     @respx.mock
     async def test_a_slow_stop_and_status_says_it_isnt_known(self, mock_client: DsmClient) -> None:

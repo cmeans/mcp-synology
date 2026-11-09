@@ -54,6 +54,9 @@ _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
 # real NAS: 60.10 s), although the stop takes effect at once, and claude.ai stops waiting for a
 # tool call after 60 s. Write and pool keep the client's default; connect is capped at this.
 STOP_WAIT = 15.0
+# The whole of file_task's stop (status reads before and after the stop, and the stop itself)
+# ends by this many seconds from its start, under that 60 s limit with time to spare (#630).
+STOP_DEADLINE = 45.0
 
 
 @dataclass(frozen=True)
@@ -1177,6 +1180,17 @@ async def file_task(
     taskid = dsm_str(parsed.taskid)
     paths = record.paths if record is not None else []
 
+    # A stop ends by STOP_DEADLINE from here, however slow DSM is (#630); a status check
+    # keeps the client's own timeout.
+    deadline = time.monotonic() + STOP_DEADLINE if action == "stop" else None
+
+    def time_left() -> float:
+        return float("inf") if deadline is None else deadline - time.monotonic()
+
+    def wait_left() -> float:
+        """A request's read timeout during a stop: STOP_WAIT, or less as the deadline nears."""
+        return max(1.0, min(STOP_WAIT, time_left()))
+
     async def status_or_none(stop_note: str = " Nothing was stopped.") -> dict[str, Any] | None:
         """The task's status, or None when DSM keeps saying it doesn't have it (599). One 599 isn't
         a verdict (#521): a stop dropped on it would leave a running delete going. Once a final
@@ -1187,7 +1201,11 @@ async def file_task(
         for read in range(reads):
             try:
                 data: dict[str, Any] = await client.request(
-                    parsed.api, "status", version=version, params={"taskid": taskid}
+                    parsed.api,
+                    "status",
+                    version=version,
+                    params={"taskid": taskid},
+                    read_timeout=wait_left() if deadline is not None else None,
                 )
                 if not isinstance(data, dict):
                     # Not "no such task", which sends a stop: it's a reply that can't be read.
@@ -1270,11 +1288,18 @@ async def file_task(
                 "stop",
                 version=version,
                 params={"taskid": taskid},
-                read_timeout=STOP_WAIT,
+                read_timeout=wait_left(),
             )
         except httpx.ReadTimeout:
             return await unanswered_stop(seen_running)
-        except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
+        except DsmHttpError as e:
+            if e.status in (502, 504):
+                # A proxy giving up on the stop before DSM answered: the same slow stop (#630).
+                return await unanswered_stop(seen_running)
+            _unreadable(
+                parsed, e, operation="Stop task", note=" The stop may or may not have taken effect."
+            )
+        except (DsmReplyError, RequestTooLongError) as e:
             # A 414 is rejected before anything acts on it: nothing was stopped.
             sent = not isinstance(e, RequestTooLongError)
             _unreadable(
@@ -1312,13 +1337,16 @@ async def file_task(
         unknown = ""  # why the status couldn't be read, when it couldn't
         started = time.monotonic()
         for read in range(_LOST_TASK_READS):
+            if time_left() < 1:
+                unknown = "there was no time left to check its status"
+                break
             try:
                 data = await client.request(
                     parsed.api,
                     "status",
                     version=version,
                     params={"taskid": taskid},
-                    read_timeout=STOP_WAIT,
+                    read_timeout=wait_left(),
                 )
                 if not isinstance(data, dict):
                     raise DsmReplyError(f"{parsed.api} status: the reply's data isn't an object.")
@@ -1358,7 +1386,8 @@ async def file_task(
             records.set_final(parsed, now)
             final = await _final_text(client, parsed, now, record)
             return (
-                f"A stop was sent and DSM was slow to answer it; the task ended meanwhile.\n{final}"
+                "A stop was sent and DSM was slow to answer it; the task ended meanwhile, so it "
+                f"may have stopped partway: check what's left.\n{final}"
             )
         return (
             f"A stop was sent for the {parsed.kind} of {what}, but DSM hasn't confirmed it "

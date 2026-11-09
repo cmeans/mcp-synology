@@ -84,9 +84,9 @@ connection:
 
   # Connection timeout in seconds for individual API requests.
   # A few calls set their own read timeout: the reads pause_download adds wait 5 s for data, and
-  # connect at most 5 s, so the reply normally beats an MCP client's limit; File Station's task
-  # stops wait 15 s, then read the task's status. It's per chunk, so a reply that trickles can
-  # take longer.
+  # connect at most 5 s, so the reply normally beats an MCP client's limit; `file_task`'s
+  # stop waits 15 s, then reads the task's status (the cleanup stop after an error just waits
+  # 15 s). It's per chunk, so a reply that trickles can take longer.
   # Default: 30
   timeout: 30
 

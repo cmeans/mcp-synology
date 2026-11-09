@@ -234,8 +234,8 @@ async def _stop(client: DsmClient, records: TaskRecords, handle: str, expected: 
     hasn't confirmed it yet" while it still shows as running, never a claim it stopped.
     """
     stopped = await file_task(client, records=records, handle=handle, action="stop")
-    if stopped.startswith("A stop was sent for the "):
-        assert "Stopped" not in stopped, stopped
+    if "hasn't confirmed it yet" in stopped or "the task ended meanwhile" in stopped:
+        assert "isn't known" not in stopped, stopped
         print(f"stop of {handle} answered late (DSM 7.1 stall): {stopped}")
         return
     assert stopped.startswith(expected), stopped
