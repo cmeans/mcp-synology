@@ -895,29 +895,29 @@ def _ask_username(config_username: str | None) -> str:
     here) has no username, so any answer goes, as before: the terminal's variables aren't
     necessarily the MCP client's (``docs/credentials.md``).
     """
-    from mcp_synology.core.auth import _present_or_none
-    from mcp_synology.core.config import quoted_text
 
-    fixed = _present_or_none(config_username)
+    def present(value: str | None) -> str | None:
+        # As the server reads each credential (core/auth.py): a blank one is unset.
+        return value if value and value.strip() else None
+
+    fixed = present(config_username)
     if fixed is None:
         return str(click.prompt("DSM username")).strip()
-    from_env = _present_or_none(os.environ.get("SYNOLOGY_USERNAME")) is not None
+    from_env = present(os.environ.get("SYNOLOGY_USERNAME")) is not None
     where = "SYNOLOGY_USERNAME is set to" if from_env else "The config's auth.username is"
+    # The name exactly as the server sends it, escaped when it's padded or could move the
+    # terminal or forge a line (#541), the same in the prompt and the refusal.
+    shown = fixed if fixed.isprintable() and fixed == fixed.strip() else repr(fixed)
     while True:
-        # Shown escaped: a config's text could move the terminal or forge a line (#541).
         answer = str(
-            click.prompt(
-                f"DSM username [{_shown_name(fixed.strip())}]",
-                default=fixed.strip(),
-                show_default=False,
-            )
+            click.prompt(f"DSM username [{shown}]", default=fixed.strip(), show_default=False)
         ).strip()
         if answer == fixed.strip():
             return fixed
         click.echo(
-            f"{where} {quoted_text(fixed)}, and that's the account the server logs in as, so "
-            "its password is the one to store here. Answer that name, or stop (Ctrl-C) and "
-            "change that setting first to use another account. Nothing was sent or stored.",
+            f"{where} {shown}, and that's the account the server logs in as, so its password "
+            "is the one to store here. Answer that name exactly, or stop (Ctrl-C) and change "
+            "that setting first to use another account. Nothing was sent or stored.",
             err=True,
         )
 
