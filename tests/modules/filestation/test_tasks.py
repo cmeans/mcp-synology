@@ -1741,6 +1741,7 @@ class TestFileTask:
 
         timeouts: list[float] = []
         stopped = [False]
+        reads = [0]
 
         def respond(request: httpx.Request) -> httpx.Response:
             method = dict(request.url.params).get("method", "")
@@ -1750,10 +1751,18 @@ class TestFileTask:
                 stopped[0] = True
                 clock[0] += wait  # the stop takes its whole timeout
                 raise httpx.ReadTimeout("slow")
-            # Each status answers just inside the reread bound, or times out first: running
-            # before the stop, 599 after it.
-            clock[0] += min(9.9, wait)
-            return _err(599) if stopped[0] else _ok(RUNNING)
+            # Before the stop: a 599 just inside the reread bound, then running after the
+            # read's whole wait. After it: a 599 with 0.1 s left, so only the deadline (not
+            # the reread bound or the read count) rules out another read.
+            if stopped[0]:
+                clock[0] += 4.5
+                return _err(599)
+            if not reads[0]:
+                reads[0] += 1
+                clock[0] += 9.9
+                return _err(599)
+            clock[0] += wait
+            return _ok(RUNNING)
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
         await file_task(
