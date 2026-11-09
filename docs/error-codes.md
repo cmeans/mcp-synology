@@ -548,9 +548,11 @@ Common causes:
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped, or after a
   stop DSM refused, that it wasn't accepted; for the
-  stop, that it may or may not have taken effect. Stop requests wait up to
-  90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
-  only after about 60 s, although the stop takes effect at once.
+  stop, that it may or may not have taken effect. A stop DSM got but didn't
+  answer within 15 s isn't an error (#630): DSM 7.1 sometimes answers a `stop`
+  only after about 60 s, although the stop takes effect at once, so the task's
+  status decides the reply: stopped when the task is gone, "a stop was sent,
+  but DSM hasn't confirmed it yet" while it still shows as running.
 - `photo_task` didn't get an answer to its status or stop request: "Photo task
   failed for `photos:<id>`: DSM didn't answer the status request (ReadTimeout)."
   After a stop that went through, the message ends "The stop was requested; its
@@ -635,7 +637,8 @@ nothing is written; neither is JSON that isn't DSM's error envelope (#292).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
 read failed; "… The stop wasn't accepted." after a stop DSM refused) or "… The stop may or may not have taken effect." (the stop
-request itself failed), with `retryable` set as above: a 4xx isn't retryable.
+request itself failed; a 502 or 504 on the stop is instead read as a slow stop, and the task's
+status decides the reply, #630), with `retryable` set as above: a 4xx isn't retryable.
 `photo_task` reports either case as "Photo task failed for `photos:<id>`: …",
 ending "The stop was requested; its status couldn't be read." after a stop that
 went through, or "The stop may or may not have taken effect." when the stop
