@@ -300,7 +300,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
 
     # Prompt for credentials
     click.echo()
-    username = click.prompt("DSM username").strip()
+    username = _ask_username(None)
     password = click.prompt("DSM password", hide_input=True)
 
     # Connect, validate login, fetch hostname. The keyring is written only once DSM accepts the
@@ -412,7 +412,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     if not _may_replace_entry(service, connection.host, connection.port, instance, app_config):
         return
 
-    username = click.prompt("DSM username").strip()
+    username = _ask_username(app_config.auth.username)
     password = click.prompt("DSM password", hide_input=True)
 
     # The keyring is written only once DSM accepts the login (#454).
@@ -881,6 +881,36 @@ async def _attempt_login(
     result["success"] = True
     result["sid"] = sid
     return result
+
+
+def _ask_username(config_username: str | None) -> str:
+    """The DSM username, asked for; the one the server will use when it's already set (#624).
+
+    The server takes the username from ``SYNOLOGY_USERNAME``, then the config, before the
+    keyring (``core/auth.py``), so a different answer here would store one account's password
+    for another account's login: the server's first login would fail, counting toward DSM's
+    Auto Block, with nothing saying why. That name is offered as the default, and any other
+    answer is refused before anything is sent or stored.
+    """
+    from mcp_synology.core.auth import _present_or_none
+    from mcp_synology.core.config import quoted_text
+
+    env_username = _present_or_none(os.environ.get("SYNOLOGY_USERNAME"))
+    fixed = env_username or _present_or_none(config_username)
+    if fixed is None:
+        return str(click.prompt("DSM username")).strip()
+    answer = str(click.prompt("DSM username", default=fixed.strip())).strip()
+    if answer == fixed.strip():
+        return fixed
+    where = "SYNOLOGY_USERNAME is set to" if env_username else "The config's auth.username is"
+    click.echo(
+        f"{where} {quoted_text(fixed)}, and that's the account the server logs in as, so its "
+        "password is the one to store here. To use another account, change that setting "
+        "first, then run setup again.",
+        err=True,
+    )
+    click.echo("Nothing was sent or changed.", err=True)
+    sys.exit(1)
 
 
 def _exit_nothing_changed() -> NoReturn:
