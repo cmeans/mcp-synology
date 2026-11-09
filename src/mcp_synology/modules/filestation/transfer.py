@@ -31,6 +31,7 @@ from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
+    paths_isdir,
     shown,
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
@@ -162,6 +163,18 @@ async def upload_file(
             suggestion="Use overwrite=true to replace the existing file.",
         )
 
+    # With overwrite, whether a file of that name was there, so the reply can say it was
+    # replaced (#620, 0.11.0rc3 live test: an overwrite read like a plain upload). Only a hint:
+    # a lookup that fails leaves it unsaid, never the upload undone.
+    replaced = False
+    if overwrite:
+        try:
+            replaced = f"{dest}/{effective_name}" in await paths_isdir(
+                client, [f"{dest}/{effective_name}"]
+            )
+        except Exception as e:  # noqa: BLE001 - only the reply's wording depends on it
+            logger.debug("Couldn't check for an existing %s: %s", effective_name, e)
+
     try:
         data = await client.upload(
             dest,
@@ -195,6 +208,8 @@ async def upload_file(
         await progress_callback(file_size, file_size)
 
     result = format_status(f"Uploaded {effective_name} ({format_size(file_size)}) to {dest}/")
+    if replaced:
+        result += f"\n    It replaced the {effective_name} that was there."
 
     if file_size >= _LARGE_FILE_THRESHOLD:
         result += (

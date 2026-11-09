@@ -52,6 +52,15 @@ async def _stop_dirsize_task(client: DsmClient, taskid: str) -> None:
         logger.warning("DirSize task cleanup failed for %s", taskid, exc_info=True)
 
 
+def _missing_text(path: str, code: int) -> str:
+    """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
+    model to translate DSM's code), keeping the code."""
+    why = {408: "doesn't exist", 407: "no permission", 105: "no permission"}.get(
+        code, "can't be read"
+    )
+    return f"{shown(path)}: {why} (DSM error {code})"
+
+
 async def get_file_info(
     client: DsmClient,
     *,
@@ -123,7 +132,8 @@ async def get_file_info(
         error_response(
             mapped.error_code,
             "Get file info failed: "
-            + "; ".join(f"{shown(path)} (DSM error {code})" for path, code in missing),
+            + "; ".join(_missing_text(path, code) for path, code in missing)
+            + ".",
             retryable=False,
             param="paths",
             value=paths,
@@ -135,8 +145,7 @@ async def get_file_info(
         )
 
     notes = "".join(
-        "\n" + format_status(f"Not found: {shown(path)} (DSM error {code})", success=False)
-        for path, code in missing
+        "\n" + format_status(_missing_text(path, code), success=False) for path, code in missing
     )
     if any(holds_escape(path) for path, _ in missing):
         # Some paths found: the missing ones get only a note, and listing again would show the
