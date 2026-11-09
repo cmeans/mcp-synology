@@ -36,6 +36,7 @@
 
 ### Changed
 
+- **Bump python group: pydantic 2.14.2→2.14.3, ruff 0.17.3→0.17.4, types-pyyaml 6.0.12.20261030→6.0.12.20261103** (#629)
 - **Higher minimum versions: `click` 8.2.1, `httpx` 0.28, `pydantic` 2.14.2, `pyyaml` 6.0.1** (#572) — for #115. The old floors were never tested. About 90 tests fail on click below 8.2, and interactive `setup` tests hang on 8.2.0; below httpx 0.28, spaces in a query are encoded differently from what the tests pin; `pydantic>=2.0` couldn't install below 2.12.0 because of `mcp`; and `pyyaml` 6.0 can't install on Python 3.12 or later. Pydantic 2.14.2 also has the fixes for its advisories of 2026-10-29 (GHSA-3r8g-cqwr-jr29, GHSA-qpmf-fgh3-ff25, GHSA-955g-x97g-8mcp, GHSA-gj4f-r7mf-jjxh). This only matters if you install into an environment that pins older versions; `uvx` gets the newest anyway.
 - **Bump python group: click 8.3.1→8.5.0, pytest 9.0.3→9.2.0, pytest-asyncio 1.3.0→1.4.1.post1, pytest-cov 7.0.0→7.1.0, ruff 0.15.6→0.17.3, mypy 1.19.1→2.4.1, types-pyyaml 6.0.12.20250915→6.0.12.20261030, types-regex 2026.9.29.20261005→2026.9.29.20261030, respx 0.22.0→0.23.1, testcontainers 4.14.2→4.15.0, playwright 1.58.0→1.64.1, anyio 4.14.2→4.16.0, and ast-serialize 0.13.1 (new, for mypy 2)** (#551)
 - **The code type-checks before and after the mypy and types-PyYAML bumps** (#556) — for #551, whose bumps to mypy 2.4.1 and types-PyYAML 6.0.12.20261030 failed `typecheck` on `type: ignore` comments they no longer need. All three now pass on either version, and nothing changes at runtime for a tool's arguments.
