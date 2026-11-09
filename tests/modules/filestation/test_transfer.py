@@ -346,6 +346,9 @@ class TestUploadFile:
             local_file.chmod(0o644)
 
 
+_OCTET = "application/octet-stream"
+
+
 class TestDownloadFile:
     @respx.mock
     async def test_download_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -541,6 +544,66 @@ class TestDownloadFile:
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == "not_found"
         assert err["suggestion"].endswith(ESCAPED_NAME_ADVICE), err["suggestion"]
+
+    @staticmethod
+    def _file_info(size: int) -> httpx.Response:
+        info = {
+            "files": [
+                {"path": "/video/report.pdf", "name": "report.pdf", "additional": {"size": size}}
+            ]
+        }
+        return httpx.Response(200, json={"success": True, "data": info})
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("download", "code"),
+        [
+            # A proxy's typeless redirect, and a 204: once saved as an empty file.
+            (httpx.Response(302, headers={"location": "https://portal.example/"}), "unavailable"),
+            (httpx.Response(204), "unavailable"),
+            # A body shorter than the file getinfo reported (1000 bytes).
+            (httpx.Response(200, content=b"y" * 10, headers={"content-type": _OCTET}),
+             "unavailable"),
+            # DSM's error envelope under a type DSM never sends a file as.
+            (httpx.Response(200, content=b'{"success":false,"error":{"code":105}}',
+                            headers={"content-type": "text/plain"}), "permission_denied"),
+            (httpx.Response(200, content=b'{"success":false,"error":{"code":105}}'),
+             "permission_denied"),
+        ],
+        ids=["302", "204", "short", "envelope-text", "envelope-untyped"],
+    )  # fmt: skip
+    async def test_an_answer_that_isn_t_the_file_keeps_the_local_one(
+        self, mock_client: DsmClient, tmp_path: Path, download: httpx.Response, code: str
+    ) -> None:
+        """#642: with overwrite=true, each of these replaced the user's file and replied
+        "Downloaded"; now it's an error and the local file is as it was, with no temp file."""
+        self._route(self._file_info(1000), download)
+        existing = tmp_path / "report.pdf"
+        existing.write_bytes(b"the user's report")
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(
+                mock_client, path="/video/report.pdf", dest_folder=str(tmp_path), overwrite=True
+            )
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == code, err
+        assert existing.read_bytes() == b"the user's report"
+        assert [p.name for p in tmp_path.iterdir()] == ["report.pdf"]
+
+    @respx.mock
+    async def test_a_file_that_grew_while_it_downloaded_is_kept(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#642's size check refuses only a shorter body: a log appended to while it
+        downloads is longer than getinfo's size, and is saved."""
+        self._route(
+            self._file_info(1000),
+            httpx.Response(
+                200, content=b"z" * 1200, headers={"content-type": "application/octet-stream"}
+            ),
+        )
+        out = await download_file(mock_client, path="/video/report.pdf", dest_folder=str(tmp_path))
+        assert (tmp_path / "report.pdf").read_bytes() == b"z" * 1200
+        assert "Downloaded report.pdf (1.2 KiB)" in out
 
     @respx.mock
     @pytest.mark.parametrize("status", [502, 504])

@@ -381,6 +381,41 @@ class TestPreviews:
         assert "no m preview for this item (broken)" in out
 
     @respx.mock
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            httpx.Response(302, headers={"location": "https://portal.example/"}),
+            httpx.Response(204),
+            httpx.Response(200, content=b'{"success":false,"error":{"code":105}}'),
+        ],
+        ids=["302", "204", "envelope-untyped"],
+    )
+    async def test_an_answer_that_isn_t_the_preview_keeps_the_local_file(
+        self, tmp_path: Path, reply: httpx.Response
+    ) -> None:
+        """#642: a proxy's redirect, a 204 or DSM's untyped error envelope was saved as the
+        preview, replacing the file there with overwrite=true; now the item isn't downloaded
+        and the local file is as it was."""
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
+        fake.on("SYNO.Foto.Thumbnail", "get", 2, lambda _p: reply)
+        install(fake)
+        existing = tmp_path / "forest-trail_m.jpg"
+        existing.write_bytes(b"the user's preview")
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12],
+                size="m",
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+                overwrite=True,
+            )
+        assert "forest-trail_m.jpg: not downloaded:" in out, out
+        assert existing.read_bytes() == b"the user's preview"
+        assert [p.name for p in tmp_path.iterdir()] == ["forest-trail_m.jpg"]
+
+    @respx.mock
     async def test_404_page_reported(self, tmp_path: Path) -> None:
         """The status said ready, but DSM still answered with its 404 page."""
         fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})

@@ -69,6 +69,14 @@ ProgressCallback = Callable[[int, int | None], Coroutine[Any, Any, None]]
 
 _MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retrying."
 
+# What DSM sends a file as (#292, #642): File Station application/octet-stream for every file
+# (a folder as a ZIP), Photos application/force-download or the image's own type. A body of
+# any other type that's small enough to be DSM's error envelope is checked for one before
+# it's kept.
+_DOWNLOAD_TYPES = ("application/octet-stream", "application/force-download", "application/zip")
+_DOWNLOAD_TYPE_PREFIXES = ("image/", "video/", "audio/")
+_ENVELOPE_SNIFF_LIMIT = 4096
+
 _NOT_A_REPLY = (
     "A reverse proxy or captive portal in front of the NAS may be answering instead of "
     "DSM (a login page, say). Try again shortly; if it keeps happening, check what's in "
@@ -1090,6 +1098,7 @@ class DsmClient:
         chunk_size: int = 65536,
         progress_callback: ProgressCallback | None = None,
         overwrite: bool = True,
+        expected_size: int | None = None,
     ) -> int:
         """Download a file from the NAS via SYNO.FileStation.Download (GET, binary).
 
@@ -1114,6 +1123,7 @@ class DsmClient:
             chunk_size=chunk_size,
             progress_callback=progress_callback,
             overwrite=overwrite,
+            expected_size=expected_size,
         )
 
     async def download_binary(
@@ -1128,6 +1138,7 @@ class DsmClient:
         chunk_size: int = 65536,
         progress_callback: ProgressCallback | None = None,
         overwrite: bool = True,
+        expected_size: int | None = None,
         _is_retry: bool = False,
     ) -> int:
         """Stream a binary DSM reply (GET) to ``dest_file``: File Station's Download,
@@ -1149,6 +1160,14 @@ class DsmClient:
         error status without one raises ``DownloadHttpError`` (a ``FileStationError``)
         for File Station and ``DsmHttpError`` for any other API (Photos answers a thumbnail
         that isn't generated yet with a 404 HTML page).
+
+        Only a 200 is a file (#642): any other status below 400 (a proxy's 3xx, a 204) raises
+        ``DsmReplyError`` before anything is written, as httpx doesn't follow redirects. Before
+        the file is published, a body that isn't the ``Content-Length`` it announced, or is
+        shorter than ``expected_size`` (the size ``getinfo`` reported; a file that grew while it
+        downloaded is kept), raises ``DsmReplyError``, and a small body of a type DSM doesn't
+        send files as is checked for DSM's error envelope, handled as the JSON one is. In
+        every case the temp file is removed and ``dest_file`` is untouched.
         """
         http = self._get_http_once()  # never reused (#222)
 
@@ -1176,6 +1195,30 @@ class DsmClient:
         )
 
         sent_sid, headers = self._session()
+
+        async def on_envelope(error: dict[str, Any]) -> int:
+            """DSM's error envelope instead of the file: a session code logs in again and
+            retries once; any other code raises its error."""
+            code = error.get("code", 0)
+            logger.debug("DSM response: %s/%s — error code %s", api, method, code)
+            if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
+                logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
+                await self._re_authenticate(code, api, sent_sid)
+                return await self.download_binary(
+                    api,
+                    method,
+                    version,
+                    params,
+                    dest_file,
+                    timeout=timeout,
+                    chunk_size=chunk_size,
+                    progress_callback=progress_callback,
+                    overwrite=overwrite,
+                    expected_size=expected_size,
+                    _is_retry=True,
+                )
+            raise error_from_code(code, api, error.get("errors"))
+
         async with http.stream(
             "GET",
             url,
@@ -1199,6 +1242,14 @@ class DsmClient:
                     resp.status_code,
                     suggestion="Check that the file path exists on the NAS.",
                 )
+            if resp.status_code != 200:
+                # A redirect (not followed) or a 204 is never the file (#642): a typeless
+                # 302 was saved as an empty file, replacing a good one with overwrite=true.
+                raise DsmReplyError(
+                    f"{api}/{method}: the answer wasn't a DSM reply (HTTP "
+                    f"{resp.status_code}); nothing was written.",
+                    suggestion=_NOT_A_REPLY,
+                )
 
             content_type = resp.headers.get("content-type", "")
             media_type = content_type.split(";")[0].strip().lower()
@@ -1217,26 +1268,7 @@ class DsmClient:
                         f"{media_type}).",
                         suggestion=_NOT_A_REPLY,
                     )
-                code = error.get("code", 0)
-                logger.debug("DSM response: %s/%s — error code %s", api, method, code)
-
-                if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
-                    logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-                    await self._re_authenticate(code, api, sent_sid)
-                    return await self.download_binary(
-                        api,
-                        method,
-                        version,
-                        params,
-                        dest_file,
-                        timeout=timeout,
-                        chunk_size=chunk_size,
-                        progress_callback=progress_callback,
-                        overwrite=overwrite,
-                        _is_retry=True,
-                    )
-
-                raise error_from_code(code, api, error.get("errors"))
+                return await on_envelope(error)
 
             # Check disk space before writing
             content_length = resp.headers.get("content-length")
@@ -1259,6 +1291,10 @@ class DsmClient:
             # name can't push it past the filesystem's name-length limit.
             tmp_file = dest_file.with_name(f".mcp-synology-{secrets.token_hex(8)}.part")
             bytes_written = 0
+            sniff = media_type not in _DOWNLOAD_TYPES and not media_type.startswith(
+                _DOWNLOAD_TYPE_PREFIXES
+            )
+            envelope: dict[str, Any] | None = None
             # Opened before the try: if the name somehow exists already, that isn't ours
             # to delete.
             fh = open(tmp_file, "xb")  # noqa: SIM115 - closed below, before publishing
@@ -1272,7 +1308,13 @@ class DsmClient:
                     # On disk before the rename, so a power loss can't leave an empty file.
                     fh.flush()
                     os.fsync(fh.fileno())
-                _publish_download(tmp_file, dest_file, overwrite=overwrite)
+                if sniff and bytes_written <= _ENVELOPE_SNIFF_LIMIT:
+                    envelope = _error_envelope(tmp_file.read_bytes())
+                if envelope is not None:
+                    tmp_file.unlink()  # DSM's error, not the file (#642)
+                else:
+                    self._check_download_size(api, method, bytes_written, total_size, expected_size)
+                    _publish_download(tmp_file, dest_file, overwrite=overwrite)
             except BaseException:
                 try:
                     tmp_file.unlink()
@@ -1284,10 +1326,36 @@ class DsmClient:
                     )
                 raise
 
+            if envelope is not None:
+                return await on_envelope(envelope)
             logger.debug(
                 "DSM response: %s/%s — success (%d bytes written)", api, method, bytes_written
             )
             return bytes_written
+
+    @staticmethod
+    def _check_download_size(
+        api: str, method: str, written: int, announced: int | None, expected: int | None
+    ) -> None:
+        """Refuse a body that isn't the file (#642): not the length its own Content-Length
+        announced, or shorter than the size DSM reported for the file before the download.
+        Longer than that is kept: the file may have grown while it downloaded."""
+        if announced is not None and written != announced:
+            raise DsmReplyError(
+                f"{api}/{method}: the answer ended at {written:,} of the {announced:,} bytes "
+                "it announced; the local file wasn't changed.",
+                suggestion=_NOT_A_REPLY,
+            )
+        if expected is not None and written < expected:
+            raise DsmReplyError(
+                f"{api}/{method}: the answer was {written:,} bytes for a file DSM reported as "
+                f"{expected:,} bytes; the local file wasn't changed.",
+                suggestion=(
+                    "The file may have changed on the NAS while it downloaded, or something in "
+                    "front of the NAS answered instead of DSM. Try again; if it keeps "
+                    f"happening, run {CHECK_COMMAND} {NO_FILE_NOTE}."
+                ),
+            )
 
     async def fetch_dsm_info(self) -> dict[str, Any]:
         """Query SYNO.DSM.Info getinfo and return the data dict.

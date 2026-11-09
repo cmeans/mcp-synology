@@ -427,6 +427,8 @@ async def download_file(
             timeout=timeout,
             progress_callback=progress_callback,
             overwrite=overwrite,
+            # getinfo's size, for a file (#642): a shorter body isn't the file.
+            expected_size=nas_file_size if exists else None,
         )
     except FileExistsError:
         # The local file appeared while the download streamed; overwrite=False holds.
