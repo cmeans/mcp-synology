@@ -6739,11 +6739,11 @@ class TestOverwriteSaysWhatItReplaced:
             dest_folder="/w/dst",
             overwrite=True,
         )
-        assert "\nReplaced what was already there: a.txt" in result, result
+        lines = result.splitlines()
+        assert "Replaced what was already there: a.txt" in lines, result
         assert (
-            "\nMerged into the folder(s) already there, replacing files with the same names: f"
-        ) in result, result
-        assert "new.txt" not in result.split("Replaced")[1], result
+            "Merged into the folder(s) already there, replacing files with the same names: f"
+        ) in lines, result
 
     @respx.mock
     async def test_nothing_there_says_nothing_extra(self, mock_client: DsmClient) -> None:

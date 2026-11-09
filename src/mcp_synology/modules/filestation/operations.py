@@ -950,23 +950,29 @@ async def _copy_move(
     # this one replaced (#597; pre-QA on #623). Not a target that is the source itself, nor one
     # in or at a folder this call re-created (`fresh`), nor one an earlier item of the call
     # landed: those weren't there before. A lookup that fails leaves the note unsaid.
+    def made_here(path: str) -> bool:
+        """``path`` is, or is inside, a folder this call re-created (its parents too)."""
+        return any(f == path or f.startswith(path + "/") or path.startswith(f + "/") for f in fresh)
+
     targets: dict[str, str] = {}
     if overwrite:
-        earlier_names = {
-            name_key(q) for q in (already_done or []) if (dest_of or {}).get(q) == dest
-        }
         targets = {
             q: t
             for q in normalized
-            if (t := f"{dest}/{q.rsplit('/', 1)[-1]}") != q
-            and dest not in fresh
-            and t not in fresh
-            and name_key(q) not in earlier_names
+            if (t := f"{dest}/{q.rsplit('/', 1)[-1]}") != q and not made_here(t)
         }
     # One request per target, all sent at once, before the checks below: awaited only for the
     # reply, after every task started, so this call's landing records and starts aren't
     # delayed (#597; pre-QA on #623 measured a parallel call slipping in when they were).
-    lookups = {q: asyncio.ensure_future(paths_isdir(client, [t])) for q, t in targets.items()}
+    # At most a few at once: an overwrite of hundreds of items mustn't burst requests at DSM
+    # ahead of the checks that share the connection pool (pre-QA r2 on #623).
+    gate = asyncio.Semaphore(4)
+
+    async def look(target: str) -> dict[str, bool]:
+        async with gate:
+            return await paths_isdir(client, [target])
+
+    lookups = {q: asyncio.ensure_future(look(t)) for q, t in targets.items()}
     try:
         if check_sources:
             await _refuse_missing_sources(client, operation, normalized, paths)
@@ -1051,6 +1057,10 @@ async def _copy_move_tasks(
                     _KIND[operation], q, dest, overwrite=overwrite, remove_src=remove_src
                 )
             )
+        # What was there, read before the first start: answered after it, a lookup would see
+        # this call's own landing (pre-QA r2 on #623). The records are published by now, so
+        # waiting here doesn't open #597's window.
+        replaced = await _replaced(lookups, targets)
         for i, p in enumerate(normalized):
             # A copy of the same source to another destination is a different operation; a
             # move (or restore) of a source that is already moving anywhere is not.
@@ -1222,7 +1232,7 @@ async def _copy_move_tasks(
             earlier=[
                 q for q in [*done, *skipped_so_far] if q not in normalized and went.get(q) == dest
             ],
-            replaced=await _replaced(lookups, targets),
+            replaced=replaced,
         )
         return text, False
 

@@ -250,20 +250,25 @@ class TestUploadFile:
         assert "[+]" in result
         assert "test.txt" in result
 
-    @pytest.mark.parametrize(("there", "said"), [(True, True), (False, False), (None, False)])
+    @pytest.mark.parametrize(
+        ("there", "said"),
+        [(True, True), (False, False), (None, False), ("folder", False)],
+    )
     @respx.mock
     async def test_overwrite_says_when_it_replaced_a_file(
-        self, mock_client: DsmClient, tmp_path: Path, there: bool | None, said: bool
+        self, mock_client: DsmClient, tmp_path: Path, there: bool | str | None, said: bool
     ) -> None:
         """#620 (0.11.0rc3 live test): an overwrite read like a plain upload. ``there``: the
-        file was there (True), wasn't (False), or the lookup failed (None: nothing said)."""
+        file was there (True), wasn't (False), the lookup failed (None), or a folder has the
+        name ("folder"): only a file there is said to be replaced."""
         local_file = tmp_path / "test.txt"
         local_file.write_text("updated content")
         info: dict[str, object]
         if there is None:
             info = {"success": False, "error": {"code": 119}}
         elif there:
-            info = {"success": True, "data": {"files": [{"isdir": False, "path": "/v/test.txt"}]}}
+            isdir = there == "folder"
+            info = {"success": True, "data": {"files": [{"isdir": isdir, "path": "/v/test.txt"}]}}
         else:
             info = {"success": True, "data": {"files": [{"code": 408, "path": "/v/test.txt"}]}}
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=info)
