@@ -1760,17 +1760,93 @@ class TestIdParameters:
                     paths.append((tool.name, name))
                     assert types == {"string"}, (tool.name, name, types)
                     assert name in FOLDER_PARAMS.get(tool.name, ()), (tool.name, name)
-                elif types == {"integer", "string"}:
+                elif name.endswith(("_name", "_names")) or name in self.NAME_PARAMS:
                     both.append((tool.name, name))
-                    assert name.endswith(("_name", "_names")) or name in self.NAME_PARAMS, (
-                        tool.name,
-                        name,
-                    )
+                    assert types == {"string"}, (tool.name, name, types)
         # The walk found them: 9 album or person names and 2 tag parameters; 11 folder
         # paths; and the IDs.
         assert len(both) == 11, both
         assert len(paths) == 11, paths
         assert len(ids) > 25, ids
+
+    async def test_no_served_schema_declares_a_union_type(self) -> None:
+        """Gemini's tool calling rejects a union type (`["integer", "string"]`, `anyOf`), and
+        one bad tool can fail a whole request, so no tool in any module declares one (#615).
+        Optional parameters are compacted to their one type (#163)."""
+        tools, _ = await _served(create_server(make_test_config(modules=ALL_MODULES)))
+        found: list[tuple[str, str]] = []
+
+        def walk(node: Any, where: str) -> None:
+            if isinstance(node, dict):
+                if isinstance(node.get("type"), list):
+                    found.append((where, "type list"))
+                found.extend((where, k) for k in ("anyOf", "oneOf", "allOf") if k in node)
+                for key, value in node.items():
+                    walk(value, f"{where}.{key}")
+            elif isinstance(node, list):
+                for i, value in enumerate(node):
+                    walk(value, f"{where}[{i}]")
+
+        for tool in tools:
+            walk(tool.input_schema, tool.name)
+        assert len(tools) > 50
+        assert not found, found
+
+    async def test_a_name_parameter_takes_a_number_as_that_name(self) -> None:
+        """A name of digits (`2024`) sent as a number is that name, on every Photos name
+        parameter; true, false and a decimal are refused (#615)."""
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        checked = 0
+        for info in PHOTOS_INFO.tools:
+            tool = server._tool_manager.get_tool(info.name)
+            assert tool is not None
+            for name, field in tool.fn_metadata.arg_model.model_fields.items():
+                if not (name.endswith(("_name", "_names")) or name in self.NAME_PARAMS):
+                    continue
+                hint = (
+                    Annotated[field.annotation, *field.metadata]
+                    if field.metadata
+                    else field.annotation
+                )
+                adapter: TypeAdapter[Any] = TypeAdapter(hint)
+                listed = "array" in json.dumps(adapter.json_schema())
+                for given, wanted in ((2024, "2024"), ("2024", "2024"), ("Trip", "Trip")):
+                    got = adapter.validate_python([given] if listed else given)
+                    assert got == ([wanted] if listed else wanted), (info.name, name, got)
+                    assert type(got[0] if listed else got) is str
+                for wrong in (True, False, 4.5):
+                    with pytest.raises(ValidationError):
+                        adapter.validate_python([wrong] if listed else wrong)
+                checked += 1
+        assert checked == 11, checked
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            ("delete_photo_albums", {"album_names": [2024]}),
+            ("list_photos", {"album_name": 2024}),
+            ("list_photos", {"person_name": 7}),
+            ("edit_person", {"action": "hide", "person_name": 7}),
+            ("merge_people", {"target_name": 1, "merge_names": [2]}),
+            ("photo_share_link", {"action": "stop", "album_name": 2024}),
+            ("upload_photos", {"local_paths": ["/nope.jpg"], "folder_path": "/", "album_name": 9}),
+            ("photo_album", {"action": "rename", "album_name": 2024, "name": "x"}),
+            ("tag_photos", {"action": "add", "ids": [1], "tags": [2024]}),
+        ],
+    )
+    async def test_a_name_sent_as_a_number_gets_past_a_real_tool_call(
+        self, tool: str, args: dict[str, Any]
+    ) -> None:
+        """Through MCP's call path, with the schema saying text: no validation error, and the
+        call goes on to the NAS (here, unreachable) or its own local checks."""
+        respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        async with Client(server) as client:
+            result = await client.call_tool(tool, args)
+        text = _reply(result)
+        assert "must be text" not in text and "has a value" not in text, text
+        assert "is required" not in text, text
 
     async def test_a_photos_id_parameter_refuses_true_and_false(self) -> None:
         """pydantic reads true as 1: `album_ids=[true]` would have deleted album 1. Every

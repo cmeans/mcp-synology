@@ -12,7 +12,7 @@ switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
-from pydantic import BeforeValidator, Field, WithJsonSchema, field_validator
+from pydantic import BeforeValidator, Field, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -346,12 +346,10 @@ def _photo_id(value: object) -> object:
 
 PhotoId = Annotated[int, BeforeValidator(_photo_id)]
 # A name, never an ID (an album's, a person's or a tag's): a number is that name (`2024`), as
-# the smart-album condition already took it (#609).
-Name = Annotated[
-    str,
-    BeforeValidator(lambda v: str(v) if type(v) is int else v),
-    WithJsonSchema({"type": ["integer", "string"]}),
-]
+# the smart-album condition already took it (#609). Its schema says text only: Gemini's tool
+# calling rejects a union type (`["integer", "string"]`), and so do other strict clients, so
+# no served schema declares one (#615); a number still arrives as that name.
+Name = Annotated[str, BeforeValidator(lambda v: str(v) if type(v) is int else v)]
 TagName = Name
 
 
