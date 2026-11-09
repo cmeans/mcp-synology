@@ -858,7 +858,9 @@ class TestDownloadIsTheFile:
 
     @respx.mock
     @pytest.mark.parametrize(("api", "method"), _DOWNLOADS)
-    @pytest.mark.parametrize("status", [201, 202, 203, 204, 206, 301, 302, 303, 304, 307, 308])
+    @pytest.mark.parametrize(
+        "status", [201, 202, 203, 204, 205, 206, 301, 302, 303, 304, 305, 307, 308]
+    )
     @pytest.mark.parametrize("ctype", [None, "application/octet-stream", "image/jpeg"])
     async def test_a_status_other_than_200_is_never_the_file(
         self, tmp_path: Path, api: str, method: str, status: int, ctype: str | None
@@ -1024,23 +1026,90 @@ class TestDownloadIsTheFile:
                 await client.download("/video/movie.mkv", dest, expected_size=1000)
         assert str(exc.value) == (
             f"SYNO.FileStation.Download/download: the answer was {written:,} bytes for a file "
-            "DSM reported as 1,000 bytes; the local file wasn't changed."
+            "DSM reported as 1,000 bytes; nothing was saved."
         )
         self._untouched(tmp_path, dest)
 
     def test_a_body_that_isn_t_its_announced_length_is_refused(self) -> None:
-        """httpx itself raises on a body cut short of its Content-Length; this check is the
-        backstop, before anything is published."""
+        """httpx itself raises on a body cut short of its Content-Length over a real
+        connection; this check is the backstop, before anything is published. It counts the
+        bytes as received, not as decoded."""
         from mcp_synology.core.errors import DsmReplyError
 
         with pytest.raises(DsmReplyError) as exc:
-            DsmClient._check_download_size("A", "m", 10, 1000, None)
+            DsmClient._check_download_size("A", "m", 10, 10, 1000, None)
         assert str(exc.value) == (
-            "A/m: the answer ended at 10 of the 1,000 bytes it announced; the local file "
-            "wasn't changed."
+            "A/m: the answer ended at 10 of the 1,000 bytes it announced; nothing was saved."
         )
-        DsmClient._check_download_size("A", "m", 1000, 1000, None)
-        DsmClient._check_download_size("A", "m", 0, None, None)
+        DsmClient._check_download_size("A", "m", 5000, 1000, 1000, None)  # gzip: 1000 sent
+        DsmClient._check_download_size("A", "m", 0, 0, None, None)
+
+    @respx.mock
+    async def test_a_gzipped_download_is_saved_decoded(self, tmp_path: Path) -> None:
+        """Pre-QA on #656: Content-Length counts the compressed bytes. A gzipped file, which
+        decodes to more than that, was refused as "ended at 5,000 of the 41 bytes"."""
+        import gzip
+
+        data = b"a" * 5000
+        packed = gzip.compress(data)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200,
+            content=packed,
+            headers={
+                "content-type": "application/octet-stream",
+                "content-encoding": "gzip",
+                "content-length": str(len(packed)),
+            },
+        )
+        dest = tmp_path / "a.txt"
+        client = make_client(make_api_cache())
+        async with client:
+            assert await client.download("/video/a.txt", dest, expected_size=5000) == 5000
+        assert dest.read_bytes() == data
+
+    @staticmethod
+    def _padded_envelope(size: int) -> bytes:
+        head = b'{"success":false,"error":{"code":105,"errors":[{"code":105,"path":"/x"}]}'
+        return head + b" " * (size - len(head) - 1) + b"}"
+
+    @respx.mock
+    @pytest.mark.parametrize(("size", "sniffed"), [(4096, True), (4097, False)])
+    async def test_the_sniff_reads_up_to_4_kib(
+        self, tmp_path: Path, size: int, sniffed: bool
+    ) -> None:
+        """An envelope with an errors list padded to the limit is DSM's error; one byte
+        more is saved as it is, since a body that size is read back only when small."""
+        from mcp_synology.core.client import _ENVELOPE_SNIFF_LIMIT
+
+        assert _ENVELOPE_SNIFF_LIMIT == 4096
+        body = self._padded_envelope(size)
+        assert len(body) == size
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, content=body, headers={"content-type": "text/plain"}
+        )
+        dest = tmp_path / "x.txt"
+        client = make_client(make_api_cache())
+        async with client:
+            if sniffed:
+                with pytest.raises(SynologyError) as exc:
+                    await client.download("/video/x.txt", dest)
+                assert exc.value.code == 105
+                assert not dest.exists()
+            else:
+                assert await client.download("/video/x.txt", dest) == size
+                assert dest.read_bytes() == body
+
+    @respx.mock
+    @pytest.mark.parametrize("ctype", ["application/zip", "video/mp4", "audio/mpeg"])
+    async def test_the_precaution_types_aren_t_sniffed(self, tmp_path: Path, ctype: str) -> None:
+        """Types a proxy might send a file as are kept as files, as DSM's own are."""
+        body = b'{"success":false,"error":{"code":105}}'
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            200, content=body, headers={"content-type": ctype}
+        )
+        client = make_client(make_api_cache())
+        async with client:
+            assert await client.download("/video/x", tmp_path / "x") == len(body)
 
 
 class TestRequestPostForm:

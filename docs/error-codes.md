@@ -637,8 +637,7 @@ nothing is written; neither is JSON that isn't DSM's error envelope (#292). Nor 
 any status but 200 (a proxy's redirect, a 204: "the answer wasn't a DSM reply (HTTP
 302); nothing was written."), a body that isn't the length it announced, or a
 `download_file` body shorter than the size DSM reported for the file ("the answer
-was 10 bytes for a file DSM reported as 1,000 bytes; the local file wasn't
-changed."); a small body of a type DSM doesn't send files as is checked for DSM's
+was 10 bytes for a file DSM reported as 1,000 bytes; nothing was saved."); a small body of a type DSM doesn't send files as is checked for DSM's
 error envelope, and an envelope there is that DSM error. In each case the local
 file that was there is kept as it was (#642).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for

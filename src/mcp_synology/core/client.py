@@ -70,9 +70,10 @@ ProgressCallback = Callable[[int, int | None], Coroutine[Any, Any, None]]
 _MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retrying."
 
 # What DSM sends a file as (#292, #642): File Station application/octet-stream for every file
-# (a folder as a ZIP), Photos application/force-download or the image's own type. A body of
-# any other type that's small enough to be DSM's error envelope is checked for one before
-# it's kept.
+# and a folder's ZIP, Photos application/force-download or the image's own type (verified on
+# DSM 7.1 and 7.2.2). application/zip, video/* and audio/* aren't captured from DSM: they're
+# a precaution, types a proxy might send a file as. A body of any other type that's small
+# enough to be DSM's error envelope is checked for one before it's kept.
 _DOWNLOAD_TYPES = ("application/octet-stream", "application/force-download", "application/zip")
 _DOWNLOAD_TYPE_PREFIXES = ("image/", "video/", "audio/")
 _ENVELOPE_SNIFF_LIMIT = 4096
@@ -1313,7 +1314,14 @@ class DsmClient:
                 if envelope is not None:
                     tmp_file.unlink()  # DSM's error, not the file (#642)
                 else:
-                    self._check_download_size(api, method, bytes_written, total_size, expected_size)
+                    self._check_download_size(
+                        api,
+                        method,
+                        bytes_written,
+                        resp.num_bytes_downloaded,
+                        total_size,
+                        expected_size,
+                    )
                     _publish_download(tmp_file, dest_file, overwrite=overwrite)
             except BaseException:
                 try:
@@ -1335,21 +1343,30 @@ class DsmClient:
 
     @staticmethod
     def _check_download_size(
-        api: str, method: str, written: int, announced: int | None, expected: int | None
+        api: str,
+        method: str,
+        written: int,
+        received: int,
+        announced: int | None,
+        expected: int | None,
     ) -> None:
         """Refuse a body that isn't the file (#642): not the length its own Content-Length
         announced, or shorter than the size DSM reported for the file before the download.
-        Longer than that is kept: the file may have grown while it downloaded."""
-        if announced is not None and written != announced:
+        Longer than that is kept: the file may have grown while it downloaded.
+
+        ``Content-Length`` counts the bytes as sent, so ``received`` is the raw count
+        (``num_bytes_downloaded``): a gzipped body decodes to more than its length (pre-QA on
+        #656). ``written``, the decoded size, is what's checked against ``expected``."""
+        if announced is not None and received != announced:
             raise DsmReplyError(
-                f"{api}/{method}: the answer ended at {written:,} of the {announced:,} bytes "
-                "it announced; the local file wasn't changed.",
+                f"{api}/{method}: the answer ended at {received:,} of the {announced:,} bytes "
+                "it announced; nothing was saved.",
                 suggestion=_NOT_A_REPLY,
             )
         if expected is not None and written < expected:
             raise DsmReplyError(
                 f"{api}/{method}: the answer was {written:,} bytes for a file DSM reported as "
-                f"{expected:,} bytes; the local file wasn't changed.",
+                f"{expected:,} bytes; nothing was saved.",
                 suggestion=(
                     "The file may have changed on the NAS while it downloaded, or something in "
                     "front of the NAS answered instead of DSM. Try again; if it keeps "
