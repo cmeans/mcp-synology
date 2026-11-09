@@ -2723,6 +2723,56 @@ class TestUnknownArguments:
         assert "Ignore" not in json.dumps(err) and "SYSTEM" not in json.dumps(err)
         assert not route.called
 
+    @pytest.mark.parametrize(
+        ("tool", "arguments", "message", "param", "suggestion"),
+        [
+            (
+                "upload_photos",
+                {"local_paths": ["/x.jpg"], "folder": "/Trips"},
+                "upload_photos failed: `folder` is now `folder_id` or `folder_path`. Nothing "
+                "was done.",
+                "folder",
+                "Pass only upload_photos's own parameters, listed in valid.",
+            ),
+            (
+                "list_files",
+                {"path": "/video", "album": 3},
+                "list_files failed: 1 argument(s) aren't parameters of list_files. Nothing was "
+                "done.",
+                None,
+                "Pass only list_files's own parameters, listed in valid.",
+            ),
+            (
+                "get_system_info",
+                {"album": 3},
+                "get_system_info failed: 1 argument(s) aren't parameters of get_system_info. "
+                "Nothing was done.",
+                None,
+                "get_system_info takes no parameters: call it with none.",
+            ),
+        ],
+    )
+    async def test_param_and_suggestion(
+        self,
+        tool: str,
+        arguments: dict[str, Any],
+        message: str,
+        param: str | None,
+        suggestion: str,
+    ) -> None:
+        """Pre-QA r7 on #615: a renamed name sent to a tool without its replacements is just
+        unknown, the param names a renamed parameter only when it's the sole problem, and a
+        tool with no parameters says so."""
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        async with Client(server) as client:
+            result = await client.call_tool(tool, arguments)
+        err = self._error(result)
+        assert (err["message"], err.get("param"), err["suggestion"]) == (
+            message,
+            param,
+            suggestion,
+        )
+
     async def test_an_unknown_name_is_refused_before_the_forging_check_echoes_it(self) -> None:
         """The forging check names the argument it refuses; an unknown name with a line break
         is refused first, unnamed (pre-QA on #615)."""
@@ -2758,14 +2808,36 @@ class TestValidationErrorsQuoteNothing:
             (
                 "list_photos",
                 {"album_id": "Trip 2024"},
-                "list_photos failed: `album_id` must be an ID, a whole number; a name goes in "
-                "`album_name`. Nothing was done.",
+                "list_photos failed: `album_id` must be an ID, a whole number (a name goes in "
+                "`album_name`). Nothing was done.",
             ),
             (
                 "delete_photo_folders",
                 {"folder_ids": ["/Trips"]},
-                "delete_photo_folders failed: `folder_ids` must be an ID, a whole number; a path "
-                "goes in `folder_paths`. Nothing was done.",
+                "delete_photo_folders failed: `folder_ids` must be an ID, a whole number (a path "
+                "goes in `folder_paths`). Nothing was done.",
+            ),
+            (
+                "list_photos",
+                {"album_id": "Trip", "person_id": "Jo"},
+                "list_photos failed: `album_id` must be an ID, a whole number (a name goes in "
+                "`album_name`); `person_id` must be an ID, a whole number (a name goes in "
+                "`person_name`). Nothing was done.",
+            ),
+            (
+                "photo_album",
+                {"action": "create_smart", "name": "s", "condition": "x"},
+                "photo_album failed: `condition` must be an object. Nothing was done.",
+            ),
+            (
+                "list_files",
+                {"path": "/video", "limit": 1.5},
+                "list_files failed: `limit` must be a whole number. Nothing was done.",
+            ),
+            (
+                "get_photo",
+                {"ids": [1], "exif": "maybe"},
+                "get_photo failed: `exif` must be true or false. Nothing was done.",
             ),
             (
                 "delete_photo_albums",
@@ -2797,6 +2869,8 @@ class TestValidationErrorsQuoteNothing:
         assert "input_value" not in text, text
         err = json.loads(text[text.index("{") :])["error"]
         assert (err["code"], err["message"]) == ("invalid_parameter", message)
+        # The first field named is the error's param.
+        assert err["param"] == message.split("`")[1], err
         assert not route.called
 
     async def test_an_unknown_tool_name_isnt_quoted(self) -> None:

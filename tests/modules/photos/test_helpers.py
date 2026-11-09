@@ -13,6 +13,7 @@ from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyErr
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Ref,
+    check_folder_path,
     check_space,
     encode,
     id_list,
@@ -231,6 +232,22 @@ class TestFolders:
             value,
         )
         assert what in err["message"]
+
+    @pytest.mark.parametrize(
+        ("param", "what"),
+        [
+            ("destination_path", "destination_path"),
+            ("folder_paths", "an entry in folder_paths"),
+            ("condition", "an entry in the condition's folder_paths"),
+        ],
+    )
+    def test_an_empty_path_refusal_names_what_was_empty(self, param: str, what: str) -> None:
+        """Pre-QA r6/r7 on #615: a list's or a condition's entry is what's empty."""
+        with pytest.raises(ToolError) as exc:
+            check_folder_path(" ", param)
+        assert _error(exc)["message"] == (
+            f"{what} is empty: pass a folder path (the space's root is written `/`)."
+        )
 
     @pytest.mark.parametrize("value", ["", " ", "\t"])
     @pytest.mark.parametrize("param", ["folder_path", "parent_path", "destination_path"])
