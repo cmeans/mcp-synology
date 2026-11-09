@@ -29,6 +29,12 @@ real output. "Found" names the release candidate under test (not a published rel
 | 0.10.0rc6 | Five local-path parameters sent the model to the server instructions for the allowed folders, which claude.ai never receives | #390 |
 | 0.10.0rc6 | `get_system_info` promised the CPU, which only an administrator account gets | #390 |
 | 0.10.0rc6 | A later page of a listing said "Showing 2 of 5 items" without saying which two | #390 |
+| 0.11.0rc1 (rehearsal) | A missing path copied from an escaped name (a folder holding a direction-changing character) got a bare "not found", not that it can't be used as shown | #606 |
+| 0.11.0rc2 | Photos refused an ID sent as a number in every ID-or-name parameter | #611 |
+| 0.11.0rc2 | A delete under `/homes/<user>/#recycle` said "permanent", but DSM kept the items in the homes bin | #613 |
+| 0.11.0rc3 | An album named with digits (`9876543`) was taken for an ID, so the tester deleted the wrong album; IDs, names and paths now go in separate parameters | #615 |
+| 0.11.0rc3 | Replies didn't say an overwrite replaced a file, and `get_file_info` on missing paths said only "DSM error 408" | #623, #626 |
+| 0.11.0rc3, rc4 | `file_task`'s stop got no reply in claude.ai: DSM 7.1 answered the stop long after it took effect, past claude.ai's 60 s limit | #632 |
 
 ## Clients tested, and how they differ
 

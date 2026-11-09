@@ -113,7 +113,15 @@ def test_every_module_is_documented() -> None:
 def test_coverage_table_lists_only_implemented_modules() -> None:
     """Every row of "Supported modules" is a module the server loads, in the README's
     order: the README lists no planned module (Container Manager was, #441)."""
-    table = README.split("## Supported modules", 1)[1].split("**Coverage**", 1)[0]
+    # The section's first table: its "|" lines up to the first line that isn't one.
+    section = README.split("## Supported modules", 1)[1].split("\n## ", 1)[0]
+    lines = section.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.lstrip().startswith("|"))
+    end = next(
+        (i for i in range(start, len(lines)) if not lines[i].lstrip().startswith("|")),
+        len(lines),
+    )
+    table = "\n".join(lines[start:end])
     # GitHub renders an indented "|" line as a row too; skip the header and --- lines.
     rows = [line for line in table.splitlines() if line.lstrip().startswith("|")][2:]
     assert [m.group(1) for m in _TABLE_ROW.finditer(table)] == list(SECTIONS)

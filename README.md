@@ -55,21 +55,11 @@ Each module covers one DSM package. A module loads only when it's listed under `
 
 | Module | Config key | READ tools | WRITE tools | DSM account | DSM versions |
 |---|---|---|---|---|---|
-| [System](#system) | `system` | 2 · 🟡 Partial | — | Any; `get_resource_usage` and some details need an administrator | 7.1 – 7.4.1 |
-| [File Station](#file-station) | `filestation` | 7 · 🟢 Most | 8 · 🟡 Partial | Any | 7.1 – 7.4.1 |
-| [Synology Photos](#synology-photos) | `photos` | 4 · 🟢 Most | 15 · 🟢 Most | Any, with the Photos privilege | 7.1 – 7.4.1 (favorites and concepts: 7.2.2+) |
-| [Download Station](#download-station) | `downloadstation` | 5 · 🟢 Most | 7 · 🟡 Partial | Any, with the Download Station privilege (other accounts see only their own tasks) | 7.1 – 7.4.1 |
-| [Storage](#storage) | `storage` | 11 · 🟢 Most | — | Admin only | 7.1 – 7.4.1 |
-
-**Coverage**, per tier, of what the DSM package itself can do:
-
-| Mark | Meaning |
-|---|---|
-| `7 · 🟢 Most` | The number of tools in that tier, then its coverage |
-| ✅ **Full** | Everything the package can do in that tier |
-| 🟢 **Most** | The main features; the gaps are listed below and under the module |
-| 🟡 **Partial** | The core features, with notable gaps |
-| — | No tools in that tier |
+| [System](#system) | `system` | 2 · Partial | — | Any; `get_resource_usage` and some details need an administrator | 7.1 – 7.4.1 |
+| [File Station](#file-station) | `filestation` | 7 · Most | 8 · Partial | Any | 7.1 – 7.4.1 |
+| [Synology Photos](#synology-photos) | `photos` | 4 · Most | 15 · Most | Any, with the Photos privilege | 7.1 – 7.4.1 (favorites and concepts: 7.2.2+) |
+| [Download Station](#download-station) | `downloadstation` | 5 · Most | 7 · Partial | Any, with the Download Station privilege (other accounts see only their own tasks) | 7.1 – 7.4.1 |
+| [Storage](#storage) | `storage` | 11 · Most | — | Admin only | 7.1 – 7.4.1 |
 
 What's not covered, in short (each module's section has the full list):
 
