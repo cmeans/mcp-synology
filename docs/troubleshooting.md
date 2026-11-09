@@ -125,6 +125,16 @@ was stopped, only partly done or still going, and one large file can take many m
 copy, list the destination; for a move or restore, the source and the destination: a folder appears there as soon as
 the task starts, so compare it with the source before relying on it.
 
+### `file_task` says a stop "hasn't confirmed it yet", "whether it stopped isn't known", or "DSM was too slow to check the details"
+
+**Why:** DSM didn't answer the stop within 15 s. DSM can be slow to answer a stop although the
+stop takes effect at once, and an MCP client may stop waiting first, so `file_task` waits 15 s,
+then reads the task's status: still running, unreadable, or finished
+(with its full result when there's time, or what the status says and a note when there isn't).
+
+**What to do:** wait a minute, then call `file_task` with the handle: it says whether the task is
+gone, still running, or finished, with its full result. Don't send the stop again before then.
+
 ### `file_task` says "A stop was sent, but DSM can't confirm it" or "DSM didn't accept the stop"
 
 **Why:** DSM answered that it has no such task (error 599, or 401, File Station's code for it; that

@@ -637,7 +637,8 @@ nothing is written; neither is JSON that isn't DSM's error envelope (#292).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
 read failed; "… The stop wasn't accepted." after a stop DSM refused) or "… The stop may or may not have taken effect." (the stop
-request itself failed), with `retryable` set as above: a 4xx isn't retryable.
+request itself failed; a 502 or 504 on the stop is instead read as a slow stop, and the task's
+status decides the reply, #630), with `retryable` set as above: a 4xx isn't retryable.
 `photo_task` reports either case as "Photo task failed for `photos:<id>`: …",
 ending "The stop was requested; its status couldn't be read." after a stop that
 went through, or "The stop may or may not have taken effect." when the stop
