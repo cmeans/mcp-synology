@@ -15,6 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, RequestTooLongError
 from mcp_synology.modules.filestation.tasks import (
+    STOP_WAIT,
     DiscoveryNote,
     Handle,
     HandleKind,
@@ -232,7 +233,7 @@ class TestPollTask:
         with pytest.raises(asyncio.CancelledError):
             await task
         assert calls.count("stop") == 1
-        assert timeouts == {"status": 30, "stop": 90}
+        assert timeouts == {"status": 30, "stop": STOP_WAIT}
 
     @pytest.mark.parametrize(
         "exc",
@@ -409,9 +410,9 @@ class TestPollTask:
         assert result.outcome == "poll_error"
         assert result.stopped is True
         assert result.error is not None
-        # DSM 7.1 can take ~60 s to answer a Delete stop that worked at once (#245).
-        assert timeouts == {"status": 30, "stop": 90}
-        assert connects == {"status": 30, "stop": 30}
+        # A stop waits STOP_WAIT for DSM's answer, then the status decides (#630).
+        assert timeouts == {"status": 30, "stop": STOP_WAIT}
+        assert connects == {"status": 30, "stop": STOP_WAIT}  # connect capped at it
 
     @respx.mock
     async def test_a_599_that_clears_keeps_polling(
@@ -1213,9 +1214,9 @@ class TestFileTask:
             ("SYNO.FileStation.CopyMove", "stop"),
         ]
         assert dict(route.calls.last.request.url.params)["taskid"] == '"FileStation_M1"'
-        assert [_read_timeout(c.request) for c in route.calls] == [30, 90]
-        # Only the read timeout is raised for the stop (#245); connect keeps the default.
-        assert [c.request.extensions["timeout"]["connect"] for c in route.calls] == [30, 30]
+        assert [_read_timeout(c.request) for c in route.calls] == [30, STOP_WAIT]
+        # The stop waits STOP_WAIT (#630); connect is capped at it, as for any read timeout.
+        assert [c.request.extensions["timeout"]["connect"] for c in route.calls] == [30, STOP_WAIT]
         assert text == (
             "Stopped move of /s/b; it may be partly done. List the path to see what's left."
         )
@@ -1536,11 +1537,13 @@ class TestFileTask:
     @respx.mock
     @pytest.mark.parametrize(
         ("exc", "code"),
-        [(httpx.ReadTimeout("t"), "timeout"), (httpx.ConnectError("refused"), "unavailable")],
+        [(httpx.ConnectError("refused"), "unavailable"), (httpx.WriteTimeout("t"), "timeout")],
     )
     async def test_file_task_stop_unanswered_stop(
         self, mock_client: DsmClient, exc: Exception, code: str
     ) -> None:
+        """A stop that never reached DSM, or was lost on the way: may or may not have worked.
+        (A stop DSM got but answered slowly, a read timeout, is #630's: below.)"""
         from mcp_synology.modules.filestation.tasks import file_task
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -1556,6 +1559,87 @@ class TestFileTask:
         assert "the stop request for `delete:FileStation_D1`" in error["message"]
         assert "The stop may or may not have taken effect." in error["message"]
         assert "file_task" in error["suggestion"]
+
+    @staticmethod
+    def _slow_stop(after: Any) -> Any:
+        """The first status reads RUNNING, the stop's answer times out, the next status is
+        ``after`` (a response, or an exception to raise)."""
+        seen = {"status": 0}
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "stop":
+                raise httpx.ReadTimeout("slow")
+            if method == "status":
+                seen["status"] += 1
+                reply = _ok(RUNNING) if seen["status"] == 1 else after
+                if isinstance(reply, Exception):
+                    raise reply
+                return reply
+            return _ok({})
+
+        return side_effect
+
+    @respx.mock
+    async def test_a_slow_stop_whose_task_is_gone_stopped(self, mock_client: DsmClient) -> None:
+        """#630 (0.11.0rc4 live test): DSM 7.1 answered a CopyMove stop after 60.10 s, past
+        claude.ai's 60 s limit, though the copy stopped at once. After STOP_WAIT the status
+        decides: gone right after the stop is the stop working."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._slow_stop(_err(599)))
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert text.startswith(
+            "Stopped copy of `copy:FileStation_C1`; it may be partly done. DSM was slow to "
+            "answer the stop, but the task is gone."
+        ), text
+
+    @respx.mock
+    async def test_a_slow_stop_whose_task_still_runs_isnt_called_stopped(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._slow_stop(_ok(RUNNING)))
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert text.startswith(
+            "A stop was sent for the copy of `copy:FileStation_C1`, but DSM hasn't confirmed it "
+            "yet: the task still shows as running ("
+        ), text
+        assert "Stopped" not in text
+
+    @respx.mock
+    async def test_a_slow_stop_whose_task_finished_shows_its_result(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._slow_stop(_ok(MOVE_FINISHED))
+        )
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="move:FileStation_M1", action="stop"
+        )
+        assert text.startswith(
+            "A stop was sent and DSM was slow to answer it; the task ended meanwhile.\n"
+        ), text
+
+    @respx.mock
+    async def test_a_slow_stop_and_status_says_it_isnt_known(self, mock_client: DsmClient) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._slow_stop(httpx.ReadTimeout("slow too"))
+        )
+        text = await file_task(
+            mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
+        )
+        assert "whether it stopped isn't known" in text, text
+        assert "Stopped" not in text
 
     @respx.mock
     async def test_file_task_stop_unanswered_status(self, mock_client: DsmClient) -> None:

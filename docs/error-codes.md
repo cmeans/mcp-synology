@@ -548,9 +548,11 @@ Common causes:
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped, or after a
   stop DSM refused, that it wasn't accepted; for the
-  stop, that it may or may not have taken effect. Stop requests wait up to
-  90 s, longer than other requests: DSM 7.1 sometimes answers a Delete `stop`
-  only after about 60 s, although the stop takes effect at once.
+  stop, that it may or may not have taken effect. A stop DSM got but didn't
+  answer within 15 s isn't an error (#630): DSM 7.1 sometimes answers a `stop`
+  only after about 60 s, although the stop takes effect at once, so the task's
+  status decides the reply: stopped when the task is gone, "a stop was sent,
+  but DSM hasn't confirmed it yet" while it still shows as running.
 - `photo_task` didn't get an answer to its status or stop request: "Photo task
   failed for `photos:<id>`: DSM didn't answer the status request (ReadTimeout)."
   After a stop that went through, the message ends "The stop was requested; its

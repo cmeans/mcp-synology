@@ -49,10 +49,11 @@ HandleKind = Literal["delete", "copy", "move", "restore"]
 _KINDS: tuple[str, ...] = get_args(HandleKind)
 _TASKID_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
-# DSM 7.1 sometimes answers a Delete stop only after ~60 s, although the stop takes
-# effect at once; the default read timeout would report a working stop as unanswered.
-# Write and pool keep the client's default, and connect does too, capped at this.
-STOP_TIMEOUT = 90.0
+# How long a stop waits for DSM's answer before the task's status decides (#630). DSM 7.1
+# sometimes answers a stop only after ~60 s (a Delete on vdsm; a CopyMove to a USB drive on a
+# real NAS: 60.10 s), although the stop takes effect at once, and claude.ai stops waiting for a
+# tool call after 60 s. Write and pool keep the client's default; connect is capped at this.
+STOP_WAIT = 15.0
 
 
 @dataclass(frozen=True)
@@ -184,7 +185,7 @@ async def _stop_background_task(
     """
     try:
         await client.request(
-            api, "stop", version=version, params={"taskid": taskid}, read_timeout=STOP_TIMEOUT
+            api, "stop", version=version, params={"taskid": taskid}, read_timeout=STOP_WAIT
         )
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
@@ -1260,16 +1261,19 @@ async def file_task(
             )
         return "\n" + "\n".join(lines)
 
-    async def send_stop() -> int | None:
-        """Send the stop. DSM's code when it says it has no such task (401, 599), or None."""
+    async def send_stop() -> int | str | None:
+        """Send the stop. DSM's code when it says it has no such task (401, 599), the reply
+        when DSM didn't answer within ``STOP_WAIT`` (the status decides it, #630), or None."""
         try:
             await client.request(
                 parsed.api,
                 "stop",
                 version=version,
                 params={"taskid": taskid},
-                read_timeout=STOP_TIMEOUT,
+                read_timeout=STOP_WAIT,
             )
+        except httpx.ReadTimeout:
+            return await unanswered_stop()
         except (DsmHttpError, DsmReplyError, RequestTooLongError) as e:
             # A 414 is rejected before anything acts on it: nothing was stopped.
             sent = not isinstance(e, RequestTooLongError)
@@ -1294,6 +1298,44 @@ async def file_task(
                 note=" The stop may or may not have taken effect.",
             )
         return None
+
+    async def unanswered_stop() -> str:
+        """DSM didn't answer the stop in time; the stop usually took effect at once (#630), so the
+        task's status says what happened. One read: the stop's own answer is what's slow."""
+        what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
+        try:
+            now: dict[str, Any] = await client.request(
+                parsed.api, "status", version=version, params={"taskid": taskid}
+            )
+        except SynologyError as e:
+            if e.code == 599:
+                # It was running a moment ago: gone right after the stop is the stop working.
+                return (
+                    f"Stopped {parsed.kind} of {what}; it may be partly done. DSM was slow to "
+                    f"answer the stop, but the task is gone. {_LIST_HINT}{earlier_skip()}"
+                )
+            synology_error_response("Stop task", e)
+        except (httpx.TransportError, DsmHttpError, DsmReplyError) as e:
+            logger.debug("Status after an unanswered stop of %s: %s", parsed, e)
+            now = {}
+        if now.get("finished"):
+            records.set_final(parsed, now)
+            final = await _final_text(client, parsed, now, record)
+            return (
+                f"A stop was sent and DSM was slow to answer it; the task ended meanwhile.\n{final}"
+            )
+        if now:
+            return (
+                f"A stop was sent for the {parsed.kind} of {what}, but DSM hasn't confirmed it "
+                f"yet: the task still shows as running ({progress_text(now)}). Check with "
+                f"file_task and this handle in a minute before doing anything else with it; it "
+                f"usually ends within a minute.{earlier_skip()}"
+            )
+        return (
+            f"A stop was sent for the {parsed.kind} of {what}, but DSM answered neither the stop "
+            f"nor a status check in time, so whether it stopped isn't known. Check with "
+            f"file_task and this handle in a minute.{earlier_skip()}"
+        )
 
     async def after_refusal(refused: int) -> str:
         """DSM says it has no such task, which can pass too, so a read says what's known."""
@@ -1323,6 +1365,8 @@ async def file_task(
             # (another user's task isn't touched, on vdsm), and one that's not sent leaves a delete
             # running (QA round 2 on #590).
             refused = await send_stop()
+            if isinstance(refused, str):
+                return refused
             if refused is None:
                 return gone(stop_sent=True) + earlier_skip()
             return await after_refusal(refused)
@@ -1332,6 +1376,8 @@ async def file_task(
             final = await _final_text(client, parsed, status, record)
             return f"{_NOT_STOPPED}\n{final}"
         refused = await send_stop()
+        if isinstance(refused, str):
+            return refused
         if refused is not None:
             return await after_refusal(refused)
         what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
