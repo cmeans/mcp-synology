@@ -382,7 +382,7 @@ class TestDownloadFile:
         )
         assert "[+]" in result
         assert existing.read_bytes() == new_content
-        # #625: an overwrite says it replaced the file, as upload_file does (#620).
+        # #625: an overwrite says it replaced the file (worded like upload_file's note in #623).
         assert result.splitlines()[1:] == ["    It replaced the movie.mkv that was there."]
 
     @respx.mock

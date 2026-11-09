@@ -475,6 +475,9 @@ async def download_file(
             f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
         )
 
+    # The server log, too, says which local file was written and whether one was replaced
+    # (pre-QA r2 on #626): the reply alone reaches only the model's context.
+    logger.debug("Downloaded %s to %s (replaced a file there: %s)", nas_path, dest_file, replaced)
     if replaced:
         result += f"\n    It replaced the {dest_file.name} that was there."
 

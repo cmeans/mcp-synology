@@ -312,6 +312,7 @@ async def _download_one(
             return f"not downloaded: no space left on the local disk{detail}", True
         # A permission or read-only folder doesn't change by repeating the call.
         return f"not downloaded: couldn't write the file ({e.strerror or e})", False
+    logger.debug("Downloaded item %s to %s (replaced a file there: %s)", item["id"], dest, replaced)
     return format_size(written) + (f" ({_REPLACED})" if replaced else ""), False
 
 
