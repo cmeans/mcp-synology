@@ -264,17 +264,49 @@ class TestGetFileInfoMissingPaths:
         self, mock_client: DsmClient, codes: tuple[int, int], mapped_code: int
     ) -> None:
         """QA round 3 on #606: only every path missing (408) gets the shared suggestion. A
-        path DSM won't let the user read (407), alone or beside a missing one, keeps the
-        advice of the code the error reports."""
+        path DSM won't let the user read (407), alone or beside a missing one, keeps its
+        code's own advice; beside a missing one, after 408's (pre-QA r3 on #623)."""
         paths = ["/a/x", "/a/y"]
         self._route({p: {"code": c, "path": p} for p, c in zip(paths, codes, strict=True)})
         with pytest.raises(ToolError) as exc_info:
             await get_file_info(mock_client, paths=paths)
         suggestion = json.loads(str(exc_info.value))["error"]["suggestion"]
+        err = json.loads(str(exc_info.value))["error"]
         expected = error_from_code(mapped_code, "SYNO.FileStation.List").suggestion
         assert expected
-        assert suggestion == expected, suggestion
+        perm = error_from_code(407, "SYNO.FileStation.List").suggestion
+        if mapped_code == 407:
+            assert (err["code"], suggestion) == ("permission_denied", expected), err
+        else:
+            assert err["code"] == "not_found", err
+            # No escape in the paths, so no escaped-name advice (QA round 1 on #623).
+            assert suggestion == (
+                "Use list_files or search_files to find the correct path. "
+                f"For one with no permission: {perm}"
+            ), suggestion
         assert not suggestion.startswith("Check the paths with list_files or search_files")
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("code", "words"),
+        [
+            (408, "doesn't exist"),
+            (407, "no permission"),
+            (105, "no permission"),
+            (599, "can't be read"),
+        ],
+    )
+    async def test_every_path_missing_says_why_in_words(
+        self, mock_client: DsmClient, code: int, words: str
+    ) -> None:
+        """#620 (0.11.0rc3 live test): "Get file info failed: /x (DSM error 408)" never said
+        the file doesn't exist."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"code": code, "path": "/a/gone"}]}}
+        )
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(mock_client, paths=["/a/gone"])  # type: ignore[list-item]
+        assert f"Get file info failed: /a/gone: {words} (DSM error {code})." in str(exc.value)
 
     @respx.mock
     async def test_mixed_shows_found_and_lists_missing(self, mock_client: DsmClient) -> None:
@@ -283,7 +315,7 @@ class TestGetFileInfoMissingPaths:
         )
         result = await get_file_info(mock_client, paths=["/a/real.txt", "/a/gone"])
         assert "real.txt" in result
-        assert "Not found: /a/gone" in result
+        assert "/a/gone: doesn't exist (DSM error 408)" in result  # #620: in words
         assert "Name:  \n" not in result  # no blank card for the missing path
 
     @respx.mock
