@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import tomllib
 import types
 from pathlib import Path
 from typing import Any
@@ -112,7 +113,16 @@ def test_every_module_is_documented() -> None:
 def test_coverage_table_lists_only_implemented_modules() -> None:
     """Every row of "Supported modules" is a module the server loads, in the README's
     order: the README lists no planned module (Container Manager was, #441)."""
-    table = README.split("## Supported modules", 1)[1].split("**Coverage**", 1)[0]
+    # The section's first table: its "|" lines up to the first line that isn't one.
+    section = README.split("## Supported modules", 1)[1].split("\n## ", 1)[0]
+    lines = section.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.lstrip().startswith("|")), None)
+    assert start is not None, "no table under ## Supported modules"
+    end = next(
+        (i for i in range(start, len(lines)) if not lines[i].lstrip().startswith("|")),
+        len(lines),
+    )
+    table = "\n".join(lines[start:end])
     # GitHub renders an indented "|" line as a row too; skip the header and --- lines.
     rows = [line for line in table.splitlines() if line.lstrip().startswith("|")][2:]
     assert [m.group(1) for m in _TABLE_ROW.finditer(table)] == list(SECTIONS)
@@ -203,3 +213,90 @@ def test_section_parts(module: str) -> None:
     section = _section(SECTIONS[module])
     for part in ("```yaml", "**Accounts.**", "**DSM versions:**", "**Not covered:**", "Spec: "):
         assert part in section, f"no {part} in ### {SECTIONS[module]}"
+
+
+# PyPI shows the README with its relative links rewritten at build time (#487), by the
+# hatch-fancy-pypi-readme hook in pyproject.toml. These build the wheel's metadata with
+# hatchling's own PEP 517 hook (what `uv build` runs) and read its long description.
+_ROOT = Path(__file__).resolve().parent.parent
+_VERSION = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+    "version"
+]
+_TAG_URL = f"https://github.com/cmeans/mcp-synology/blob/v{_VERSION}/"
+# Every way Markdown or HTML names a link target: inline (with or without a title or angle
+# brackets), a reference definition, and an HTML href or src.
+_TARGETS = re.compile(
+    r"\]\(\s*<?([^)\s>]+)"  # [text](target "title") and [text](<target>)
+    r"|^\s{0,3}\[(?!\^)[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)"  # [ref]: target (not a [^footnote])
+    r"|\b(?:href|src|srcset)=[\"']([^\"']+)[\"']",  # <a href="..."> <img src="...">
+    re.M,
+)
+_ABSOLUTE = ("https://", "http://", "#", "mailto:")
+
+
+def _targets(text: str) -> list[str]:
+    return [next(g for g in m.groups() if g) for m in _TARGETS.finditer(text)]
+
+
+@pytest.fixture(scope="module")
+def pypi_description(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """The long description of the wheel `uv build` would make from this checkout."""
+    import os
+    from email.parser import Parser
+
+    from hatchling.build import prepare_metadata_for_build_wheel
+
+    out = tmp_path_factory.mktemp("metadata")
+    here = Path.cwd()
+    os.chdir(_ROOT)
+    try:
+        dist_info = prepare_metadata_for_build_wheel(str(out))
+    finally:
+        os.chdir(here)
+    metadata = Parser().parsestr((out / dist_info / "METADATA").read_text(encoding="utf-8"))
+    assert metadata["Description-Content-Type"] == "text/markdown"
+    body = metadata.get_payload()
+    assert isinstance(body, str)
+    return body
+
+
+def test_link_targets_finds_every_form() -> None:
+    text = (
+        '[a](docs/a.md) [b](docs/b.md "B") [c](<docs/c.md>)\n'
+        '[d]: docs/d.md\n<a href="docs/e.md">e</a> <img src="docs/f.png">\n[^1]: A footnote.'
+    )
+    assert _targets(text) == [
+        "docs/a.md", "docs/b.md", "docs/c.md", "docs/d.md", "docs/e.md", "docs/f.png"
+    ]  # fmt: skip
+
+
+def test_pypi_description_is_the_whole_readme(pypi_description: str) -> None:
+    assert "$HFPR" not in pypi_description
+    # Each README line is there, links aside.
+    strip = re.compile(r"\]\([^)]*\)")
+    assert strip.sub("]()", pypi_description).strip() == strip.sub("]()", README).strip()
+
+
+def test_readme_has_no_relative_image() -> None:
+    """A relative image would be rewritten to a GitHub page, not the image, so PyPI would show
+    it broken: an image takes an absolute raw.githubusercontent.com URL, as the logo does."""
+    images = re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", README)
+    images += re.findall(r"<img\b[^>]*\bsrc=[\"']([^\"']+)", README)
+    assert [i for i in images if not i.startswith(("https://", "http://"))] == []
+
+
+def test_pypi_description_has_no_relative_link(pypi_description: str) -> None:
+    """Each link on the PyPI page is absolute or an anchor in the page itself."""
+    relative = [t for t in _targets(pypi_description) if not t.startswith(_ABSOLUTE)]
+    assert relative == []
+
+
+def test_pypi_description_links_go_to_files_at_the_release_tag(pypi_description: str) -> None:
+    """Every README link that's relative becomes a link to that file or folder at the
+    release's tag, so the PyPI page of a release links to the docs as they were in it."""
+    relative = [t for t in _targets(README) if not t.startswith(_ABSOLUTE)]
+    rewritten = [t for t in _targets(pypi_description) if t.startswith(_TAG_URL)]
+    assert len(rewritten) == len(relative) > 0
+    for link in rewritten:
+        path = link.removeprefix(_TAG_URL).split("#", 1)[0]
+        assert (_ROOT / path).exists(), link
