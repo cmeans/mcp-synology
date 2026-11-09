@@ -218,7 +218,7 @@ _TAG_URL = f"https://github.com/cmeans/mcp-synology/blob/v{_VERSION}/"
 # brackets), a reference definition, and an HTML href or src.
 _TARGETS = re.compile(
     r"\]\(\s*<?([^)\s>]+)"  # [text](target "title") and [text](<target>)
-    r"|^\s{0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)"  # [ref]: target
+    r"|^\s{0,3}\[(?!\^)[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)"  # [ref]: target (not a [^footnote])
     r"|\b(?:href|src|srcset)=[\"']([^\"']+)[\"']",  # <a href="..."> <img src="...">
     re.M,
 )
@@ -254,7 +254,7 @@ def pypi_description(tmp_path_factory: pytest.TempPathFactory) -> str:
 def test_link_targets_finds_every_form() -> None:
     text = (
         '[a](docs/a.md) [b](docs/b.md "B") [c](<docs/c.md>)\n'
-        '[d]: docs/d.md\n<a href="docs/e.md">e</a> <img src="docs/f.png">'
+        '[d]: docs/d.md\n<a href="docs/e.md">e</a> <img src="docs/f.png">\n[^1]: A footnote.'
     )
     assert _targets(text) == [
         "docs/a.md", "docs/b.md", "docs/c.md", "docs/d.md", "docs/e.md", "docs/f.png"
@@ -266,6 +266,14 @@ def test_pypi_description_is_the_whole_readme(pypi_description: str) -> None:
     # Each README line is there, links aside.
     strip = re.compile(r"\]\([^)]*\)")
     assert strip.sub("]()", pypi_description).strip() == strip.sub("]()", README).strip()
+
+
+def test_readme_has_no_relative_image() -> None:
+    """A relative image would be rewritten to a GitHub page, not the image, so PyPI would show
+    it broken: an image takes an absolute raw.githubusercontent.com URL, as the logo does."""
+    images = re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", README)
+    images += re.findall(r"<img\b[^>]*\bsrc=[\"']([^\"']+)", README)
+    assert [i for i in images if not i.startswith(("https://", "http://"))] == []
 
 
 def test_pypi_description_has_no_relative_link(pypi_description: str) -> None:

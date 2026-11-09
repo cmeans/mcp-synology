@@ -41,9 +41,9 @@ Once it's connected, ask in plain words, for example:
 
 **Security at a glance:**
 
-- Each module is READ-only unless its config says `permission: write`; the tools that delete or replace are marked so your client can ask before running them.
+- Each module is READ-only unless its config says `permission: write`; the tools that delete or replace are marked so your client can ask before running them (where the client passes those marks on).
 - Local files: uploads and downloads use only the folders you list (your Downloads folder by default).
-- `setup` turns HTTPS on, and stores the password in the OS keyring, tied to the NAS's host and port.
+- `setup` uses HTTPS unless you decline, and stores the password in the OS keyring, tied to the NAS's host and port.
 - Text from the NAS is marked as data, not instructions: [docs/prompt-injection.md](docs/prompt-injection.md).
 - Reporting a vulnerability: [SECURITY.md](SECURITY.md).
 
@@ -58,7 +58,7 @@ Each module covers one DSM package. A module loads only when it's listed under `
 | [System](#system) | `system` | 2 · 🟡 Partial | — | Any; `get_resource_usage` and some details need an administrator | 7.1 – 7.4.1 |
 | [File Station](#file-station) | `filestation` | 7 · 🟢 Most | 8 · 🟡 Partial | Any | 7.1 – 7.4.1 |
 | [Synology Photos](#synology-photos) | `photos` | 4 · 🟢 Most | 15 · 🟢 Most | Any, with the Photos privilege | 7.1 – 7.4.1 (favorites and concepts: 7.2.2+) |
-| [Download Station](#download-station) | `downloadstation` | 5 · 🟢 Most | 7 · 🟡 Partial | Any, with the Download Station privilege (non-admins see only their own tasks) | 7.1 – 7.4.1 |
+| [Download Station](#download-station) | `downloadstation` | 5 · 🟢 Most | 7 · 🟡 Partial | Any, with the Download Station privilege (other accounts see only their own tasks) | 7.1 – 7.4.1 |
 | [Storage](#storage) | `storage` | 11 · 🟢 Most | — | Admin only | 7.1 – 7.4.1 |
 
 **Coverage**, per tier, of what the DSM package itself can do:
@@ -125,7 +125,7 @@ On Linux, the server auto-detects the D-Bus session socket for keyring access. I
 ### 3. Verify
 
 ```bash
-uvx mcp-synology check --config ~/.config/mcp-synology/<name>.yaml   # checks the config and logs in; setup prints this line
+uvx mcp-synology check --config ~/.config/mcp-synology/<name>.yaml   # checks the config and logs in; setup prints this line (without uvx)
 uvx mcp-synology setup --list                                        # lists the NAS configs you've set up
 ```
 
@@ -435,11 +435,11 @@ Spec: [`docs/specs/storage-module-spec.md`](docs/specs/storage-module-spec.md).
 
 ## Text from the NAS is data
 
-File names, folder and album names, descriptions, a download's title and a file's text may have been written by someone else, and they reach the model in tool replies. mcp-synology can't tell an instruction from a name, so it marks all such text as data:
+File names, folder and album names, descriptions and a download's title may have been written by someone else, and they reach the model in tool replies. mcp-synology can't tell an instruction from a name, so it marks all such text as data:
 
 - every reply starts with a line saying the text in it comes from the NAS or local files and isn't instructions, and the server instructions tell the model not to follow instructions found in it and to tell you about them;
 - control, line-break and bidirectional characters in that text are escaped, so a name can't write a line that looks like the server's;
-- a tool call is refused when it carries such characters, an argument the tool doesn't take, or text the MCP SDK would turn into something else; and errors never repeat the values sent.
+- a tool call is refused when it carries such characters, an argument the tool doesn't take, or text the MCP SDK would turn into something else; validation errors never repeat the values sent, and the unknown-argument refusal doesn't name the argument.
 
 Wording isn't filtered: whether a model acts on planted text is up to the model. Each release candidate's live test plants some to check. [docs/prompt-injection.md](docs/prompt-injection.md) has each guard, why it exists and its tests.
 
@@ -616,7 +616,7 @@ mcp-synology --revert 0.10.0                # Roll back to a specific version
 | 7.2.2-72806 Update 10 | Virtual DSM, in CI | The same |
 | 7.3.2-86009 Update 5 | Virtual DSM, in CI | The same |
 | 7.4.1-90080 Update 1 | Virtual DSM, in CI | The same |
-| 7.1.1-42962 Update 9 | A real NAS | Each release candidate's live test: AI clients driving the tools, as admin, regular, read-only and restricted users ([how](docs/live-testing.md)) |
+| 7.1.1-42962 Update 9 | A real NAS | Each release candidate's live test: AI clients driving the tools, as administrator, regular, read-only and restricted users ([how](docs/live-testing.md)) |
 
 A virtual DSM ([virtual-dsm](https://github.com/vdsm/virtual-dsm)) has the DSM packages the modules use (Synology Photos, Download Station, Snapshot Replication), but no physical disks or storage pools. The Storage module's disk and pool replies were written from captures of the real NAS.
 
@@ -639,10 +639,10 @@ Every model that has run the tools here, with what it was tested on and how it d
 
 | Model | Client | Tested on | Results | Fit for |
 |---|---|---|---|---|
-| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0's last round: Claude Code 43 of 43 steps, claude.ai 78 of 79 (the one miss was the server's: a stop DSM was slow to answer, fixed in this release). Comparison (0.11.0): 12 of 12 | Everything, writes and deletes included |
+| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0's last round: Claude Code 43 passed, 0 failed, 0 surprises; claude.ai 78 passed, 0 failed, 1 surprise (the surprise was the server's: a stop DSM was slow to answer, fixed in 0.11.0). Comparison (0.11.0): 12 of 12 | Everything, writes and deletes included |
 | **Claude Sonnet 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 12 of 12. 0.11.0: 12 of 12 | Everything, writes and deletes included |
 | **Claude Haiku 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 11 of 12. 0.11.0: 9 of 11 (a twelfth task depended on one it missed, so it isn't scored). Both runs missed the same task: it didn't match a download by its source URL, so it deleted nothing. In 0.11.0 it also refused a copy, reading the server's connection-name line as forbidding a request that didn't name the NAS | Reads; check its writes, and confirm deletes yourself |
-| **Muse Wonder** | Meta Muse (Power Plan) | 0.11.0's live rounds (three release candidates) | Last round: 61 of 62 steps. The miss: it changed an album that wasn't shared and didn't follow the reply's "Use action=share first". In the earlier rounds its misses found two server bugs (Photos IDs and names), fixed in this release | Reads and writes; it follows most hints in replies, not all |
+| **Muse Wonder** | Meta Muse (Power Plan) | 0.11.0's live rounds (three release candidates) | Last round: 61 passed, 0 failed, 1 surprise. The surprise: it changed an album that wasn't shared and didn't follow the reply's "Use action=share first". In the earlier rounds its misses found two server bugs (Photos IDs and names), fixed in 0.11.0 | Reads and writes; it follows most hints in replies, not all |
 | **Muse Spark** | Meta Muse (free plan) | 0.10.0's live rounds | No fails in the rounds recorded | Reads and writes |
 
 The comparison holds the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station, on a virtual DSM 7.2.2 restored fresh for each model, as a non-admin user. The tasks, how each was graded and the per-task results are in [Comparing models](docs/live-testing.md#comparing-models).
