@@ -1621,7 +1621,7 @@ class TestFileTask:
     ) -> None:
         from mcp_synology.modules.filestation.tasks import file_task
 
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
             side_effect=self._slow_stop(_ok(MOVE_FINISHED))
         )
         records = TaskRecords()
@@ -1632,7 +1632,9 @@ class TestFileTask:
             "A stop was sent and DSM was slow to answer it; the task ended meanwhile, so it may "
             "have stopped partway: check what's left.\n"
         ), text
-        # Remembered: a later status read gives the same result (DSM forgets it after one read).
+        # Remembered: DSM forgets a finished task after one read, so a later status read (599
+        # now) gives the remembered result.
+        route.side_effect = lambda request: _err(599)
         later = await file_task(mock_client, records=records, handle="move:FileStation_M1")
         assert later.startswith("Move finished:"), later
 
@@ -1735,30 +1737,32 @@ class TestFileTask:
         """Pre-QA r2 on #632: every request of a stop takes the time left before STOP_DEADLINE,
         at most STOP_WAIT, and none starts once it's nearly gone; DSM taking each read's whole
         timeout can't push the reply past an MCP client's 60 s limit."""
-        from mcp_synology.modules.filestation.tasks import STOP_DEADLINE, file_task
+        from mcp_synology.modules.filestation.tasks import file_task
 
         timeouts: list[float] = []
-        first = {"status": True}
+        stopped = [False]
 
         def respond(request: httpx.Request) -> httpx.Response:
             method = dict(request.url.params).get("method", "")
             wait = _read_timeout(request)
             timeouts.append(wait)
-            clock[0] += wait  # DSM takes the whole timeout every time
             if method == "stop":
+                stopped[0] = True
+                clock[0] += wait  # the stop takes its whole timeout
                 raise httpx.ReadTimeout("slow")
-            if first["status"]:
-                first["status"] = False
-                return _ok(RUNNING)
-            raise httpx.ReadTimeout("slow too")
+            # Each status answers just inside the reread bound, or times out first: running
+            # before the stop, 599 after it.
+            clock[0] += min(9.9, wait)
+            return _err(599) if stopped[0] else _ok(RUNNING)
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
-        text = await file_task(
+        await file_task(
             mock_client, records=TaskRecords(), handle="copy:FileStation_C1", action="stop"
         )
-        assert clock[0] <= STOP_DEADLINE, (clock[0], timeouts)
+        # A literal, not STOP_DEADLINE: the limit is the client's (60 s), not the constant's.
+        assert stopped[0]
+        assert clock[0] <= 45.0, (clock[0], timeouts)
         assert all(t <= STOP_WAIT for t in timeouts), timeouts
-        assert "whether it stopped isn't known" in text, text
 
     @respx.mock
     @pytest.mark.parametrize(

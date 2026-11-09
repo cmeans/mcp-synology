@@ -1221,7 +1221,11 @@ async def file_task(
             except SynologyError as e:
                 if e.code != 599:
                     synology_error_response("Stop task" if action == "stop" else "Check task", e)
-                if read + 1 >= reads or time.monotonic() - started >= _LOST_TASK_BOUND:
+                if (
+                    read + 1 >= reads
+                    or time.monotonic() - started >= _LOST_TASK_BOUND
+                    or time_left() < _LOST_TASK_WAIT + 1
+                ):
                     return None
                 await asyncio.sleep(_LOST_TASK_WAIT)
                 continue
@@ -1361,7 +1365,12 @@ async def file_task(
                     logger.debug("Status after an unanswered stop of %s: %s", parsed, e)
                     unknown = f"a status check got DSM error {e.code}"
                     break
-                if read + 1 >= _LOST_TASK_READS or time.monotonic() - started >= _LOST_TASK_BOUND:
+                # The deadline ending counts like the reread bound: no time for another read.
+                if (
+                    read + 1 >= _LOST_TASK_READS
+                    or time.monotonic() - started >= _LOST_TASK_BOUND
+                    or time_left() < _LOST_TASK_WAIT + 1
+                ):
                     break
                 await asyncio.sleep(_LOST_TASK_WAIT)
             except httpx.TransportError as e:
