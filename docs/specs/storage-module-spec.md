@@ -331,6 +331,8 @@ On vdsm: `No disks reported. Virtual DSM has no physical disks.` when `env.model
 
 A value outside 1–100 is refused with `invalid_parameter` before any DSM call, as Photos and Download Station do.
 
+A `disk` value that matches more than one disk (a bay name in the NAS and one in an expansion unit can both be `Drive 1`; inferred, as no capture has an expansion unit) picks neither: `invalid_parameter` lists each with its ID and long name, in `valid` the IDs, which are unique, as are devices (#618; the class of #614 and #616: one value read as the wrong one of two). Before, the first match was shown.
+
 `Smart get_smart_info` and `Core.Storage.Disk get_smart_info` return the same attribute table (verified); the tool uses the first. The health trend is `get_health_info.healthInfo.history.incremental`: twelve monthly points per metric (`unc` bad sectors, `idnf`, `retry`, `remainLife`), a point with one element meaning no reading for that month (verified: the SSD's `remainLife` runs 90 → 67 over the year). An HDD's `remainLife` is eleven one-element points and a last point of `[11, -1]`, and the SSD's `unc` ends the same way: `-1` means the drive doesn't report that metric, shown as `—` (verified).
 
 ---

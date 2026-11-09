@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from mcp_synology.core.formatting import format_key_value, format_table
+from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import error_response, format_key_value, format_table
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
@@ -151,11 +152,27 @@ async def list_disks(client: DsmClient) -> str:
 
 def resolve_disk(info: dict[str, Any], disk: str, operation: str) -> dict[str, Any]:
     wanted = disk.strip().lower()
-    for d in items(info, "disks"):
+    disks = items(info, "disks")
+    matches = []
+    for d in disks:
         names = {str(d.get(k)).lower() for k in ("id", "device", "name", "longName") if d.get(k)}
         if wanted and (wanted in names or "/dev/" + wanted in names):
-            return d
-    disks = items(info, "disks")
+            matches.append(d)
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        # A bay name can repeat (a bay in the NAS and one in an expansion unit): the first
+        # match could be the other disk, so none is picked. IDs and devices are unique.
+        listed = ", ".join(f"{d.get('id')} ({d.get('longName') or d.get('name')})" for d in matches)
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{operation} failed: {len(matches)} disks match {disk!r}: {listed}.",
+            retryable=False,
+            param="disk",
+            value=disk,
+            valid=[str(d.get("id")) for d in matches],
+            suggestion="Ask the user which one they mean, then pass its ID.",
+        )
     valid = [str(d.get("id")) for d in disks]
     labels = [f"{d.get('id')} ({d.get('longName') or d.get('name')})" for d in disks]
     not_found(operation, "disk", "disk", disk, valid, labels)

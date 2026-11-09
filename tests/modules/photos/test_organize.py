@@ -10,7 +10,6 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.photos.helpers import IdNumber
 from mcp_synology.modules.photos.organize import (
     edit_person,
     edit_photo,
@@ -58,7 +57,7 @@ class TestFolder:
         client = make_client()
         async with client:
             out = await photo_folder(
-                client, action="create", parent="/mcp-spec-capture", name="2024"
+                client, action="create", parent_path="/mcp-spec-capture", name="2024"
             )
         assert fake.one(FOLDER, "create").params == {"target_id": 10, "name": "2024"}
         assert out == "Created /mcp-spec-capture/mcp-spec-capture (id 11, personal space)."
@@ -72,7 +71,7 @@ class TestFolder:
         install(fake)
         client = make_client()
         async with client:
-            out = await photo_folder(client, action="rename", folder="13", name="sub-renamed")
+            out = await photo_folder(client, action="rename", folder_id=13, name="sub-renamed")
         assert out == "Renamed folder 13 to /mcp-spec-capture/sub-renamed."
 
     @respx.mock
@@ -84,7 +83,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_folder(client, action="create", parent="/x", name="dup")
+                await photo_folder(client, action="create", parent_path="/x", name="dup")
         assert _error(exc)["code"] == "already_exists"
 
     @respx.mock
@@ -94,7 +93,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError):
-                await photo_folder(client, action="rename", folder="/", name="x")
+                await photo_folder(client, action="rename", folder_path="/", name="x")
         assert not fake.of(FOLDER, "rename")
 
     @respx.mock
@@ -105,7 +104,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_folder(client, action="set_cover", folder="10", item_id=99)
+                await photo_folder(client, action="set_cover", folder_id=10, item_id=99)
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(FOLDER, "set_cover")
 
@@ -116,7 +115,7 @@ class TestFolder:
         install(fake)
         client = make_client()
         async with client:
-            await photo_folder(client, action="set_cover", folder="10", item_id=29)
+            await photo_folder(client, action="set_cover", folder_id=10, item_id=29)
         assert fake.one(FOLDER, "set_cover").params == {"id": 10, "id_item": [29]}
 
     @pytest.mark.parametrize(
@@ -125,8 +124,10 @@ class TestFolder:
             ({"action": "move"}, "action"),
             ({"action": "create"}, "name"),
             ({"action": "create", "name": "a/b"}, "name"),
-            ({"action": "rename", "name": "x"}, "folder"),
-            ({"action": "set_cover", "folder": "1"}, "item_id"),
+            ({"action": "rename", "name": "x"}, "folder_id"),
+            # #615: required, the root too, so a lost parent can't create in the root.
+            ({"action": "create", "name": "x"}, "parent_id"),
+            ({"action": "set_cover", "folder_id": 1}, "item_id"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -160,7 +161,7 @@ class TestFolder:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_folder(client, action=action, folder="13", parent="/x", name=name)
+                await photo_folder(client, action=action, folder_id=13, parent_path="/x", name=name)
         assert not fake.calls
         err = _error(exc)
         assert (err["code"], err["param"], err["value"]) == ("invalid_parameter", "name", name)
@@ -174,7 +175,7 @@ class TestFolder:
         install(fake)
         client = make_client()
         async with client:
-            await photo_folder(client, action="create", parent="/x", name="a\tb")
+            await photo_folder(client, action="create", parent_path="/x", name="a\tb")
         assert fake.one(FOLDER, "create").params["name"] == "a\tb"
 
 
@@ -627,7 +628,7 @@ class TestPeople:
         install(fake)
         client = make_client()
         async with client:
-            out = await edit_person(client, action="rename", person="12", name="")
+            out = await edit_person(client, action="rename", person_id=12, name="")
         assert fake.one(PERSON, "set").params == {"id": 12, "name": ""}
         assert out == "Person 12: Person 1 (70 items, visible, cover: item 26)."
 
@@ -637,8 +638,8 @@ class TestPeople:
         install(fake)
         client = make_client()
         async with client:
-            await edit_person(client, action="hide", person="12")
-            await edit_person(client, action="set_cover", person="12", item_id=2121)
+            await edit_person(client, action="hide", person_id=12)
+            await edit_person(client, action="set_cover", person_id=12, item_id=2121)
         assert fake.one(PERSON, "show").params == {"id": [12], "show": False}
         assert fake.one(PERSON, "set_cover").params == {"id": 12, "photo_id": 2121}
 
@@ -651,7 +652,9 @@ class TestPeople:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="Person 1", merge=["Person 2", "Nobody"])
+                await merge_people(
+                    client, target_name="Person 1", merge_names=["Person 2", "Nobody"]
+                )
         assert _error(exc)["code"] == "not_found"
         assert not fake.of(PERSON, "merge")
 
@@ -663,7 +666,9 @@ class TestPeople:
         install(fake)
         client = make_client()
         async with client:
-            out = await merge_people(client, target="person 1", merge=["Person 2", "Person 3"])
+            out = await merge_people(
+                client, target_name="person 1", merge_names=["Person 2", "Person 3"]
+            )
         assert fake.one(PERSON, "merge").params == {
             "target_id": 12,
             "merged_id": [11, 19],
@@ -673,8 +678,8 @@ class TestPeople:
 
     @respx.mock
     async def test_a_numeric_id_never_merges_a_person_by_name(self) -> None:
-        """#609 pre-QA: merge=[43] sent as a number, with no person 43 but one named "43",
-        merges nothing: it can't be undone."""
+        """#609 pre-QA, #614: merge_ids=[43], with no person 43 but one named "43", merges
+        nothing: it can't be undone."""
         people = {"list": [{"id": 12, "name": "Keep"}, {"id": 99, "name": "43"}]}
         keep = {"list": [{"id": 12, "name": "Keep"}]}
         fake = FakePhotos().on(PERSON, "get", 1, keep, {"list": []})
@@ -683,7 +688,7 @@ class TestPeople:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="12", merge=[IdNumber("43")])
+                await merge_people(client, target_id=12, merge_ids=[43])
         assert _error(exc)["code"] == "not_found"
         assert "no person 43" in _error(exc)["message"]
         # Not a hint to resend the digits as text: that would match the person named "43".
@@ -696,15 +701,15 @@ class TestPeople:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="12", merge=["12"])
+                await merge_people(client, target_id=12, merge_ids=[12])
         assert "into itself" in _error(exc)["message"]
 
     @pytest.mark.parametrize(
         ("kwargs", "param"),
         [
-            ({"action": "delete", "person": "1"}, "action"),
-            ({"action": "rename", "person": "1"}, "name"),
-            ({"action": "set_cover", "person": "1"}, "item_id"),
+            ({"action": "delete", "person_id": 1}, "action"),
+            ({"action": "rename", "person_id": 1}, "name"),
+            ({"action": "set_cover", "person_id": 1}, "item_id"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -726,7 +731,7 @@ class TestRequests:
                 client,
                 action="create",
                 subject="mcp spec",
-                folder="mcp-spec-capture/",
+                folder_path="mcp-spec-capture/",
                 description="capture",
                 max_file_mib=10,
             )
@@ -751,7 +756,7 @@ class TestRequests:
         install(fake)
         client = make_client()
         async with client:
-            await photo_request(client, action="create", subject="s", folder="  /x/foo ")
+            await photo_request(client, action="create", subject="s", folder_path="  /x/foo ")
         assert fake.one(FOLDER, "get").params == {"name": "/x/foo "}
         assert fake.one(REQ, "create").params["folder_home_path"] == "/x/foo "
 
@@ -762,8 +767,8 @@ class TestRequests:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_request(client, action="create", subject="s", folder="/x\x00y")
-        assert _error(exc)["param"] == "folder"
+                await photo_request(client, action="create", subject="s", folder_path="/x\x00y")
+        assert _error(exc)["param"] == "folder_path"
         # A path only: no ID advice (QA round 1 on #526).
         assert _error(exc)["suggestion"] == (
             "Pass the folder as a path starting with /, such as /Inbox."
@@ -779,9 +784,9 @@ class TestRequests:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await photo_request(client, action="create", subject="s", folder="Inbx")
+                await photo_request(client, action="create", subject="s", folder_path="Inbx")
         err = _error(exc)
-        assert (err["code"], err["param"]) == ("not_found", "folder")
+        assert (err["code"], err["param"]) == ("not_found", "folder_path")
         assert err["suggestion"] == (
             "Pass the folder as a path starting with / (list_photo_collections type=folder "
             "lists them)."
@@ -797,7 +802,7 @@ class TestRequests:
         client = make_client()
         async with client:
             out = await photo_request(
-                client, action="create", subject="s", folder="/team", space="shared"
+                client, action="create", subject="s", folder_path="/team", space="shared"
             )
         assert fake.one(REQ, "create").params["library"] == "shared_space"
         assert "(Shared Space)" in out
@@ -908,8 +913,8 @@ class TestRequests:
         ("kwargs", "param"),
         [
             ({"action": "edit"}, "action"),
-            ({"action": "create", "folder": "/a"}, "subject"),
-            ({"action": "create", "subject": "s"}, "folder"),
+            ({"action": "create", "folder_path": "/a"}, "subject"),
+            ({"action": "create", "subject": "s"}, "folder_path"),
             ({"action": "update"}, "request"),
             ({"action": "list", "max_file_mib": -1}, "max_file_mib"),
             ({"action": "list", "expires": "2030"}, "expires"),
@@ -928,11 +933,14 @@ class TestDsmErrors:
     @pytest.mark.parametrize(
         ("route", "call"),
         [
-            ((FOLDER, "get", 2), lambda c: photo_folder(c, action="rename", folder="/a", name="b")),
+            (
+                (FOLDER, "get", 2),
+                lambda c: photo_folder(c, action="rename", folder_path="/a", name="b"),
+            ),
             ((ITEM, "get", 2), lambda c: edit_photo(c, ids=[1], rating=3)),
             ((ITEM, "get", 2), lambda c: tag_photos(c, action="add", ids=[1], tags=["x"])),
-            ((PERSON, "get", 1), lambda c: edit_person(c, action="hide", person="5")),
-            ((PERSON, "get", 1), lambda c: merge_people(c, target="5", merge=["6"])),
+            ((PERSON, "get", 1), lambda c: edit_person(c, action="hide", person_id=5)),
+            ((PERSON, "get", 1), lambda c: merge_people(c, target_id=5, merge_ids=[6])),
             ((REQ, "list", 1), lambda c: photo_request(c, action="list")),
         ],
     )
@@ -989,7 +997,7 @@ class TestNamesShownEscaped:
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await merge_people(client, target="12", merge=["11"])
+                await merge_people(client, target_id=12, merge_ids=[11])
         assert (_error(exc)["code"], _error(exc)["param"]) == ("invalid_parameter", "name")
         assert not fake.of(PERSON, "merge")
         assert "without the backslash escapes" in _error(exc)["suggestion"]

@@ -49,7 +49,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, folder="/mcp-spec-capture", limit=2)
+            out = await list_photos(client, folder_path="/mcp-spec-capture", limit=2)
         listed = fake.one(ITEM, "list").params
         assert listed["folder_id"] == 10
         assert listed["sort_by"] == "takentime" and listed["sort_direction"] == "desc"
@@ -113,7 +113,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, person="12")
+            out = await list_photos(client, person_id=12)
         assert fake.one(ITEM, "count_with_filter").params == {"person": [12], "person_policy": "or"}
         assert "No items to display." in out and "0 item(s) total." in out
 
@@ -157,7 +157,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, album="4")
+            out = await list_photos(client, album_id=4)
         assert fake.one(ITEM, "list").params["album_id"] == 4
         assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
 
@@ -211,7 +211,7 @@ class TestListPhotosRouting:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photos(client, folder="10")
+            out = await list_photos(client, folder_id=10)
         # The file's modification time, read as UTC, isn't shown: indexing replaces it
         # with the local taken time, 5 h off on a US Central NAS (#415).
         row = next(ln for ln in out.splitlines() if "(indexing)" in ln)
@@ -223,10 +223,10 @@ class TestListPhotosRefusals:
     @pytest.mark.parametrize(
         ("kwargs", "param"),
         [
-            ({"keyword": "x", "folder": "/"}, "keyword"),
-            ({"album": "1", "tag": "x"}, "album"),
+            ({"keyword": "x", "folder_path": "/"}, "keyword"),
+            ({"album_id": 1, "tag": "x"}, "album_id"),
             ({"place": 1, "type": "photo"}, "place"),
-            ({"concept": 1, "album": "2"}, "album"),
+            ({"concept": 1, "album_name": "2"}, "album_name"),
             ({"type": "raw"}, "type"),
             ({"sort_by": "date"}, "sort_by"),
             ({"sort_direction": "up"}, "sort_direction"),
@@ -236,7 +236,7 @@ class TestListPhotosRefusals:
             ({"min_rating": 6}, "min_rating"),
             ({"start_date": "2024-02-01", "end_date": "2024-01-01"}, "start_date"),
             ({"space": "team"}, "space"),
-            ({"album": "1", "space": "shared"}, "space"),
+            ({"album_id": 1, "space": "shared"}, "space"),
         ],
     )
     async def test_refused_before_any_request(self, kwargs: dict[str, Any], param: str) -> None:
@@ -245,6 +245,22 @@ class TestListPhotosRefusals:
         err = _error(exc)
         assert err["code"] == "invalid_parameter"
         assert err["param"] == param
+
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({"keyword": "x", "album_id": 1}, "keyword can't be combined with album_id."),
+            ({"keyword": "x", "person_name": "Jo"}, "keyword can't be combined with person_name."),
+            ({"album_name": "a", "person_id": 2}, "album_name can't be combined with person_id."),
+        ],
+    )
+    async def test_conflicts_name_the_parameters_given(
+        self, kwargs: dict[str, Any], message: str
+    ) -> None:
+        """Pre-QA r3 on #615: the conflict names the parameters the caller used."""
+        with pytest.raises(ToolError) as exc:
+            await list_photos(make_client(), **kwargs)
+        assert _error(exc)["message"] == f"List photos failed: {message}"
 
     @pytest.mark.parametrize("kwargs", [{"favorite": True}, {"concept": 3}])
     async def test_191_features_refused_on_134(self, kwargs: dict[str, Any]) -> None:
@@ -329,7 +345,9 @@ class TestCollections:
         install(fake)
         client = make_client()
         async with client:
-            out = await list_photo_collections(client, type="folder", parent="/mcp-spec-capture")
+            out = await list_photo_collections(
+                client, type="folder", parent_path="/mcp-spec-capture"
+            )
         assert fake.one(FOLDER, "list").params["id"] == 10
         assert "/mcp-spec-capture/2024" in out
 
@@ -346,7 +364,7 @@ class TestCollections:
         install(fake)
         client = make_client(CAPTURE_191)
         async with client:
-            out = await list_photo_collections(client, type="folder", parent="21")
+            out = await list_photo_collections(client, type="folder", parent_id=21)
         rows = {
             line.split()[1]: line.split()[-1]
             for line in out.splitlines()
@@ -385,7 +403,7 @@ class TestCollections:
         ("kwargs", "param"),
         [
             ({"type": "albums"}, "type"),
-            ({"type": "tag", "parent": "/"}, "parent"),
+            ({"type": "tag", "parent_path": "/"}, "parent_path"),
             ({"type": "tag", "limit": 0}, "limit"),
         ],
     )
