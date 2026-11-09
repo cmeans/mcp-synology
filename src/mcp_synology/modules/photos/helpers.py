@@ -199,12 +199,11 @@ class Ref:
     def id_param(self) -> str:
         """Where the caller gives the ID instead of this name: ``merge_names`` → ``merge_ids``,
         ``target_name`` → ``target_id``; a smart album condition's ``person_ids``."""
-        for many in ("_names", "_paths"):
-            if self.param.endswith(many):
-                return self.param.removesuffix(many) + "_ids"
-        for one in ("_name", "_path"):
-            if self.param.endswith(one):
-                return self.param.removesuffix(one) + "_id"
+        # Only albums and people get here (`_by_ref`): a folder path is never ambiguous.
+        if self.param.endswith("_names"):
+            return self.param.removesuffix("_names") + "_ids"
+        if self.param.endswith("_name"):
+            return self.param.removesuffix("_name") + "_id"
         return "person_ids"
 
 

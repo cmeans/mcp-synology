@@ -382,7 +382,11 @@ def _refuse_unknown_arguments(tool: str, arguments: dict[str, Any], accepted: se
         retryable=False,
         param=renamed[0][0] if renamed and not others else None,
         valid=sorted(accepted),
-        suggestion=f"Pass only {tool}'s own parameters, listed in valid.",
+        suggestion=(
+            f"Pass only {tool}'s own parameters, listed in valid."
+            if accepted
+            else f"{tool} takes no parameters: call it with none."
+        ),
     )
 
 
@@ -584,7 +588,7 @@ def _validation_error_response(tool: str, error: ValidationError, accepted: set[
             twin = next((t for t in twins if t in accepted), None)
             kind = "name" if twin and "_name" in twin else "path"
             message = "must be an ID, a whole number" + (
-                f"; a {kind} goes in `{twin}`" if twin else ""
+                f" (a {kind} goes in `{twin}`)" if twin else ""
             )
         problems.setdefault(field, message)
     text = "; ".join(f"`{field}` {message}" for field, message in problems.items())
