@@ -29,7 +29,7 @@
 
 MCP server for Synology NAS devices. Exposes Synology DSM API functionality as MCP tools that Claude can use.
 
-Tested against DSM 7.1.1-42962 Update 9, 7.2.2-72806 Update 10, 7.3.2-86009 Update 5 and 7.4.1-90080 Update 1: CI runs the integration tests for every module on a virtual DSM of each. Release candidates are also live-tested on a real NAS (DSM 7.1.1-42962 Update 9) by AI clients driving the tools: for 0.10.0, Claude Code, claude.ai through the desktop app, and Meta Muse, as admin, regular, read-only and restricted users. See [docs/live-testing.md](docs/live-testing.md).
+Tested on DSM 7.1 to 7.4.1, on virtual DSMs in CI and on a real NAS by AI clients driving the tools: see [Testing](#testing).
 
 <!-- mcp-name: io.github.cmeans/mcp-synology -->
 
@@ -45,7 +45,15 @@ Each module covers one DSM package. A module loads only when it's listed under `
 | [Download Station](#download-station) | `downloadstation` | 5 · 🟢 Most | 7 · 🟡 Partial | Any, with the Download Station privilege (non-admins see only their own tasks) | 7.1 – 7.4.1 |
 | [Storage](#storage) | `storage` | 11 · 🟢 Most | — | Admin only | 7.1 – 7.4.1 |
 
-**Coverage**, per tier, of what the package itself can do: ✅ **Full**: everything; 🟢 **Most**: the main features, with gaps listed under the module; 🟡 **Partial**: the core features, with notable gaps; — no tools in that tier.
+**Coverage**, per tier, of what the DSM package itself can do:
+
+| Mark | Meaning |
+|---|---|
+| `7 · 🟢 Most` | The number of tools in that tier, then its coverage |
+| ✅ **Full** | Everything the package can do in that tier |
+| 🟢 **Most** | The main features; the gaps are listed below and under the module |
+| 🟡 **Partial** | The core features, with notable gaps |
+| — | No tools in that tier |
 
 What's not covered yet, in short:
 
@@ -55,28 +63,46 @@ What's not covered yet, in short:
 - **Download Station:** BT search, RSS feeds, choosing files inside a torrent, editing a torrent's trackers, settings other than speed limits and the default destination.
 - **Storage:** no WRITE tools yet (phase 2: scrubbing, S.M.A.R.T. tests, hot spares, settings, snapshots); no iSCSI LUNs and SAN Manager, Hyper Backup or Task Scheduler. Never anything that wipes disks or changes a pool's layout.
 
+## Testing
+
+### Tested DSM versions
+
+| DSM | Where | What runs |
+|---|---|---|
+| 7.1.1-42962 Update 9 | Virtual DSM, in CI | Every module's integration tests, on every change to `main` and every pull request that changes code |
+| 7.2.2-72806 Update 10 | Virtual DSM, in CI | The same |
+| 7.3.2-86009 Update 5 | Virtual DSM, in CI | The same |
+| 7.4.1-90080 Update 1 | Virtual DSM, in CI | The same |
+| 7.1.1-42962 Update 9 | A real NAS | Each release candidate's live test: AI clients driving the tools, as admin, regular, read-only and restricted users ([how](docs/live-testing.md)) |
+
+A virtual DSM ([virtual-dsm](https://github.com/vdsm/virtual-dsm)) has the DSM packages the modules use (Synology Photos, Download Station, Snapshot Replication), but no physical disks or storage pools. The Storage module's disk and pool replies were written from captures of the real NAS.
+
 ### Tested clients
 
-Each release candidate is live-tested by these clients driving the tools on a real NAS ([how](docs/live-testing.md)):
+Each release candidate is live-tested by these clients driving the tools on the real NAS ([how](docs/live-testing.md)):
 
-| Client | Model | How it runs the server | Notes |
-|---|---|---|---|
-| **Claude Code** | Claude Opus 5.5 | Starts it itself (stdio) | Gets the server's instructions; no short reply limit (it aborts a call only after 30 minutes idle by default), so long operations and hand-offs are tested here |
-| **claude.ai** in the Claude desktop app | Claude Opus 5.5 | The app starts it locally; claude.ai reaches it through the app's device bridge | Doesn't pass on the server's instructions, tool titles or annotations, so the tools are written to work from their descriptions and replies alone. Replies are cut off after about 60 s |
-| **Meta Muse** (free plan) | Muse Spark | Its own script around `mcp-synology serve`, on its VM | By default a fresh server process per call (slow: every call logs in). Ask it to keep one long-lived session instead: [docs/muse.md](docs/muse.md) has the instructions to paste |
+| Client | Model | Tested | How it runs the server | Notes |
+|---|---|---|---|---|
+| **Claude Code** | Claude Opus 5.5 | 0.10.0, 0.11.0 | Starts it itself (stdio) | Gets the server's instructions; no short reply limit (it aborts a call only after 30 minutes idle by default), so long operations and hand-offs are tested here |
+| **claude.ai** in the Claude desktop app | Claude Opus 5.5 | 0.10.0, 0.11.0 | The app starts it locally; claude.ai reaches it through the app's device bridge | Doesn't pass on the server's instructions, tool titles or annotations, so the tools are written to work from their descriptions and replies alone. Replies are cut off after about 60 s |
+| **Meta Muse** (Power Plan) | Muse Wonder | 0.11.0 | Its own script around `mcp-synology serve`, on its VM | Keep one long-lived session: [docs/muse.md](docs/muse.md) has the instructions to paste |
+| **Meta Muse** (free plan) | Muse Spark | 0.10.0 | The same | By default a fresh server process per call (slow: every call logs in); the same instructions fix that |
 
 A client can change the outcome on its own: the same model does less well through a client that drops the server's instructions or annotations.
 
 ### Tested models
 
-**For best results, use Claude Sonnet 5.5 or better.** The live tests above ran on Claude Opus 5.5 in both Claude clients. To compare models, we held the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station (Storage came later), on a DSM 7.2.2 test NAS restored fresh for each model, as a non-admin user (2026-10-28).
+Every model that has run the tools here, with what it was tested on and how it did. These are results, not a ranking: a live round's steps differ by client, and one run per task can come out differently on a rerun.
 
-| Model | Tasks completed |
-|---|---|
-| Claude Sonnet 5.5 | 12 of 12 |
-| Claude Haiku 5.5 | 11 of 12 |
+| Model | Client | Tested on | Results | Fit for |
+|---|---|---|---|---|
+| **Claude Opus 5.5** | Claude Code, claude.ai | Every live round of 0.10.0 and 0.11.0; the 12-task comparison (0.11.0) | 0.11.0rc4: Claude Code 43 of 43 steps, claude.ai 78 of 79 (the one miss was the server's: a stop that took DSM 60 s to answer, fixed in #632). Comparison: OPUS_CMP | Everything, writes and deletes included |
+| **Claude Sonnet 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 12 of 12. 0.11.0: SONNET_CMP | Everything, writes and deletes included |
+| **Claude Haiku 5.5** | Claude Code | The 12-task comparison (0.10.0, 0.11.0) | 0.10.0: 11 of 12. 0.11.0: 9 of 11 scored. Both runs missed the same task: it didn't match a download by its source URL, so it deleted nothing. In 0.11.0 it also refused a copy, reading the server's connection-name line as forbidding a request that didn't name the NAS (#633) | Reads; check its writes, and confirm deletes yourself |
+| **Muse Wonder** | Meta Muse (Power Plan) | 0.11.0's live rounds (rc2 to rc4) | rc4: 61 of 62 steps. The miss: it changed an album that wasn't shared yet and didn't follow the reply's "Use action=share first". In rc2 and rc3 its misses found two server bugs (Photos IDs and names, fixed in #615) | Reads and writes; it follows most hints in replies, not all |
+| **Muse Spark** | Meta Muse (free plan) | 0.10.0's live rounds | No fails in rc5 or rc10 | Reads and writes, in the steps tested |
 
-Both handled Photos uploads, albums and tags, recycle-bin checks, Download Station tasks and honest answers about what isn't supported. The task Haiku missed needed an extra lookup it didn't think to make (matching a download by its source URL); Sonnet made it. Haiku is fine for reads; for writes, and deletes above all, use Sonnet or better. The tasks, how each was graded and the per-task results are in [Comparing models](docs/live-testing.md#comparing-models).
+The comparison holds the client fixed: headless Claude Code (server instructions and full tool schemas delivered, no other tools), the same 12 tasks across System, File Station, Synology Photos and Download Station, on a virtual DSM 7.2.2 restored fresh for each model, as a non-admin user. The tasks, how each was graded and the per-task results are in [Comparing models](docs/live-testing.md#comparing-models).
 
 ## Quick Start
 
@@ -107,7 +133,7 @@ Copy the snippet from setup into your `claude_desktop_config.json` and restart C
 }
 ```
 
-The config file name (e.g., `nas.yaml`) also serves as a natural identifier for the connection — you can name it to match your NAS (e.g., `home-nas.yaml`, `office-nas.yaml`).
+The config file is named after the connection's instance ID, which `setup` takes from the host (`home-nas.local` gives `home-nas.yaml`).
 
 On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
@@ -147,6 +173,7 @@ No config file needed if `SYNOLOGY_HOST` is set, as long as no `./mcp-synology.y
       "args": ["mcp-synology", "serve"],
       "env": {
         "SYNOLOGY_HOST": "192.168.1.100",
+        "SYNOLOGY_HTTPS": "true",
         "SYNOLOGY_USERNAME": "your_user",
         "SYNOLOGY_PASSWORD": "your_password"
       }
@@ -158,8 +185,10 @@ No config file needed if `SYNOLOGY_HOST` is set, as long as no `./mcp-synology.y
 Or from the CLI:
 
 ```bash
-SYNOLOGY_HOST=192.168.1.100 uvx mcp-synology check
+SYNOLOGY_HOST=192.168.1.100 SYNOLOGY_HTTPS=true uvx mcp-synology check
 ```
+
+`SYNOLOGY_HTTPS=true` (port 5001 by default) keeps the password off the network in cleartext; leave it out only on a network you trust. DSM's default certificate is self-signed, which env-only mode can't accept (`verify_ssl` has no variable), so use a config file or a certificate the machine trusts.
 
 Without a config file, mcp-synology always runs **File Station, read-only**. No environment variable enables another module or the write tools; for those, use a config file (the same variables then override its values, and overriding its host, port, HTTPS or instance ID prints a warning on stderr naming the variable, at any log level). The variables:
 
@@ -406,6 +435,7 @@ Spec: [`docs/specs/storage-module-spec.md`](docs/specs/storage-module-spec.md).
 - **Permission tiers** — READ or WRITE per module, enforced at tool registration. Tiers control what the server can do on the NAS. Tools that write on this machine (`download_file`, `download_photos`) are annotated as destructive so your client can confirm them, and so is every WRITE tool except `create_folder`, `rename`, `upload_photos`, `create_download`, `pause_download` and `resume_download`. A read-only connection tells the model which tools it withholds and how to enable them, so the model doesn't claim the server can't do it
 - **Long operations keep running** — a large delete, copy, move or recycle-bin restore reports progress while the call waits, and if it's still running when the wait ends (30 s by default) the NAS keeps working on it: the reply gives a handle for `file_task`, which checks on it, lists running operations or stops one. See [File Station](#file-station). Photos' `copy_photos`, `move_photos`, `delete_photos` and `delete_photo_folders` also hand off, after `task_timeout` (default 30 s, up to 600), with a `photos:<id>` handle for `photo_task`
 - **Local path confinement** — `upload_file`, `download_file`, `upload_photos`, `download_photos` and `create_download`'s torrent files only use local folders listed in `allowed_local_paths`, by default your Downloads folder. Set it at the top level of the config for every module, or per module in that module's settings (File Station, Synology Photos and Download Station each have their own list). A module's own list adds to the top-level list when that's set. Without a top-level list, it **replaces** the Downloads default, so include `~/Downloads` if you still want it. `create_download` only reads `.torrent` and `.nzb` files. Symlinks and `..` are resolved first, so they can't lead outside. Set it to `["/"]` to allow everything (macOS/Linux)
+- **Text from the NAS is data** — file names, descriptions, album names and other text in a reply may have been written by someone else. Every reply says so on its first line, the server instructions tell the model not to follow instructions in it, and control and bidirectional characters in it are escaped so a name can't pose as the server's own line. Wording isn't filtered. See [docs/prompt-injection.md](docs/prompt-injection.md)
 - **2FA support** — auto-detected; device token bootstrap with automatic silent re-auth
 - **Secure credentials** — OS keyring integration that works transparently on macOS, Windows, and Linux (including from Claude Desktop). See [docs/credentials.md](docs/credentials.md).
 - **Multi-NAS** — manage multiple NAS devices with separate configs, credentials, and state
@@ -442,6 +472,8 @@ modules:
   downloadstation:
     enabled: true
     permission: write
+  storage:
+    enabled: true          # READ tools only; needs a DSM administrator account
 ```
 
 ### Connection and HTTPS
@@ -459,7 +491,7 @@ Use `https: true` unless the NAS is on a network you trust: with plain HTTP, the
 
 ### Multi-NAS
 
-Each NAS gets its own config file, credentials, and Claude Desktop entry. The config file name serves as a natural identifier (e.g., `home-nas.yaml`, `media-server.yaml`).
+Each NAS gets its own config file, credentials, and Claude Desktop entry. Run `setup` once per NAS: it names each file after the instance ID it takes from the host (`home-nas.local` gives `home-nas.yaml`), and asks for one when the host gives none.
 
 Set `alias` to give Claude a display name for the connection:
 

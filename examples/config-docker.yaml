@@ -1,7 +1,7 @@
 # Docker deployment — connection details from environment variables.
-# Set: SYNOLOGY_HOST, SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD; as needed, SYNOLOGY_HTTPS
-# (true/false), SYNOLOGY_PORT, SYNOLOGY_DEVICE_ID (2FA), SYNOLOGY_INSTANCE_ID and
-# SYNOLOGY_LOG_LEVEL. This file sets the modules: without a config file, only File
+# Set: SYNOLOGY_HOST, SYNOLOGY_HTTPS=true (without it the password crosses the network in
+# cleartext), SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD; as needed, SYNOLOGY_PORT,
+# SYNOLOGY_DEVICE_ID (2FA), SYNOLOGY_INSTANCE_ID and SYNOLOGY_LOG_LEVEL. This file sets the modules: without a config file, only File
 # Station's read tools run.
 schema_version: 1
 

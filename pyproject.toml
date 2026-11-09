@@ -1,12 +1,12 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=25.1"]
 build-backend = "hatchling.build"
 
 [project]
 name = "mcp-synology"
 version = "0.10.0"
 description = "MCP server for Synology NAS — manage files on your NAS via Claude"
-readme = "README.md"
+dynamic = ["readme"]
 license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
@@ -62,6 +62,20 @@ Homepage = "https://github.com/cmeans/mcp-synology"
 Repository = "https://github.com/cmeans/mcp-synology"
 Issues = "https://github.com/cmeans/mcp-synology/issues"
 Documentation = "https://github.com/cmeans/mcp-synology/tree/main/docs"
+
+# PyPI shows the README as the project page, where a relative link resolves against
+# pypi.org and breaks (#487). The build rewrites each one to the GitHub file at this
+# release's tag, so the page links to the docs as they were when it was published.
+# tests/test_readme.py checks the built text.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\((?!https?://|#|mailto:)([^)\s]+)\)'
+replacement = '](https://github.com/cmeans/mcp-synology/blob/v$HFPR_VERSION/\1)'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_synology"]

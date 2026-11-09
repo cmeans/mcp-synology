@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import tomllib
 import types
 from pathlib import Path
 from typing import Any
@@ -203,3 +204,53 @@ def test_section_parts(module: str) -> None:
     section = _section(SECTIONS[module])
     for part in ("```yaml", "**Accounts.**", "**DSM versions:**", "**Not covered:**", "Spec: "):
         assert part in section, f"no {part} in ### {SECTIONS[module]}"
+
+
+# PyPI shows the README with its relative links rewritten at build time (#487): the
+# hatch-fancy-pypi-readme substitution in pyproject.toml. These read that substitution and
+# apply it as the build does (substitutions first, then $HFPR_VERSION).
+_ROOT = Path(__file__).resolve().parent.parent
+_HFPR = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"][
+    "metadata"
+]["hooks"]["fancy-pypi-readme"]
+_LINK = re.compile(r"\]\(([^)\s]+)\)")
+_TAG_URL = "https://github.com/cmeans/mcp-synology/blob/v$HFPR_VERSION/"
+
+
+def _pypi_readme() -> str:
+    text = "".join((_ROOT / f["path"]).read_text(encoding="utf-8") for f in _HFPR["fragments"])
+    for sub in _HFPR["substitutions"]:
+        flags = re.I if sub.get("ignore-case") else 0
+        text = re.sub(sub["pattern"], sub["replacement"], text, flags=flags)
+    return text
+
+
+def test_pypi_readme_is_the_whole_readme() -> None:
+    assert "readme" in tomllib.loads((_ROOT / "pyproject.toml").read_text())["project"]["dynamic"]
+    assert [f["path"] for f in _HFPR["fragments"]] == ["README.md"]
+    assert _HFPR["content-type"] == "text/markdown"
+
+
+def test_pypi_readme_has_no_relative_link() -> None:
+    """Each link on the PyPI page is absolute or an anchor in the page itself."""
+    relative = [
+        link
+        for link in _LINK.findall(_pypi_readme())
+        if not link.startswith(("https://", "http://", "#", "mailto:"))
+    ]
+    assert relative == []
+
+
+def test_pypi_readme_links_go_to_files_at_the_release_tag() -> None:
+    """Every rewritten link names the release's tag and a file or folder that exists, so the
+    PyPI page of a release links to the docs as they were in that release."""
+    rewritten = [link for link in _LINK.findall(_pypi_readme()) if link.startswith(_TAG_URL)]
+    relative = [
+        link
+        for link in _LINK.findall(README)
+        if not link.startswith(("https://", "http://", "#", "mailto:"))
+    ]
+    assert len(rewritten) == len(relative) > 0
+    for link in rewritten:
+        path = link.removeprefix(_TAG_URL).split("#", 1)[0]
+        assert (_ROOT / path).exists(), link

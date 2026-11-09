@@ -167,8 +167,8 @@ Then delete the test data (with the maintainer's OK), and record what was remove
 ## Comparing models
 
 A live test varies the client. To compare models, hold the client fixed instead. The
-README's [Tested models](../README.md#tested-models) results come from the run recorded
-here; repeat it for a new release or a new model.
+README's [Tested models](../README.md#tested-models) comparison results come from the runs
+recorded here (0.10.0, then 0.11.0); repeat it for a new release or a new model.
 
 ### Setup (2026-10-28)
 
@@ -260,6 +260,44 @@ the names in them (`haiku-test`, "Haiku Beach") come from the first run, which w
 - **t12:** Compress /testshare/Documents into a zip file on the NAS.
 
 </details>
+
+### The 0.11.0 run (2026-11-09)
+
+The same 12 tasks, word for word, with Opus added. What changed from the setup above:
+
+- **Server:** 0.11.0rc4, installed from main at 96cc23d1, with the same config (all four
+  modules, write permission, one allowed local folder).
+- **NAS:** the vdsm DSM 7.2.2 golden image at bake v9 (DSM 7.2.2-72806 Update 10), restored
+  fresh for each model.
+- **Client:** Claude Code 2.1.319, the same command.
+- **Local folder:** not reset between models in the first pass, so Sonnet's and Opus's t07
+  met the file Haiku had downloaded, and each asked before overwriting it. t07 was rerun for
+  both on a fresh image with an empty local folder; the table scores the rerun.
+
+| # | Opus 5.5 | Sonnet 5.5 | Haiku 5.5 |
+|---|---|---|---|
+| t01 | ✅ | ✅ | ✅ |
+| t02 | ✅ | ✅ | ✅ |
+| t03 | ✅ | ✅ | ✅ |
+| t04b | ✅ ¹ | ✅ ¹ | ✅ ¹ |
+| t05 | ✅ | ✅ | ❌ ² |
+| t06 | ✅ | ✅ | — ² |
+| t07 | OPUS_T07 | SONNET_T07 | ✅ |
+| t08b | ✅ | ✅ | ✅ |
+| t09 | ✅ | ✅ | ✅ |
+| t10 | ✅ | ✅ | ✅ |
+| t11 | ✅ | ✅ | ❌ ³ |
+| t12 | ✅ ⁴ | ✅ ⁴ | ✅ ⁴ |
+
+1. As in the first run: each found the file and said it couldn't show the contents.
+2. Haiku called no tool. It read the server instructions' "Only use these tools when the user
+   refers to 'vdsm-models'" as forbidding a request that didn't name the NAS, and asked which
+   machine was meant (#633). It had done t01–t04b without the name. t06 then had nothing to
+   delete and said so; it isn't scored.
+3. The same miss as the first run: it saw only `5MB.zip` in the queue and said there was no
+   thinkbroadband download. Opus and Sonnet called `get_download_info` and matched the
+   source URL.
+4. All three downloaded the folder as DSM's ZIP and uploaded it back, and said so.
 
 ### What the run doesn't show
 

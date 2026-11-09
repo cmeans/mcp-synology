@@ -39,5 +39,6 @@ Set up mcp-synology as one long-lived MCP session, not a process per call.
 ```
 
 Tested with Muse on its free plan (model: Muse Spark) against mcp-synology 0.10.0's
-release candidates on a real NAS. Other agents that run tools from scripts benefit from the
+release candidates, and on its Power Plan (model: Muse Wonder) against 0.11.0's, on a real
+NAS. Other agents that run tools from scripts benefit from the
 same approach.
