@@ -147,6 +147,27 @@ class TestOriginals:
         assert "  12  forest-trail.jpg  3 B (replaced the file that was there)" in out, out
 
     @respx.mock
+    async def test_overwrite_over_a_dangling_symlink_says_it_replaced_it(
+        self, tmp_path: Path
+    ) -> None:
+        """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists)."""
+        (tmp_path / "forest-trail.jpg").symlink_to(tmp_path / "missing-target")
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"new"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12],
+                dest_folder=str(tmp_path),
+                overwrite=True,
+                allowed_roots=[tmp_path],
+            )
+        assert "  12  forest-trail.jpg  3 B (replaced the file that was there)" in out, out
+        assert (tmp_path / "forest-trail.jpg").read_bytes() == b"new"
+
+    @respx.mock
     async def test_only_the_item_that_replaced_a_file_says_so(self, tmp_path: Path) -> None:
         (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
         fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))

@@ -1241,6 +1241,23 @@ class TestDownloadFile:
         # name (a folder's gets ".zip"), went to the NAS.
         assert [c.request.url.params.get("method") for c in route.calls] == ["getinfo"]
 
+    @respx.mock
+    async def test_download_overwrite_over_a_dangling_symlink_says_it_replaced_it(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists),
+        so the note says it was replaced."""
+        (tmp_path / "report.txt").symlink_to(tmp_path / "missing-target")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new", headers={"content-type": "application/octet-stream"}
+        )
+        result = await download_file(
+            mock_client, path="/docs/report.txt", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert result.splitlines()[1:] == ["    It replaced the report.txt that was there."]
+        assert not (tmp_path / "report.txt").is_symlink()
+        assert (tmp_path / "report.txt").read_bytes() == b"new"
+
     @pytest.mark.parametrize("overwrite", [False, True])
     @respx.mock
     async def test_download_directory_at_destination_is_refused_up_front(
