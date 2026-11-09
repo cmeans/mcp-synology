@@ -884,33 +884,42 @@ async def _attempt_login(
 
 
 def _ask_username(config_username: str | None) -> str:
-    """The DSM username, asked for; the one the server will use when it's already set (#624).
+    """The DSM username, asked for; the one the server will use when the config sets it (#624).
 
-    The server takes the username from ``SYNOLOGY_USERNAME``, then the config, before the
-    keyring (``core/auth.py``), so a different answer here would store one account's password
+    ``config_username`` is the loaded config's ``auth.username``, ``SYNOLOGY_USERNAME``
+    already applied and checked by the config's validation. The server takes it before the
+    keyring's (``core/auth.py``), so a different answer here would store one account's password
     for another account's login: the server's first login would fail, counting toward DSM's
     Auto Block, with nothing saying why. That name is offered as the default, and any other
-    answer is refused before anything is sent or stored.
+    answer is refused and asked again, before anything is sent or stored. A new config (None
+    here) has no username, so any answer goes, as before: the terminal's variables aren't
+    necessarily the MCP client's (``docs/credentials.md``).
     """
     from mcp_synology.core.auth import _present_or_none
     from mcp_synology.core.config import quoted_text
 
-    env_username = _present_or_none(os.environ.get("SYNOLOGY_USERNAME"))
-    fixed = env_username or _present_or_none(config_username)
+    fixed = _present_or_none(config_username)
     if fixed is None:
         return str(click.prompt("DSM username")).strip()
-    answer = str(click.prompt("DSM username", default=fixed.strip())).strip()
-    if answer == fixed.strip():
-        return fixed
-    where = "SYNOLOGY_USERNAME is set to" if env_username else "The config's auth.username is"
-    click.echo(
-        f"{where} {quoted_text(fixed)}, and that's the account the server logs in as, so its "
-        "password is the one to store here. To use another account, change that setting "
-        "first, then run setup again.",
-        err=True,
-    )
-    click.echo("Nothing was sent or changed.", err=True)
-    sys.exit(1)
+    from_env = _present_or_none(os.environ.get("SYNOLOGY_USERNAME")) is not None
+    where = "SYNOLOGY_USERNAME is set to" if from_env else "The config's auth.username is"
+    while True:
+        # Shown escaped: a config's text could move the terminal or forge a line (#541).
+        answer = str(
+            click.prompt(
+                f"DSM username [{_shown_name(fixed.strip())}]",
+                default=fixed.strip(),
+                show_default=False,
+            )
+        ).strip()
+        if answer == fixed.strip():
+            return fixed
+        click.echo(
+            f"{where} {quoted_text(fixed)}, and that's the account the server logs in as, so "
+            "its password is the one to store here. Answer that name, or stop (Ctrl-C) and "
+            "change that setting first to use another account. Nothing was sent or stored.",
+            err=True,
+        )
 
 
 def _exit_nothing_changed() -> NoReturn:

@@ -354,7 +354,7 @@ $ mcp-synology setup --config ~/.config/mcp-synology/primary.yaml
 **Setup sequence:**
 1. Read config file for NAS connection details (host, port, HTTPS)
 2. Ask first if the keyring entry isn't this host's (#536)
-3. Prompt for username and password interactively. When `SYNOLOGY_USERNAME` or the config's `auth.username` sets the username, that's the one the server logs in as, so it's the prompt's default and any other answer is refused before anything is sent or stored (#624)
+3. Prompt for username and password interactively. When the config's `auth.username` (or `SYNOLOGY_USERNAME` over it) sets the username, that's the one the server logs in as, so it's the prompt's default (shown escaped) and any other answer is refused and asked again, before anything is sent or stored (#624). A new config from plain `setup` has none, so any answer goes
 4. Attempt login to the NAS
 5. If error 403 (2FA required): prompt for OTP code from the user's authenticator app, then login with otp_code + `enable_device_token=yes` + `device_name=MCPSynology`
 6. Only then store the username, password, host and any returned device_id in the keyring (#454)

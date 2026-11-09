@@ -400,9 +400,9 @@ class TestSetupCredentialFlow:
 
 
 class TestUsernameTheServerUses:
-    """#624: setup asked for a username with no default even when the config or
-    SYNOLOGY_USERNAME set one, and stored a different answer's password, which the server then
-    sent with the config's username."""
+    """#624: setup asked for a username with no default even when the config (or
+    SYNOLOGY_USERNAME, applied to it) set one, and stored a different answer's password, which
+    the server then sent with the config's username."""
 
     CONFIG = (
         "schema_version: 1\n"
@@ -435,80 +435,99 @@ class TestUsernameTheServerUses:
             patch(
                 "mcp_synology.cli.setup.asyncio.run",
                 return_value={"success": True, "keyring_ok": True},
-            ) as run,
+            ),
             patch("mcp_synology.cli.setup._setup_login", new=MagicMock()) as login,
             patch.dict(os.environ, {**clean, **(env or {})}, clear=True),
         ):
-            result = runner.invoke(
-                main, ["setup", "-c", str(config_file)], input=f"{typed}\nsecret\n"
-            )
-        del run
+            result = runner.invoke(main, ["setup", "-c", str(config_file)], input=typed)
         return result, login, store
 
+    REFUSED = (
+        "The config's auth.username is bob, and that's the account the server logs in as, "
+        "so its password is the one to store here. Answer that name, or stop (Ctrl-C) and "
+        "change that setting first to use another account. Nothing was sent or stored."
+    )
+
     def test_the_config_s_username_is_the_default(self, tmp_path: Path) -> None:
-        result, login, _store = self._run(tmp_path, "")
+        result, login, _store = self._run(tmp_path, "\nsecret\n")
         assert result.exit_code == 0, result.output
         assert "DSM username [bob]:" in result.output
         assert login.call_args.args[1] == "bob"
 
     def test_typing_the_same_name_is_fine(self, tmp_path: Path) -> None:
-        result, login, _store = self._run(tmp_path, "  bob ")
+        result, login, _store = self._run(tmp_path, "  bob \nsecret\n")
         assert result.exit_code == 0, result.output
         assert login.call_args.args[1] == "bob"
 
-    def test_another_name_is_refused_before_anything_is_sent(self, tmp_path: Path) -> None:
-        result, login, store = self._run(tmp_path, "alice")
+    def test_a_padded_config_username_is_sent_as_the_server_sends_it(self, tmp_path: Path) -> None:
+        config = self.CONFIG.replace("username: bob", "username: ' bob '")
+        result, login, _store = self._run(tmp_path, "bob\nsecret\n", config=config)
+        assert result.exit_code == 0, result.output
+        assert login.call_args.args[1] == " bob "
+
+    def test_another_name_is_refused_and_asked_again(self, tmp_path: Path) -> None:
+        result, login, store = self._run(tmp_path, "alice\nbob\nsecret\n")
+        assert result.exit_code == 0, result.output
+        assert self.REFUSED in result.output
+        assert result.output.count("DSM username [bob]:") == 2
+        assert login.call_args.args[1] == "bob"
+        store.assert_not_called()  # asyncio.run is mocked: only the login would store
+
+    def test_stopping_after_a_refusal_sends_and_stores_nothing(self, tmp_path: Path) -> None:
+        result, login, store = self._run(tmp_path, "alice\n")
         assert result.exit_code == 1
-        assert (
-            "The config's auth.username is bob, and that's the account the server logs in as"
-            in result.output
-        )
-        assert "Nothing was sent or changed." in result.output
+        assert self.REFUSED in result.output
         assert "DSM password" not in result.output
         login.assert_not_called()
         store.assert_not_called()
 
     def test_synology_username_wins_over_the_config(self, tmp_path: Path) -> None:
         env = {"SYNOLOGY_USERNAME": "carol"}
-        result, login, _store = self._run(tmp_path, "", env=env)
+        result, login, _store = self._run(tmp_path, "\nsecret\n", env=env)
         assert "DSM username [carol]:" in result.output
         assert login.call_args.args[1] == "carol"
-        result, login, store = self._run(tmp_path, "bob", env=env)
+        result, login, _store = self._run(tmp_path, "bob\n", env=env)
         assert result.exit_code == 1
-        assert "SYNOLOGY_USERNAME is set to carol" in result.output
+        assert "SYNOLOGY_USERNAME is set to carol, and that's the account" in result.output
         login.assert_not_called()
-        store.assert_not_called()
 
     @pytest.mark.parametrize("blank", ["", "   "])
     def test_a_blank_synology_username_is_unset(self, tmp_path: Path, blank: str) -> None:
         """A blank variable is skipped by the server too (``_present_or_none``)."""
-        result, login, _store = self._run(tmp_path, "", env={"SYNOLOGY_USERNAME": blank})
+        result, login, _store = self._run(tmp_path, "\nsecret\n", env={"SYNOLOGY_USERNAME": blank})
         assert "DSM username [bob]:" in result.output
         assert login.call_args.args[1] == "bob"
 
+    def test_a_username_that_could_move_the_terminal_is_shown_escaped(self, tmp_path: Path) -> None:
+        """Pre-QA on #627: the default went to the terminal raw."""
+        config = self.CONFIG.replace("username: bob", 'username: "bob\\e[2J\\nPassword:"')
+        result, login, _store = self._run(tmp_path, "\nsecret\n", config=config)
+        assert result.exit_code == 0, result.output
+        assert "\x1b" not in result.output and "bob\nPassword" not in result.output
+        assert "DSM username ['bob\\x1b[2J\\nPassword:']:" in result.output
+        assert login.call_args.args[1] == "bob\x1b[2J\nPassword:"
+
     def test_without_a_username_anything_goes(self, tmp_path: Path) -> None:
         config = self.CONFIG.replace("auth:\n  username: bob\n", "")
-        result, login, _store = self._run(tmp_path, "alice", config=config)
+        result, login, _store = self._run(tmp_path, "alice\nsecret\n", config=config)
         assert result.exit_code == 0, result.output
         assert "DSM username: " in result.output and "DSM username [" not in result.output
         assert login.call_args.args[1] == "alice"
 
-    def test_a_new_config_follows_synology_username(self, tmp_path: Path) -> None:
-        """The interactive path writes a config without auth: the variable still wins there."""
+    def test_a_new_config_takes_any_name(self, tmp_path: Path) -> None:
+        """Pre-QA on #627: the config the interactive path writes has no username, and the
+        terminal's SYNOLOGY_USERNAME isn't necessarily the MCP client's: it decides nothing."""
         clean = {k: v for k, v in os.environ.items() if not k.startswith("SYNOLOGY_")}
         runner = CliRunner()
         with (
             patch("mcp_synology.cli.setup._CONFIG_DIR", tmp_path / "config"),
             patch("mcp_synology.core.config.discover_config_path", side_effect=FileNotFoundError),
-            patch("mcp_synology.cli.setup._store_keyring", return_value=False) as store,
-            patch("mcp_synology.cli.setup.asyncio.run") as run,
+            patch("mcp_synology.cli.setup._store_keyring", return_value=False),
             patch.dict(os.environ, {**clean, "SYNOLOGY_USERNAME": "carol"}, clear=True),
         ):
             result = runner.invoke(main, ["setup"], input="nas.local\nn\n\nread\n\nadmin\npw\n")
-        assert result.exit_code == 1, result.output
-        assert "SYNOLOGY_USERNAME is set to carol" in result.output
-        run.assert_not_called()
-        store.assert_not_called()
+        assert "DSM username: " in result.output and "DSM username [" not in result.output
+        assert "SYNOLOGY_USERNAME is set to" not in result.output
 
 
 # ---------- setup command top-level error paths ----------
