@@ -12,13 +12,15 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import format_timestamp, synology_error_response
 from mcp_synology.modules.photos.helpers import (
-    IdNumber,
     Photos,
+    Ref,
     check_ids,
     invalid,
     not_found,
+    one_ref,
     parse_date,
     parse_expires,
+    refs,
 )
 
 if TYPE_CHECKING:
@@ -36,9 +38,17 @@ _ALBUM_ACTIONS = (
     "create_smart",
     "set_condition",
 )
+# Condition keys renamed in 0.11.0 (#615): an ID and a name or path in separate keys.
+_RENAMED_CONDITION_KEYS = {
+    "people": ("person_ids", "person_names"),
+    "folders": ("folder_ids", "folder_paths"),
+}
+_MEMBER_KEYS = ("name", "type", "role")
 _CONDITION_KEYS = (
-    "folders",
-    "people",
+    "folder_ids",
+    "folder_paths",
+    "person_ids",
+    "person_names",
     "people_match",
     "tags",
     "tags_match",
@@ -95,7 +105,8 @@ async def photo_album(
     client: DsmClient,
     *,
     action: str,
-    album: str | None = None,
+    album_id: int | None = None,
+    album_name: str | None = None,
     name: str | None = None,
     ids: list[int] | None = None,
     condition: dict[str, Any] | None = None,
@@ -110,9 +121,10 @@ async def photo_album(
             value=action,
             valid=list(_ALBUM_ACTIONS),
         )
+    album = one_ref(op, "album", album_id, album_name, required=False)
     needs_album = action not in ("create", "create_smart")
     if needs_album and album is None:
-        invalid(op, f"action={action} needs album.", param="album")
+        invalid(op, f"action={action} needs album_id or album_name.", param="album_id")
     if action in ("create", "create_smart", "rename", "copy") and not (name or "").strip():
         invalid(op, f"action={action} needs name.", param="name", value=name)
     if action in ("add", "remove", "set_cover") or (action == "create" and ids):
@@ -131,7 +143,7 @@ async def photo_album(
 async def _photo_album(
     ph: Photos,
     action: str,
-    album: str | None,
+    album: Ref | None,
     name: str,
     ids: list[int],
     condition: dict[str, Any] | None,
@@ -175,25 +187,31 @@ async def _photo_album(
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
-                f"Note: another album already has this name (id {others}); use ids to tell "
-                "them apart."
+                f"Note: another album already has this name (id {others}); use album_id to "
+                "tell them apart."
             )
         now = await _album_now(ph, int(created["id"]))
         return "\n".join([*lines, album_line(now)])
 
-    target = await ph.album(album or "")
+    assert album is not None  # photo_album checked it
+    target = await ph.album(album)
     album_id = int(target["id"])
     kind = str(target.get("type", "normal"))
     if action in ("add", "remove", "copy") and kind != "normal":
         invalid(
             ph.operation,
             f"album {album_id} is a smart album; its items come from its condition.",
-            param="album",
-            value=album,
+            param=album.param,
+            value=album.given,
             suggestion="Change what it holds with action=set_condition.",
         )
     if action == "set_condition" and kind != "condition":
-        invalid(ph.operation, f"album {album_id} isn't a smart album.", param="album", value=album)
+        invalid(
+            ph.operation,
+            f"album {album_id} isn't a smart album.",
+            param=album.param,
+            value=album.given,
+        )
 
     if action == "rename":
         await ph.call("Browse.Album", "set_name", {"id": album_id, "name": name}, personal=True)
@@ -265,16 +283,40 @@ def _rejected(data: dict[str, Any]) -> list[str]:
     return [f"  Rejected by DSM: {', '.join(str(r) for r in rejected)} (error_list)"]
 
 
+def condition_id(op: str, value: object, key: str) -> Ref:
+    """One of a condition's ``person_ids`` or ``folder_ids``: an ID, as a number or its
+    digits (a name or a path goes in ``person_names`` / ``folder_paths``)."""
+    if type(value) is int:
+        return Ref("condition", id=value)
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        return Ref("condition", id=int(value.strip()))
+    other = {"person_ids": "names go in person_names", "folder_ids": "paths go in folder_paths"}
+    invalid(
+        op,
+        f"condition {key} are IDs, not {value!r}; {other[key]}.",
+        param="condition",
+        value=value,
+    )
+
+
 async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
     """The tool's condition (names, dates) as DSM's (IDs, Unix times, policies)."""
     op = ph.operation
-    unknown = sorted(set(given) - set(_CONDITION_KEYS))
+    unknown = [k for k in given if k not in _CONDITION_KEYS]
     if unknown:
+        # The server's own text only, as for unknown arguments (#615): a renamed key's
+        # replacements, never a key the caller wrote, which could carry an instruction.
+        renamed = [k for k in _RENAMED_CONDITION_KEYS if k in unknown]
+        parts = [
+            f"`{k}` is now `{_RENAMED_CONDITION_KEYS[k][0]}` or `{_RENAMED_CONDITION_KEYS[k][1]}`."
+            for k in renamed
+        ]
+        if len(unknown) > len(renamed):
+            parts.append(f"{len(unknown) - len(renamed)} key(s) aren't condition keys.")
         invalid(
             op,
-            f"unknown condition key(s): {', '.join(unknown)}.",
+            "condition: " + " ".join(parts),
             param="condition",
-            value=given,
             valid=list(_CONDITION_KEYS),
         )
     useful = [
@@ -288,8 +330,8 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
         # DSM accepts a condition with only user_id and matches everything (verified).
         invalid(
             op,
-            "the condition needs at least one of folders, people, tags, places, "
-            "start_date, end_date, type, ratings or keywords.",
+            "the condition needs at least one of folder_ids, folder_paths, person_ids, "
+            "person_names, tags, places, start_date, end_date, type, ratings or keywords.",
             param="condition",
             value=given,
         )
@@ -308,24 +350,16 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
             invalid(op, f"{key}_match must be any or all.", param="condition", value=match)
         return _MATCH[match]
 
-    if folders := as_list("folders"):
-        cond["folder_filter"] = [
-            int(
-                (await ph.folder(IdNumber(f) if type(f) is int else str(f), param="condition"))[
-                    "id"
-                ]
-            )
-            for f in folders
-        ]
-    if people := as_list("people"):
-        cond["person"] = [
-            int(
-                (await ph.person(IdNumber(p) if type(p) is int else str(p), param="condition"))[
-                    "id"
-                ]
-            )
-            for p in people
-        ]
+    # Each folder by ID or by path, from its own key (#617).
+    folders = [condition_id(op, f, "folder_ids") for f in as_list("folder_ids")]
+    folders += [Ref("condition", name=str(f)) for f in as_list("folder_paths")]
+    if folders:
+        cond["folder_filter"] = [int((await ph.folder(f))["id"]) for f in folders]
+    people = [condition_id(op, p, "person_ids") for p in as_list("person_ids")]
+    people += [Ref("condition", name=str(p)) for p in as_list("person_names")]
+    if people:
+        # Each person by ID or by name, from its own key (#614, #616).
+        cond["person"] = [int((await ph.person(p))["id"]) for p in people]
         cond["person_policy"] = policy("people")
     if tags := as_list("tags"):
         ids = await ph.tag_ids([str(t) for t in tags], param="condition")
@@ -381,7 +415,8 @@ async def photo_share_link(
     client: DsmClient,
     *,
     action: str,
-    album: str,
+    album_id: int | None = None,
+    album_name: str | None = None,
     public: str | None = None,
     password: str | None = None,
     expires: str | None = None,
@@ -389,6 +424,8 @@ async def photo_share_link(
 ) -> str:
     """Share an album by link, change the link's settings, or stop (spec: photo_share_link)."""
     op = "Photo share link"
+    album = one_ref(op, "album", album_id, album_name)
+    assert album is not None  # required
     if action not in _SHARE_ACTIONS:
         invalid(
             op,
@@ -413,18 +450,27 @@ async def photo_share_link(
     expiration = None
     if expires is not None:
         expiration = parse_expires(op, expires)
-    for member in members or []:
-        if not isinstance(member, dict) or not member.get("name"):
-            invalid(op, "each member needs a name.", param="members", value=member)
-        if member.get("type", "user") not in ("user", "group"):
-            invalid(op, "member type must be user or group.", param="members", value=member)
-        if member.get("role", "view") not in _ROLES:
+    for i, member in enumerate(members or []):
+        # Keys first, and no member's keys or other fields echoed in a refusal: the caller wrote
+        # them (pre-QA r5 and QA round 1 on #615); only a name DSM doesn't know is quoted back.
+        # A dropped key would leave the default: `{"name": "bob", "Role": "none"}`, meant to
+        # remove bob, gave him view access.
+        where = f"members[{i}]"
+        if not isinstance(member, dict):
+            invalid(op, f"{where} must be an object with name, type and role.", param="members")
+        if any(k not in _MEMBER_KEYS for k in member):
             invalid(
                 op,
-                "member role must be view, download, upload or none.",
+                f"{where} has a key other than name, type and role; nothing was changed.",
                 param="members",
-                value=member,
+                valid=list(_MEMBER_KEYS),
             )
+        if not member.get("name"):
+            invalid(op, f"{where} needs a name.", param="members")
+        if member.get("type", "user") not in ("user", "group"):
+            invalid(op, f"{where}: type must be user or group.", param="members")
+        if member.get("role", "view") not in _ROLES:
+            invalid(op, f"{where}: role must be view, download, upload or none.", param="members")
     try:
         ph = Photos(client, "personal", op)
         target = await ph.album(album)
@@ -540,7 +586,10 @@ async def _permission(
             ]
             if not match:
                 not_found(
-                    ph.operation, f"no {kind} {member['name']!r}.", param="members", value=member
+                    ph.operation,
+                    f"no {kind} {member['name']!r}.",
+                    param="members",
+                    value=member["name"],
                 )
             ref = {"type": kind, "id": int(match[0]["id"])}
             role = member.get("role", "view")
@@ -588,39 +637,39 @@ def _share_block(album: dict[str, Any]) -> str:
 # -- delete_photo_albums ------------------------------------------------------------
 
 
-async def delete_photo_albums(client: DsmClient, *, albums: list[str]) -> str:
+async def delete_photo_albums(
+    client: DsmClient,
+    *,
+    album_ids: list[int] | None = None,
+    album_names: list[str] | None = None,
+) -> str:
     """Delete albums; their photos stay (spec: delete_photo_albums)."""
     op = "Delete photo albums"
-    if not albums:
-        invalid(op, "pass at least one album.", param="albums", value=albums)
+    wanted = refs(op, album_ids, album_names, prefix="album")
     try:
         ph = Photos(client, "personal", op)
         found: dict[int, str] = {}
         missing: list[str] = []
         existing = await ph.walk("Browse.Album", version=2, personal=True)
         by_id = {int(a["id"]): a for a in existing}
-        for value in albums:
-            text = str(value).strip()
-            digits = text.isascii() and text.isdigit()
-            if digits and int(text) in by_id:
-                matches = [by_id[int(text)]]
-            elif isinstance(value, IdNumber):
-                matches = []  # sent as a number: an ID only, never a name (#609)
+        for ref in wanted:
+            # An ID is that ID only and a name that name only (#614, #616).
+            if ref.id is not None:
+                matches = [by_id[ref.id]] if ref.id in by_id else []
             else:
-                matches = [
-                    a for a in existing if str(a.get("name", "")).casefold() == text.casefold()
-                ]
+                name = (ref.name or "").strip().casefold()
+                matches = [a for a in existing if str(a.get("name", "")).casefold() == name]
             if not matches:
-                missing.append(text)
+                missing.append(f"ID {ref.id}" if ref.id is not None else f"named {ref.name!r}")
             elif len(matches) > 1:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(
                     op,
-                    f"{len(matches):,} albums are named {text!r} (ids {listed}); "
+                    f"{len(matches):,} albums are named {ref.name!r} (IDs {listed}); "
                     "nothing was deleted.",
-                    param="albums",
-                    value=text,
-                    suggestion="Pass album ids instead.",
+                    param=ref.param,
+                    value=ref.name,
+                    suggestion="Ask the user which one they mean, then pass its album_ids.",
                 )
             else:
                 found[int(matches[0]["id"])] = str(matches[0].get("name", ""))

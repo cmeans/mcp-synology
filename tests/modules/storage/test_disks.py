@@ -90,6 +90,28 @@ async def test_unknown_disk() -> None:
     assert text.startswith("Drive 1")
 
 
+@pytest.mark.parametrize("name", ["Drive 1", "drive 1"])
+async def test_a_bay_name_two_disks_share_picks_neither(name: str) -> None:
+    """#614 class (pre-QA on #615): a bay in the NAS and one in an expansion unit can both be
+    "Drive 1". The first match could be the other disk, so neither is shown; each is listed
+    with its ID, which is unique, and its ID picks it."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        def twin(data: dict[str, Any]) -> None:
+            data["disks"][1]["name"] = data["disks"][0]["name"]
+
+        load_info_with(replay, twin)
+
+    error = await run_error(get_disk, disk=name, setup=setup)
+    assert error["code"] == "invalid_parameter"
+    assert (error["param"], error["valid"]) == ("disk", ["sda", "sdb"])
+    assert "2 disks match" in error["message"]
+    assert "sda (" in error["message"] and "sdb (" in error["message"]
+    assert error["suggestion"] == "Ask the user which one they mean, then pass its ID."
+    text, _ = await run(get_disk, disk="sdb", history_limit=20, setup=setup)
+    assert "(sdb)" in text.splitlines()[0]
+
+
 def test_trend_without_history() -> None:
     assert trend_lines(None) == []
     assert trend_lines({"healthInfo": {"history": {"incremental": {"unc": []}}}}) == []

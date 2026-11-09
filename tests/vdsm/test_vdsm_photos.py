@@ -173,25 +173,25 @@ async def seeded(
 
 async def test_list_photos_views(photos: DsmClient) -> None:
     async with seeded(photos, [*JPEGS, VIDEO]) as (path, ids):
-        out = await list_photos(photos, folder=path)
+        out = await list_photos(photos, folder_path=path)
         assert "4 item(s) total" in out and VIDEO in out
 
-        out = await list_photos(photos, folder=path, sort_by="filename", sort_direction="asc")
+        out = await list_photos(photos, folder_path=path, sort_by="filename", sort_direction="asc")
         rows = re.findall(r"^  \d+\s+(\S+)", out, re.M)
         assert rows == sorted([*JPEGS, VIDEO]), out
 
-        out = await list_photos(photos, folder=path, type="video")
+        out = await list_photos(photos, folder_path=path, type="video")
         assert "1 item(s) total" in out and VIDEO in out
 
         # Taken dates come from the seeds' EXIF: beach 2024-07-04, city 2023-12-24.
-        out = await list_photos(photos, folder=path, start_date="2024-01-01", type="photo")
+        out = await list_photos(photos, folder_path=path, start_date="2024-01-01", type="photo")
         assert "beach-sunset.jpg" in out and "city-night.jpg" not in out, out
 
         ph = Photos(photos, "personal", "test")
         await ph.call("Browse.Item", "set", {"id": [ids["city-night.jpg"]], "rating": 5}, version=2)
 
         async def rated() -> str | None:
-            text = await list_photos(photos, folder=path, min_rating=4)
+            text = await list_photos(photos, folder_path=path, min_rating=4)
             return text if "1 item(s) total" in text else None
 
         assert "city-night.jpg" in await _wait_for(rated, "the rating")
@@ -286,7 +286,7 @@ async def test_favorites_by_version(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS[:2]) as (path, ids):
         if not _is_191(photos):
             with pytest.raises(ToolError) as exc:
-                await list_photos(photos, folder=path, favorite=True)
+                await list_photos(photos, folder_path=path, favorite=True)
             assert _error(exc)["code"] == "not_supported"
             return
         ph = Photos(photos, "personal", "test")
@@ -296,7 +296,7 @@ async def test_favorites_by_version(photos: DsmClient) -> None:
             {"id": [ids["beach-sunset.jpg"]], "favorite": True},
             version=7,
         )
-        out = await list_photos(photos, folder=path, favorite=True)
+        out = await list_photos(photos, folder_path=path, favorite=True)
         assert "1 item(s) total" in out and "beach-sunset.jpg" in out
         assert "favorite: yes" in await get_photo(photos, ids=[ids["beach-sunset.jpg"]])
 
@@ -314,7 +314,7 @@ async def test_no_photos_privilege(fresh_client: Any, dsm_version: str, photos_a
 
 async def test_shared_space(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS[:1], space="shared") as (path, ids):
-        out = await list_photos(photos, folder=path, space="shared")
+        out = await list_photos(photos, folder_path=path, space="shared")
         assert "beach-sunset.jpg" in out
         assert "(Shared Space)" in await get_photo(photos, ids=list(ids.values()), space="shared")
         # IDs belong to a space: the personal API doesn't know a Shared Space item.
@@ -326,14 +326,18 @@ async def test_shared_space(photos: DsmClient) -> None:
 
 async def test_folders(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS[:1]) as (path, ids):
-        assert "Created" in await photo_folder(photos, action="create", parent=path, name="2024")
+        assert "Created" in await photo_folder(
+            photos, action="create", parent_path=path, name="2024"
+        )
         with pytest.raises(ToolError) as exc:
-            await photo_folder(photos, action="create", parent=path, name="2024")
+            await photo_folder(photos, action="create", parent_path=path, name="2024")
         assert _error(exc)["code"] == "already_exists"
-        out = await photo_folder(photos, action="rename", folder=f"{path}/2024", name="Day One")
+        out = await photo_folder(
+            photos, action="rename", folder_path=f"{path}/2024", name="Day One"
+        )
         assert out.endswith(f"{path}/Day One.")
         out = await photo_folder(
-            photos, action="set_cover", folder=path, item_id=ids["beach-sunset.jpg"]
+            photos, action="set_cover", folder_path=path, item_id=ids["beach-sunset.jpg"]
         )
         assert "cover is now item" in out
 
@@ -449,11 +453,13 @@ async def test_taken_time_is_wall_clock(
             assert _taken(details) == clock, (where, details)
 
             day = clock[:10]
-            found = await list_photos(photos, folder=path, start_date=day, end_date=day)
+            found = await list_photos(photos, folder_path=path, start_date=day, end_date=day)
             assert name in found, (where, day, found)
             utc_day = datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%d")
             if utc_day != day:
-                found = await list_photos(photos, folder=path, start_date=utc_day, end_date=utc_day)
+                found = await list_photos(
+                    photos, folder_path=path, start_date=utc_day, end_date=utc_day
+                )
                 assert name not in found, (where, utc_day, found)
 
         item = ids["city-night.jpg"]
@@ -476,10 +482,10 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             made.append(name)
             assert "with 3 item(s)" in out
             out = await photo_album(
-                photos, action="remove", album=name, ids=[ids["city-night.jpg"]]
+                photos, action="remove", album_name=name, ids=[ids["city-night.jpg"]]
             )
             assert "2 item(s)" in out
-            out = await list_photos(photos, album=name)
+            out = await list_photos(photos, album_name=name)
             assert "2 item(s) total" in out
 
             smart = f"{name}-smart"
@@ -487,7 +493,7 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
                 photos,
                 action="create_smart",
                 name=smart,
-                condition={"folders": [path], "type": "photo"},
+                condition={"folder_paths": [path], "type": "photo"},
             )
             made.append(smart)
             assert "Matches 3 item(s) now." in out
@@ -495,7 +501,7 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             out = await photo_share_link(
                 photos,
                 action="share",
-                album=name,
+                album_name=name,
                 public="view",
                 password="t258-Pw",
                 expires="2035-01-01",
@@ -503,28 +509,30 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
             assert "/mo/sharing/" in out and "password: yes" in out
             # A date-time with an offset is that exact instant (a real UTC instant).
             out = await photo_share_link(
-                photos, action="update", album=name, expires="2034-12-31T23:59:59-05:00"
+                photos, action="update", album_name=name, expires="2034-12-31T23:59:59-05:00"
             )
             assert "expires 2035-01-01 04:59:59 UTC" in out, out
             link = re.search(r"Link:\s+(\S+)", out).group(1)  # type: ignore[union-attr]
             # #348: turning public access off clears the expiry and the password, and
             # Photos would drop a new expiry on a link with public none, so it's refused.
-            out = await photo_share_link(photos, action="update", album=name, public="none")
+            out = await photo_share_link(photos, action="update", album_name=name, public="none")
             assert "Public:    none · password: no · expires never" in out, out
             assert "also cleared the link's expiry and password" in out, out
             with pytest.raises(ToolError) as exc:
-                await photo_share_link(photos, action="update", album=name, expires="2035-01-01")
+                await photo_share_link(
+                    photos, action="update", album_name=name, expires="2035-01-01"
+                )
             assert _error(exc)["param"] == "expires"
             out = await photo_share_link(
-                photos, action="update", album=name, public="view", expires="2035-01-01"
+                photos, action="update", album_name=name, public="view", expires="2035-01-01"
             )
             assert "Public:    view · password: no · expires 2035-01-01 23:59:59 UTC" in out, out
-            await photo_share_link(photos, action="stop", album=name)
-            again = await photo_share_link(photos, action="share", album=name)
+            await photo_share_link(photos, action="stop", album_name=name)
+            again = await photo_share_link(photos, action="share", album_name=name)
             # Same link, settings reset (verified while implementing #258).
             assert link in again and "Public:    none" in again
         finally:
-            out = await delete_photo_albums(photos, albums=made)
+            out = await delete_photo_albums(photos, album_names=made)
             assert f"Deleted {len(made)} album(s)" in out
         # DSM answers success for unknown album IDs, so the reply alone proves nothing:
         # the normal and the smart album must both be gone.
@@ -532,14 +540,48 @@ async def test_albums_and_share_links(photos: DsmClient) -> None:
         assert not [m for m in made if m in listed], listed
         for gone in made:
             with pytest.raises(ToolError) as exc:
-                await list_photos(photos, album=gone)
+                await list_photos(photos, album_name=gone)
             assert _error(exc)["code"] == "not_found"
+
+
+async def test_album_ids_and_names_are_never_taken_for_each_other(photos: DsmClient) -> None:
+    """#614 (0.11.0rc3 live test) and #616: an album named with digits beside an album whose ID
+    is those digits. album_names deletes the one by that name, album_ids the one with that ID,
+    and an ID no album has deletes nothing, though an album is named with it."""
+    tag = uuid.uuid4().hex[:6]
+    out = await photo_album(photos, action="create", name=f"t614-holiday-{tag}")
+    holiday = int(re.search(r"\(id (\d+)\)", out).group(1))  # type: ignore[union-attr]
+    named: list[str] = []
+    try:
+        await photo_album(photos, action="create", name=str(holiday))
+        named.append(str(holiday))
+        missing = holiday + 900_000
+        await photo_album(photos, action="create", name=str(missing))
+        named.append(str(missing))
+
+        out = await delete_photo_albums(photos, album_ids=[missing])
+        assert out == f"No albums deleted.\n  Not found: ID {missing}", out
+
+        out = await delete_photo_albums(photos, album_names=[str(holiday)])
+        assert "Deleted 1 album(s): " in out and f'"{holiday}"' in out, out
+        named.remove(str(holiday))
+        listed = await list_photo_collections(photos, type="album")
+        assert f"t614-holiday-{tag}" in listed, listed  # the album with that ID is still there
+
+        out = await delete_photo_albums(photos, album_ids=[holiday])
+        assert f'Deleted 1 album(s): {holiday} "t614-holiday-{tag}"' in out, out
+        holiday = 0
+    finally:
+        if named:
+            await delete_photo_albums(photos, album_names=named)
+        if holiday:
+            await delete_photo_albums(photos, album_ids=[holiday])
 
 
 async def test_photo_requests(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS[:1]) as (path, _ids):
         out = await photo_request(
-            photos, action="create", subject="t258", folder=path, max_file_mib=5
+            photos, action="create", subject="t258", folder_path=path, max_file_mib=5
         )
         assert "/mo/request/" in out and "5 MiB per file" in out
         listed = await photo_request(photos, action="list")
@@ -559,7 +601,7 @@ async def test_upload_duplicates_and_unsupported(photos: DsmClient, tmp_path: Pa
         out = await upload_photos(
             photos,
             local_paths=[str(SEED / "beach-sunset.jpg"), str(notes)],
-            folder=path,
+            folder_path=path,
             allowed_roots=[SEED, tmp_path],
         )
         assert "renamed" in out and "(as beach-sunset_1.jpg)" in out
@@ -567,7 +609,7 @@ async def test_upload_duplicates_and_unsupported(photos: DsmClient, tmp_path: Pa
         out = await upload_photos(
             photos,
             local_paths=[str(SEED / "beach-sunset.jpg")],
-            folder=path,
+            folder_path=path,
             on_duplicate="skip",
             allowed_roots=[SEED],
         )
@@ -587,15 +629,21 @@ async def test_upload_continues_with_the_paths_not_tried(photos: DsmClient, tmp_
             paths.append(str(local))
         # budget=0: the first file always starts, and no other does.
         out = await upload_photos(
-            photos, local_paths=paths, folder=path, allowed_roots=[tmp_path], budget=0
+            photos, local_paths=paths, folder_path=path, allowed_roots=[tmp_path], budget=0
         )
         assert out.startswith("Uploaded 1 of 10 file(s)"), out
         listed = [ln.strip() for ln in out.splitlines() if ln.startswith("  /")]
         assert listed == paths[1:], out
-        out = await upload_photos(photos, local_paths=listed, folder=path, allowed_roots=[tmp_path])
+        out = await upload_photos(
+            photos, local_paths=listed, folder_path=path, allowed_roots=[tmp_path]
+        )
         assert out.startswith("Uploaded 9 of 9 file(s)") and "renamed" not in out, out
         out = await upload_photos(
-            photos, local_paths=paths, folder=path, on_duplicate="skip", allowed_roots=[tmp_path]
+            photos,
+            local_paths=paths,
+            folder_path=path,
+            on_duplicate="skip",
+            allowed_roots=[tmp_path],
         )
         assert out.startswith("Uploaded 0 of 10 file(s) (10 skipped, already there)"), out
 
@@ -656,7 +704,10 @@ async def test_upload_to_a_new_accounts_personal_root(
         ):
             assert not has_folder(), "the new account already has its Photos folder"
             out = await upload_photos(
-                client, local_paths=[str(SEED / "beach-sunset.jpg")], allowed_roots=[SEED]
+                client,
+                local_paths=[str(SEED / "beach-sunset.jpg")],
+                folder_path="/",
+                allowed_roots=[SEED],
             )
             assert out.startswith("Uploaded 1 of 1 file(s) to / (personal space)"), out
             assert has_folder()
@@ -670,26 +721,34 @@ async def test_copy_move_delete(photos: DsmClient) -> None:
             photos,
             operation="copy",
             ids=[ids["beach-sunset.jpg"], 999999],
-            folders=None,
-            destination=dst,
+            folder_ids=None,
+            destination_path=dst,
         )
         assert out.startswith(f"Copied 1 item(s) to {dst}") and "Not found: 999999" in out
         out = await copy_or_move(
-            photos, operation="copy", ids=[ids["beach-sunset.jpg"]], folders=None, destination=dst
+            photos,
+            operation="copy",
+            ids=[ids["beach-sunset.jpg"]],
+            folder_ids=None,
+            destination_path=dst,
         )
         assert out.startswith(f"Nothing was copied to {dst}") and "1 skipped (already there)" in out
         out = await copy_or_move(
-            photos, operation="move", ids=[ids["city-night.jpg"]], folders=None, destination=dst
+            photos,
+            operation="move",
+            ids=[ids["city-night.jpg"]],
+            folder_ids=None,
+            destination_path=dst,
         )
         assert out.startswith("Moved 1 item(s)")
-        assert "2 item(s) total" in await list_photos(photos, folder=dst)
+        assert "2 item(s) total" in await list_photos(photos, folder_path=dst)
 
         out = await copy_or_move(
             photos,
             operation="copy",
             ids=None,
-            folders=[src],
-            destination=dst,
+            folder_paths=[src],
+            destination_path=dst,
             on_conflict="overwrite",
             timeout=0,
         )
@@ -711,11 +770,11 @@ async def test_copy_move_delete(photos: DsmClient) -> None:
 
 async def test_delete_folders(photos: DsmClient) -> None:
     async with seeded(photos, JPEGS[:1]) as (path, _ids):
-        out = await delete_photo_folders(photos, folders=[path])
+        out = await delete_photo_folders(photos, folder_paths=[path])
         assert out.startswith(f"Deleted {path} (1 item(s) directly in it) in the personal space")
         assert "recycle bin" in out
         with pytest.raises(ToolError) as exc:
-            await list_photos(photos, folder=path)
+            await list_photos(photos, folder_path=path)
         assert _error(exc)["code"] == "not_found"
 
 
@@ -728,19 +787,19 @@ async def test_cross_space(photos: DsmClient) -> None:
             photos,
             operation="copy",
             ids=[ids["beach-sunset.jpg"]],
-            folders=None,
-            destination=team,
+            folder_ids=None,
+            destination_path=team,
             dest_space="shared",
         )
         assert out.startswith(f"Copied 1 item(s) to {team} (Shared Space)") and "failed" not in out
-        assert "beach-sunset.jpg" in await list_photos(photos, folder=team, space="shared")
+        assert "beach-sunset.jpg" in await list_photos(photos, folder_path=team, space="shared")
         with pytest.raises(ToolError) as exc:
             await copy_or_move(
                 photos,
                 operation="move",
                 ids=[1],
-                folders=None,
-                destination="/",
+                folder_ids=None,
+                destination_path="/",
                 space="shared",
                 dest_space="personal",
             )
