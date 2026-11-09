@@ -160,6 +160,18 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
     and Shared Space). ``advice`` is the refusal's suggestion, for an argument that takes only
     a path (`photo_request`).
     """
+    if not value.strip():
+        # Not the root: a client that fills an unset argument with "" would otherwise land a
+        # write there, which the required folders exist to prevent (QA round 1 on #615). The
+        # root is written `/`.
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{param} is empty: pass a folder path, `/` for the space's root.",
+            retryable=False,
+            param=param,
+            value=value,
+            suggestion=advice,
+        )
     return check_parts(value, param, advice)
 
 
@@ -189,7 +201,7 @@ class Ref:
         for one in ("_name", "_path"):
             if self.param.endswith(one):
                 return self.param.removesuffix(one) + "_id"
-        return f"ID in {self.param} person_ids"
+        return "person_ids"
 
 
 def one_ref(
@@ -460,7 +472,11 @@ class Photos:
             f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
             param=ref.param,
             value=name,
-            suggestion=f"Ask the user which one they mean, then pass its {ref.id_param}.",
+            suggestion=(
+                "Ask the user which one they mean, then pass its ID in the condition's person_ids."
+                if ref.param == "condition"
+                else f"Ask the user which one they mean, then pass its {ref.id_param}."
+            ),
         )
 
     async def album(self, ref: Ref) -> dict[str, Any]:

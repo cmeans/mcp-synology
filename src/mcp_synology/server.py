@@ -517,12 +517,12 @@ class _SynologyServer(MCPServer):
             # back in the reply (#619). Rewritten with the fields and what's wrong only; the
             # cause stays, so the SDK still logs just the field names.
             try:
-                _validation_error_response(name, exc.__cause__)
+                _validation_error_response(name, exc.__cause__, accepted)
             except ToolError as structured:
                 raise ToolError(f"{prefix}{structured}") from exc.__cause__
 
 
-def _validation_error_response(tool: str, error: ValidationError) -> NoReturn:
+def _validation_error_response(tool: str, error: ValidationError, accepted: set[str]) -> NoReturn:
     """``error`` (the SDK's argument validation) as a structured error that names each field
     and what's wrong with it, never the value: pydantic's own text quotes the input, a
     password included (#619). Only the top-level field is named: it's one of the tool's own
@@ -536,6 +536,17 @@ def _validation_error_response(tool: str, error: ValidationError) -> NoReturn:
             if err["type"] == "missing"
             else _VALIDATION_MESSAGES.get(err["type"], "has a value of the wrong type or form")
         )
+        if err["type"] != "missing" and field.endswith(("_id", "_ids")):
+            # The likeliest mistake since #615's split: a name in an ID field. Name its twin
+            # (QA round 1 on #615).
+            plural = field.endswith("_ids")
+            base = field.removesuffix("_ids" if plural else "_id")
+            twins = [f"{base}_{kind}{'s' if plural else ''}" for kind in ("name", "path")]
+            twin = next((t for t in twins if t in accepted), None)
+            kind = "name" if twin and "_name" in twin else "path"
+            message = "must be an ID, a whole number" + (
+                f"; a {kind} goes in `{twin}`" if twin else ""
+            )
         problems.setdefault(field, message)
     text = "; ".join(f"`{field}` {message}" for field, message in problems.items())
     error_response(

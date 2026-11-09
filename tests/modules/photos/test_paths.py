@@ -181,3 +181,26 @@ async def test_a_leading_space_name_is_looked_up_exactly(
             await CALLS[tool, param](client, "  /x/ foo/", tmp_path)
     names = [c.params.get("name") for c in fake.of(FOLDER, "get")]
     assert "/x/ foo" in names, names
+
+
+@pytest.mark.parametrize("value", ["", "  "])
+@pytest.mark.parametrize(("tool", "param"), sorted(CALLS))
+@respx.mock
+async def test_an_empty_path_is_refused_everywhere(
+    tool: str, param: str, value: str, tmp_path: Path
+) -> None:
+    """QA round 1 on #615: an empty path was the root, so `parent_path=""` created in the
+    root and `destination_path=" "` moved there. Every registered path argument refuses one
+    before any folder lookup."""
+    fake = _fake()
+    install(fake)
+    client = make_client()
+    async with client:
+        with pytest.raises(ToolError) as exc:
+            await CALLS[(tool, param)](client, value, tmp_path)
+    err = _error(exc)
+    assert err["code"] == "invalid_parameter", err
+    # Refused as empty (photo_request's create says the path is required, which it checks
+    # first), never looked up as the root.
+    assert "`/` for the space's root" in err["message"] or "needs folder_path" in err["message"]
+    assert all(c.params != {"id": 0} for c in fake.of(FOLDER)), fake.calls

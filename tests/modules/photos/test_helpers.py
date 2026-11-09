@@ -180,7 +180,6 @@ class TestFolders:
             ("10", {"name": "/10"}),
             (" 10 ", {"name": "/ 10 "}),
             ("/", {"id": 0}),
-            ("", {"id": 0}),
             ("mcp-spec-capture/", {"name": "/mcp-spec-capture"}),
             ("  /", {"id": 0}),
             # Taken exactly (#510): Photos reaches ` foo` beside `foo` (vdsm, DSM 7.1,
@@ -232,6 +231,25 @@ class TestFolders:
             value,
         )
         assert what in err["message"]
+
+    @pytest.mark.parametrize("value", ["", " ", "\t"])
+    @pytest.mark.parametrize("param", ["folder_path", "parent_path", "destination_path"])
+    @respx.mock
+    async def test_an_empty_path_is_refused_not_taken_as_the_root(
+        self, param: str, value: str
+    ) -> None:
+        """QA round 1 on #615: `""` was the root, so a client filling an unset argument with
+        "" got past the required folders and wrote there. The root is `/`."""
+        fake = FakePhotos()  # no routes: a request would fail the test
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder(Ref(param, name=value))
+        err = _error(exc)
+        assert (err["code"], err["param"]) == ("invalid_parameter", param)
+        assert "`/` for the space's root" in err["message"]
+        assert not fake.calls
 
     @respx.mock
     async def test_missing_folder_is_not_found(self) -> None:
@@ -461,7 +479,7 @@ class TestOneRef:
             ("target_name", "target_id"),
             ("merge_names", "merge_ids"),
             ("album_names", "album_ids"),
-            ("condition", "ID in condition person_ids"),
+            ("condition", "person_ids"),
         ],
     )
     def test_an_ambiguous_name_points_at_its_own_id_parameter(

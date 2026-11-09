@@ -450,28 +450,26 @@ async def photo_share_link(
     expiration = None
     if expires is not None:
         expiration = parse_expires(op, expires)
-    for member in members or []:
-        if not isinstance(member, dict) or not member.get("name"):
-            invalid(op, "each member needs a name.", param="members", value=member)
+    for i, member in enumerate(members or []):
+        # Keys first, and no member echoed in any refusal: the caller wrote them, keys and
+        # values (pre-QA r5 and QA round 1 on #615). A dropped key would leave the default:
+        # `{"name": "bob", "Role": "none"}`, meant to remove bob, gave him view access.
+        where = f"members[{i}]"
+        if not isinstance(member, dict):
+            invalid(op, f"{where} must be an object with name, type and role.", param="members")
         if any(k not in _MEMBER_KEYS for k in member):
-            # Dropped, it would leave the default: `{"name": "bob", "Role": "none"}`, meant to
-            # remove bob, gave him view access (pre-QA r5 on #615). Not echoed: the caller
-            # wrote it.
             invalid(
                 op,
-                "a member has a key other than name, type and role; nothing was changed.",
+                f"{where} has a key other than name, type and role; nothing was changed.",
                 param="members",
                 valid=list(_MEMBER_KEYS),
             )
+        if not member.get("name"):
+            invalid(op, f"{where} needs a name.", param="members")
         if member.get("type", "user") not in ("user", "group"):
-            invalid(op, "member type must be user or group.", param="members", value=member)
+            invalid(op, f"{where}: type must be user or group.", param="members")
         if member.get("role", "view") not in _ROLES:
-            invalid(
-                op,
-                "member role must be view, download, upload or none.",
-                param="members",
-                value=member,
-            )
+            invalid(op, f"{where}: role must be view, download, upload or none.", param="members")
     try:
         ph = Photos(client, "personal", op)
         target = await ph.album(album)
@@ -587,7 +585,10 @@ async def _permission(
             ]
             if not match:
                 not_found(
-                    ph.operation, f"no {kind} {member['name']!r}.", param="members", value=member
+                    ph.operation,
+                    f"no {kind} {member['name']!r}.",
+                    param="members",
+                    value=member["name"],
                 )
             ref = {"type": kind, "id": int(match[0]["id"])}
             role = member.get("role", "view")
