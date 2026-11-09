@@ -339,12 +339,14 @@ def _refuse_text_the_sdk_would_parse(
     """Refuse text for a text parameter that the SDK would read as JSON and replace (#621).
 
     The SDK parses a string argument as JSON for any parameter not typed plain ``str``, for
-    clients that send a list as a JSON string, and keeps the result unless it's a string or a
-    number: `"null"` becomes None, so `album_name="null"` was dropped and the call ran
-    without it; `"true"` and `"[1]"` became a bool and a list. For such a parameter that the
-    schema says is text (``parsed_text``), that's never what the caller meant, so it's
-    refused, without quoting the text. A plain ``str`` parameter gets its text as sent
-    (`rename new_name="[2024]"`), so it's left alone."""
+    clients that send a list as a JSON string, and keeps the result in place of the text
+    unless it's a string or a number (``true`` and ``false`` count: a bool is an int): so
+    `"null"` became None and the argument was dropped (`pattern="null"` listed everything), and
+    `"[1]"` or `"{}"` became a list or a dict, which then failed as the wrong type. For such a
+    parameter that the schema says is text (``parsed_text``), neither is what the caller meant,
+    so it's refused, without quoting the text. A plain ``str`` parameter gets its text as sent
+    (`rename new_name="[2024]"`), so it's left alone. Keeping the text instead isn't possible
+    through the SDK's documented API: it parses before any tool code runs."""
     for key, value in arguments.items():
         schema = schemas.get(key)
         if not isinstance(value, str) or not isinstance(schema, dict):
@@ -355,17 +357,18 @@ def _refuse_text_the_sdk_would_parse(
             parsed = json.loads(value)  # a tool argument, as the SDK would parse it
         except (ValueError, RecursionError):
             continue
-        if parsed is None or isinstance(parsed, bool | list | dict):
+        # The SDK's own rule (pre_parse_json): it keeps a string or a number (bool included).
+        if not isinstance(parsed, str | int | float):
             error_response(
                 ErrorCode.INVALID_PARAMETER,
                 f"{tool} failed: `{key}` can't be this text as it is: it reads as JSON (null, "
-                "true, false, a list or an object), which the MCP layer would turn into "
-                "something other than text. Nothing was done.",
+                "a list or an object), which the MCP layer would turn into something other "
+                "than text. Nothing was done.",
                 retryable=False,
                 param=key,
                 suggestion="This exact text can't be passed here. For a name on the NAS, use "
-                "the item's ID where the tool takes one, or rename it in DSM; for a password, "
-                "choose another; otherwise check the value is the one you meant.",
+                "the item's ID where the tool takes one, or rename it in DSM; for a new name "
+                "or a password, choose another; otherwise check the value is the one you meant.",
             )
 
 

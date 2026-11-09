@@ -17,6 +17,7 @@ import pytest
 import respx
 from mcp.client import Client
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import TypeAdapter, ValidationError
 
 from mcp_synology.core.formatting import forges
@@ -31,6 +32,7 @@ from mcp_synology.server import (
     REPLY_LABEL,
     SharedClientManager,
     _compact_schema,
+    _refuse_text_the_sdk_would_parse,
     _sdk_parses,
     _strip_html_comments,
     _SynologyServer,
@@ -2889,7 +2891,7 @@ class TestTextTheSdkWouldParse:
     and the call ran unfiltered. Text the SDK would turn into something else is refused,
     unquoted, before any request."""
 
-    @pytest.mark.parametrize("value", ["null", "true", "false", "[1]", "{}", " null "])
+    @pytest.mark.parametrize("value", ["null", "[1]", "{}", " null "])
     @pytest.mark.parametrize(
         ("tool", "base"),
         [
@@ -2912,16 +2914,17 @@ class TestTextTheSdkWouldParse:
         # The server's own fixed text: the caller's value is never quoted.
         assert err["message"] == (
             f"{tool} failed: `{param}` can't be this text as it is: it reads as JSON (null, "
-            "true, false, a list or an object), which the MCP layer would turn into something "
-            "other than text. Nothing was done."
+            "a list or an object), which the MCP layer would turn into something other than "
+            "text. Nothing was done."
         )
         assert "value" not in err
         assert not route.called
 
-    @pytest.mark.parametrize("value", ["2024", "1.5", '"quoted"', "Trip"])
+    @pytest.mark.parametrize("value", ["2024", "1.5", '"quoted"', "Trip", "true", "false"])
     @respx.mock
     async def test_text_that_stays_text_passes(self, value: str) -> None:
-        """A number or a JSON string is kept as text by the SDK, so it isn't refused."""
+        """A number, a boolean (an int to the SDK) or a JSON string is kept as text by the
+        SDK, so it isn't refused (pre-QA r2 on #622: true and false were)."""
         respx.get(f"{BASE_URL}/webapi/query.cgi").mock(side_effect=httpx.ConnectError("down"))
         server = create_server(make_test_config(modules=ALL_MODULES))
         async with Client(server) as client:
@@ -2941,7 +2944,7 @@ class TestTextTheSdkWouldParse:
         self, tool: str, args: dict[str, Any], value: str
     ) -> None:
         """Pre-QA on #622: the SDK leaves a plain `str` argument as given, so a folder named
-        `[2024]` can still be a rename's new name; the text reaches DSM unchanged."""
+        `[2024]` can still be a rename's new name: not refused, and the SDK keeps the text."""
         param = {"rename": "new_name", "list_files": "path", "get_download_info": "task_id"}[tool]
         server = create_server(make_test_config(modules=ALL_MODULES))
         with respx.mock(assert_all_called=False) as router:
@@ -2950,6 +2953,35 @@ class TestTextTheSdkWouldParse:
                 result = await client.call_tool(tool, {**args, param: value})
         assert "reads as JSON" not in _reply(result)
         assert route.called
+        meta = server._tool_manager.get_tool(tool).fn_metadata
+        assert meta.pre_parse_json({**args, param: value})[param] == value
+
+    @pytest.mark.parametrize(
+        "value",
+        ["null", " null ", "true", "false", "[1]", "{}", "2024", "1.5", "1e400", '"x"', "Trip"],
+    )
+    async def test_the_values_refused_are_the_ones_the_sdk_would_replace(self, value: str) -> None:
+        """Pre-QA r2 on #622: for every text parameter the SDK parses, a value is refused
+        exactly when the SDK's `pre_parse_json` would hand the tool something else."""
+        server = create_server(make_test_config(modules=ALL_MODULES))
+        checked = 0
+        for name in server._tool_manager._tools:
+            parameters = await server._parameters(name)
+            assert parameters is not None
+            accepted, parsed_text = parameters
+            meta = server._tool_manager.get_tool(name).fn_metadata
+            for key in sorted(parsed_text):
+                if accepted[key].get("type") != "string":
+                    continue
+                replaced = meta.pre_parse_json({key: value})[key] != value
+                try:
+                    _refuse_text_the_sdk_would_parse(name, {key: value}, accepted, parsed_text)
+                    refused = False
+                except ToolError:
+                    refused = True
+                assert refused is replaced, (name, key, value)
+                checked += 1
+        assert checked > 50, checked
 
     async def test_the_parameters_checked_are_the_ones_the_sdk_parses(self) -> None:
         """`_sdk_parses` reads the served schema; the SDK decides by the annotation
