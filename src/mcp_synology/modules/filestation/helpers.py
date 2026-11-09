@@ -15,7 +15,7 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
+from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
     ESCAPED_NAME_ADVICE,
     RGI_FLAG_TAGS,
@@ -1028,15 +1028,75 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     return kinds
 
 
+_NO_PERMISSION = frozenset({105, 407})
+_CHECK_ACCESS = "check it and the account's access to it in DSM."
+_OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."
+
+
+def missing_text(path: str, code: int) -> str:
+    """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
+    model to translate DSM's code; a 407 was called "not found"), keeping the code."""
+    why = (
+        "no permission"
+        if code in _NO_PERMISSION
+        else {408: "doesn't exist"}.get(code, "can't be read")
+    )
+    return f"{shown(path)}: {why} (DSM error {code})"
+
+
+def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, str]:
+    """The error code and suggestion for paths ``getinfo`` answered with a code (#620): every
+    path refused for permission is ``permission_denied``, every missing one ``not_found``;
+    a mix gets each kind's own advice (not the shared "retry with paths that exist", which a
+    path refused for permission can't follow: QA round 3 on #606). A per-path code other
+    than 408, 105 or 407 gets one fixed message under ``filestation_error``: the generic
+    mapping of such a code (a session code's "re-authentication will be attempted", 599's
+    "background task") doesn't fit a path's entry (QA round 1 on #623)."""
+    codes = [code for _, code in missing]
+    perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
+    if codes and all(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, perm
+    if all(code == 408 for code in codes):
+        return ErrorCode.NOT_FOUND, missing_paths_suggestion(missing)
+    gone = [m for m in missing if m[1] == 408]
+    parts = []
+    if gone:
+        parts.append("Use list_files or search_files to find the correct path.")
+        wildcard = _wildcard_hint(gone)
+        if wildcard:
+            parts.append(wildcard)
+        if any(holds_escape(path) for path, _ in gone):
+            parts.append(ESCAPED_NAME_ADVICE)
+    if any(code in _NO_PERMISSION for code in codes):
+        parts.append(f"For one with no permission: {perm}")
+    if any(code != 408 and code not in _NO_PERMISSION for code in codes):
+        parts.append(
+            _OTHER_CODE
+            if len(parts) == 0
+            else f"For one DSM gave another code for: {_CHECK_ACCESS}"
+        )
+    if gone:
+        return ErrorCode.NOT_FOUND, " ".join(parts)
+    if any(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, " ".join(parts)
+    return ErrorCode.FILESTATION_ERROR, " ".join(parts)
+
+
+def _wildcard_hint(missing: list[tuple[str, int]]) -> str:
+    """The advice for a missing path that holds a wildcard character, or ""."""
+    if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS):
+        return (
+            "Paths are literal, not wildcard patterns: use search_files (or list_files with a "
+            "pattern) to find the files, then pass their full paths."
+        )
+    return ""
+
+
 def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
     """Suggestion for a call refused because paths don't exist (adds a wildcard hint, and one for
     a name copied from a reply that showed it escaped)."""
-    wildcard = (
-        " Paths are literal, not wildcard patterns: use search_files (or list_files with a "
-        "pattern) to find the files, then pass their full paths."
-        if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS)
-        else ""
-    )
+    hint = _wildcard_hint(missing)
+    wildcard = f" {hint}" if hint else ""
     if missing and all(holds_escape(path) for path, _ in missing):
         # Listing again would show the same escape: lead with what ends the loop (pre-QA r2).
         return ESCAPED_NAME_ADVICE + wildcard

@@ -12,7 +12,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE, format_size
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
@@ -25,6 +25,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     parse_human_size,
     parse_mtime,
+    unreadable_paths_error,
     validate_additional,
     validate_share_path,
 )
@@ -1452,3 +1453,45 @@ def test_escaped_name_advice_says_who_renames_it() -> None:
     assert "rename included" in ESCAPED_NAME_ADVICE
     assert "ask the user to rename it in DSM's web interface" in ESCAPED_NAME_ADVICE
     assert "#60" not in ESCAPED_NAME_ADVICE  # no issue numbers in model-facing text
+
+
+class TestUnreadablePathsError:
+    """#620 (pre-QA r4 on #623, QA round 1): the code and advice for paths getinfo answered
+    with a code."""
+
+    PERM = error_from_code(407, "SYNO.FileStation.List").suggestion
+    FIND = "Use list_files or search_files to find the correct path."
+    OTHER = "For one DSM gave another code for: check it and the account's access to it in DSM."
+
+    @pytest.mark.parametrize("codes", [(400,), (119,), (599,), (400, 1002)])
+    def test_only_other_codes_get_one_fixed_message(self, codes: tuple[int, ...]) -> None:
+        """QA round 1 on #623: a per-path 119 read "re-authentication will be attempted"
+        under retryable=False, and 599 "background task not found"."""
+        code, suggestion = unreadable_paths_error([(f"/v/{c}", c) for c in codes])
+        assert code == ErrorCode.FILESTATION_ERROR
+        assert suggestion == (
+            "DSM couldn't report the path: check it and the account's access to it in DSM."
+        )
+
+    def test_no_permission_and_another_code(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/a", 407), ("/v/b", 400)])
+        assert code == ErrorCode.PERMISSION_DENIED
+        assert suggestion == f"For one with no permission: {self.PERM} {self.OTHER}"
+
+    def test_a_mix_keeps_the_wildcard_hint(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/*.mkv", 408), ("/v/x", 407)])
+        assert code == ErrorCode.NOT_FOUND
+        assert suggestion == (
+            f"{self.FIND} Paths are literal, not wildcard patterns: use search_files (or "
+            "list_files with a pattern) to find the files, then pass their full paths. "
+            f"For one with no permission: {self.PERM}"
+        )
+
+    @pytest.mark.parametrize("escaped", [False, True])
+    def test_a_mix_gives_the_escaped_name_advice_only_for_an_escape(self, escaped: bool) -> None:
+        """QA round 1 on #623: 408's own suggestion always carried the escaped-name advice."""
+        gone = "/v/a\\nb" if escaped else "/v/ab"
+        code, suggestion = unreadable_paths_error([(gone, 408), ("/v/x", 407)])
+        assert code == ErrorCode.NOT_FOUND
+        assert (ESCAPED_NAME_ADVICE in suggestion) is escaped, suggestion
+        assert suggestion.startswith(self.FIND), suggestion
