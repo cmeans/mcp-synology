@@ -12,7 +12,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE, format_size
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
@@ -25,6 +25,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     parse_human_size,
     parse_mtime,
+    unreadable_paths_error,
     validate_additional,
     validate_share_path,
 )
@@ -1452,3 +1453,31 @@ def test_escaped_name_advice_says_who_renames_it() -> None:
     assert "rename included" in ESCAPED_NAME_ADVICE
     assert "ask the user to rename it in DSM's web interface" in ESCAPED_NAME_ADVICE
     assert "#60" not in ESCAPED_NAME_ADVICE  # no issue numbers in model-facing text
+
+
+class TestUnreadablePathsError:
+    """#620 (pre-QA r4 on #623): the code and advice for paths getinfo answered with a code."""
+
+    PERM = error_from_code(407, "SYNO.FileStation.List").suggestion
+    GONE = error_from_code(408, "SYNO.FileStation.List").suggestion
+    OTHER = "For one DSM gave another code for: check it and the account's access to it in DSM."
+
+    def test_another_code_alone(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/b", 400)])
+        assert code == error_from_code(400, "SYNO.FileStation.List").error_code
+        assert suggestion == self.OTHER
+        assert "retry" not in suggestion
+
+    def test_no_permission_and_another_code(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/a", 407), ("/v/b", 400)])
+        assert code == ErrorCode.PERMISSION_DENIED
+        assert suggestion == f"For one with no permission: {self.PERM} {self.OTHER}"
+
+    def test_a_mix_keeps_the_wildcard_hint(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/*.mkv", 408), ("/v/x", 407)])
+        assert code == ErrorCode.NOT_FOUND
+        assert suggestion == (
+            f"{self.GONE} Paths are literal, not wildcard patterns: use search_files (or "
+            "list_files with a pattern) to find the files, then pass their full paths. "
+            f"For one with no permission: {self.PERM}"
+        )

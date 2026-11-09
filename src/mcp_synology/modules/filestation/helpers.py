@@ -1056,10 +1056,15 @@ def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, s
     parts = []
     if 408 in codes:
         parts.append(error_from_code(408, "SYNO.FileStation.List").suggestion or "")
+        wildcard = _wildcard_hint([m for m in missing if m[1] == 408])
+        if wildcard:
+            parts.append(wildcard)
     if any(code in _NO_PERMISSION for code in codes):
         parts.append(f"For one with no permission: {perm}")
     if any(code != 408 and code not in _NO_PERMISSION for code in codes):
-        parts.append("One that can't be read may answer on a retry.")
+        parts.append(
+            "For one DSM gave another code for: check it and the account's access to it in DSM."
+        )
     if 408 in codes:
         return ErrorCode.NOT_FOUND, " ".join(parts)
     if any(code in _NO_PERMISSION for code in codes):
@@ -1067,15 +1072,21 @@ def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, s
     return error_from_code(codes[0], "SYNO.FileStation.List").error_code, " ".join(parts)
 
 
+def _wildcard_hint(missing: list[tuple[str, int]]) -> str:
+    """The advice for a missing path that holds a wildcard character, or ""."""
+    if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS):
+        return (
+            "Paths are literal, not wildcard patterns: use search_files (or list_files with a "
+            "pattern) to find the files, then pass their full paths."
+        )
+    return ""
+
+
 def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
     """Suggestion for a call refused because paths don't exist (adds a wildcard hint, and one for
     a name copied from a reply that showed it escaped)."""
-    wildcard = (
-        " Paths are literal, not wildcard patterns: use search_files (or list_files with a "
-        "pattern) to find the files, then pass their full paths."
-        if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS)
-        else ""
-    )
+    hint = _wildcard_hint(missing)
+    wildcard = f" {hint}" if hint else ""
     if missing and all(holds_escape(path) for path, _ in missing):
         # Listing again would show the same escape: lead with what ends the loop (pre-QA r2).
         return ESCAPED_NAME_ADVICE + wildcard

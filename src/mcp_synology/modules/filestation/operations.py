@@ -908,6 +908,7 @@ async def _copy_move(
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
     fresh: Sequence[str] = (),
+    replaced_so_far: dict[str, bool] | None = None,
 ) -> tuple[str, bool]:
     """Shared implementation for copy and move operations.
 
@@ -1001,12 +1002,52 @@ async def _copy_move(
             on_progress=on_progress,
             lookups=lookups,
             targets=targets,
+            replaced_so_far=replaced_so_far,
         )
     finally:
         for future in lookups.values():
             # Stops one still waiting; on one that failed, cancel() also marks its exception
             # as seen, so asyncio never logs it as never retrieved.
             future.cancel()
+
+
+def _with_replaced_note(
+    refused: ToolError,
+    operation: str,
+    done: list[str],
+    replaced: dict[str, bool],
+    went: dict[str, str],
+    dest: str,
+) -> ToolError:
+    """``refused`` with what the items already done replaced or merged into (#620), for a call
+    that failed after them; unchanged when none did."""
+    files = [where_it_went(q, went, dest) for q in done if replaced.get(q) is False]
+    folders = [where_it_went(q, went, dest) for q in done if replaced.get(q) is True]
+    if not files and not folders:
+        return refused
+    try:
+        body = json.loads(str(refused))
+        message = body["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return refused
+    lead = f"Of what was {_PAST_TENSE.get(operation, 'processed')}, "
+    note = []
+    if files:
+        note.append(f"{lead}these replaced what was already there: {', '.join(files)}")
+    if folders:
+        merged = (
+            "these merged into the folder(s) already there, replacing files with the same "
+            f"names: {', '.join(folders)}"
+        )
+        note.append(merged if files else lead + merged)
+    added = f"{'; '.join(note)}. A file replaced this way may not be in the recycle bin."
+    # With the items done, before what wasn't started, which ends the message (#587).
+    head, sep, tail = message.rpartition(". Not started: ")
+    if sep:
+        body["error"]["message"] = f"{head}. {added} Not started: {tail}"
+    else:
+        body["error"]["message"] = f"{_unstop(message)}. {added}"
+    return ToolError(json.dumps(body))
 
 
 async def _replaced(
@@ -1044,6 +1085,7 @@ async def _copy_move_tasks(
     on_progress: ProgressCallback | None,
     lookups: Mapping[str, asyncio.Future[dict[str, bool]]],
     targets: dict[str, str],
+    replaced_so_far: dict[str, bool] | None = None,
 ) -> tuple[str, bool]:
     """``_copy_move``'s tasks, once its checks passed: start each source, wait, hand off."""
     total_processed = 0
@@ -1065,164 +1107,174 @@ async def _copy_move_tasks(
         # this call's own landing (pre-QA r2 on #623). The records are published by now, so
         # waiting here doesn't open #597's window.
         replaced = await _replaced(lookups, targets)
-        for i, p in enumerate(normalized):
-            # A copy of the same source to another destination is a different operation; a
-            # move (or restore) of a source that is already moving anywhere is not.
-            match: dict[str, Any] = {"remove_src": remove_src}
-            if not remove_src:
-                match["dest_folder_path"] = dest
-            outcome: tuple[int, bool] | Handoff
-            task_dest, task_overwrite = dest, overwrite
-            try:
-                # Held from before the check until the start returns, and not across the wait: a
-                # parallel call for this destination then finds this task in the list (#587). One
-                # lock at a time, so calls can't deadlock.
-                async with client.destination_lock(dest):
-                    listed, tasks = await tasks_for_landing_check(client)
-                    _refuse_landing_on_a_running_task(
-                        tasks,
-                        operation,
-                        normalized[i:],
-                        dest,
-                        overwrite=overwrite,
-                        remove_src=remove_src,
-                        done=done,
-                        skipped=skipped_so_far,
-                        later=later,
-                        dest_of=went,
-                    )
-                    # DSM's list only: a parallel call's finished task is nothing to hand back.
-                    running = find_running(
-                        listed, api="SYNO.FileStation.CopyMove", path=p, params=match
-                    )
-                    taskid = (
-                        None
-                        if running is not None
-                        else await _start_copy_move(
-                            client,
-                            p,
-                            dest=dest,
+        # Kept across a restore's groups, so a later failure names what earlier ones replaced.
+        seen = replaced_so_far if replaced_so_far is not None else {}
+        seen.update(replaced)
+        try:
+            for i, p in enumerate(normalized):
+                # A copy of the same source to another destination is a different operation; a
+                # move (or restore) of a source that is already moving anywhere is not.
+                match: dict[str, Any] = {"remove_src": remove_src}
+                if not remove_src:
+                    match["dest_folder_path"] = dest
+                outcome: tuple[int, bool] | Handoff
+                task_dest, task_overwrite = dest, overwrite
+                try:
+                    # Held from before the check until the start returns, and not across the
+                    # wait: a parallel call for this destination then finds this task in the
+                    # list (#587). One lock at a time, so calls can't deadlock.
+                    async with client.destination_lock(dest):
+                        listed, tasks = await tasks_for_landing_check(client)
+                        _refuse_landing_on_a_running_task(
+                            tasks,
+                            operation,
+                            normalized[i:],
+                            dest,
                             overwrite=overwrite,
                             remove_src=remove_src,
-                            operation=operation,
-                            copymove_version=copymove_version,
+                            done=done,
+                            skipped=skipped_so_far,
+                            later=later,
+                            dest_of=went,
                         )
-                    )
-                    if taskid is not None:
-                        track(
-                            RunningTask(
-                                Handle(_KIND[operation], taskid),
-                                [p],
-                                {
-                                    "dest_folder_path": dest,
-                                    "overwrite": overwrite,
-                                    "remove_src": remove_src,
-                                },
-                                {"local": True},
+                        # DSM's list only: a parallel call's finished task is nothing to hand back.
+                        running = find_running(
+                            listed, api="SYNO.FileStation.CopyMove", path=p, params=match
+                        )
+                        taskid = (
+                            None
+                            if running is not None
+                            else await _start_copy_move(
+                                client,
+                                p,
+                                dest=dest,
+                                overwrite=overwrite,
+                                remove_src=remove_src,
+                                operation=operation,
+                                copymove_version=copymove_version,
                             )
                         )
-                if running is not None:
-                    started = running.get("params") or {}
-                    if isinstance(started.get("dest_folder_path"), str):
-                        task_dest = started["dest_folder_path"]
-                    if isinstance(started.get("overwrite"), bool):
-                        task_overwrite = started["overwrite"]
-                    # Never start a second task on a path that already has one (#245).
-                    outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
-                else:
-                    assert taskid is not None
-                    outcome = await _finish_copy_move(
-                        client,
-                        p,
-                        taskid,
-                        dest=dest,
-                        operation=operation,
-                        copymove_version=copymove_version,
-                        timeout=timeout,
+                        if taskid is not None:
+                            track(
+                                RunningTask(
+                                    Handle(_KIND[operation], taskid),
+                                    [p],
+                                    {
+                                        "dest_folder_path": dest,
+                                        "overwrite": overwrite,
+                                        "remove_src": remove_src,
+                                    },
+                                    {"local": True},
+                                )
+                            )
+                    if running is not None:
+                        started = running.get("params") or {}
+                        if isinstance(started.get("dest_folder_path"), str):
+                            task_dest = started["dest_folder_path"]
+                        if isinstance(started.get("overwrite"), bool):
+                            task_overwrite = started["overwrite"]
+                        # Never start a second task on a path that already has one (#245).
+                        outcome = Handoff(Handle(_KIND[operation], str(running["taskid"])), running)
+                    else:
+                        assert taskid is not None
+                        outcome = await _finish_copy_move(
+                            client,
+                            p,
+                            taskid,
+                            dest=dest,
+                            operation=operation,
+                            copymove_version=copymove_version,
+                            timeout=timeout,
+                            done=done,
+                            skipped=skipped_so_far,
+                            dest_of=went,
+                            on_progress=on_progress,
+                        )
+                except httpx.TransportError as e:
+                    rest = normalized[i + 1 :] + list(later or [])
+                    if not done and not skipped_so_far and not rest:
+                        raise  # nothing to add: the server's usual timeout or connection error
+                    # The start got no answer (a status with none hands the item off in
+                    # poll_task): it may have started. Say so, with what was done and what
+                    # wasn't started, as delete_files does (#588).
+                    not_started = f". Not started: {', '.join(map(shown, rest))}" if rest else ""
+                    error_response(
+                        ErrorCode.TIMEOUT
+                        if isinstance(e, httpx.TimeoutException)
+                        else ErrorCode.UNAVAILABLE,
+                        f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                        f"({describe_transport_error(e)}); its {operation.lower()} may have started"
+                        + _already_done(
+                            operation, done, skipped_so_far, dest_of=went, dest=dest, failing=p
+                        )
+                        + f"{not_started}.",
+                        retryable=False,
+                        param="paths",
+                        value=p,
+                        suggestion="Check with list_files, or file_task with no handle, before "
+                        "running it again"
+                        + (", and leave out what's already done." if done else "."),
+                    )
+                if isinstance(outcome, Handoff):
+                    # A task already running to another folder lands nothing here.
+                    placed = [*done, p] if task_dest == dest else list(done)
+                    if records is not None:
+                        records.add(
+                            TaskRecord(
+                                handle=outcome.handle,
+                                paths=[p],
+                                dest=task_dest,
+                                overwrite=task_overwrite,
+                                # Only what landed, and only for the destination this call
+                                # asked for.
+                                earlier=landed_here if task_dest == dest else [],
+                                skipped_earlier=list(skipped_so_far),
+                                done_earlier=list(done),
+                                landed_earlier=placed,
+                                dest_of=dict(went),
+                            )
+                        )
+                    reply = handoff_reply(
+                        verb=f"Still {_PRESENT[operation].lower()}",
+                        path=p,
+                        handle=outcome.handle,
+                        status=outcome.status,
+                        stall=outcome.stall,
+                        dest=task_dest,
                         done=done,
                         skipped=skipped_so_far,
+                        landed=placed,
                         dest_of=went,
-                        on_progress=on_progress,
+                        not_started=normalized[i + 1 :] + list(later or []),
                     )
-            except httpx.TransportError as e:
-                rest = normalized[i + 1 :] + list(later or [])
-                if not done and not skipped_so_far and not rest:
-                    raise  # nothing to add: the server's usual timeout or connection error
-                # The start got no answer (a status with none hands the item off in
-                # poll_task): it may have started. Say so, with what was done and what
-                # wasn't started, as delete_files does (#588).
-                not_started = f". Not started: {', '.join(map(shown, rest))}" if rest else ""
-                error_response(
-                    ErrorCode.TIMEOUT
-                    if isinstance(e, httpx.TimeoutException)
-                    else ErrorCode.UNAVAILABLE,
-                    f"{operation} files failed: DSM didn't answer for {shown(p)} "
-                    f"({describe_transport_error(e)}); its {operation.lower()} may have started"
-                    + _already_done(
-                        operation, done, skipped_so_far, dest_of=went, dest=dest, failing=p
-                    )
-                    + f"{not_started}.",
-                    retryable=False,
-                    param="paths",
-                    value=p,
-                    suggestion="Check with list_files, or file_task with no handle, before "
-                    "running it again" + (", and leave out what's already done." if done else "."),
-                )
-            if isinstance(outcome, Handoff):
-                # A task already running to another folder lands nothing here.
-                placed = [*done, p] if task_dest == dest else list(done)
-                if records is not None:
-                    records.add(
-                        TaskRecord(
-                            handle=outcome.handle,
-                            paths=[p],
-                            dest=task_dest,
-                            overwrite=task_overwrite,
-                            # Only what landed, and only for the destination this call asked for.
-                            earlier=landed_here if task_dest == dest else [],
-                            skipped_earlier=list(skipped_so_far),
-                            done_earlier=list(done),
-                            landed_earlier=placed,
-                            dest_of=dict(went),
+                    if running is not None:
+                        other = task_dest if task_dest != dest else None
+                        reply = _already_running(operation, p, other) + "\n" + reply
+                    # A skipped folder lands its other items, and a hand-off can't tell it
+                    # from a file.
+                    ran = {name_key(path) for path in [*placed, *skipped_so_far]}
+                    alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
+                    if alike:
+                        # #580: "Run them again" with overwrite=true would replace what it placed.
+                        named = ", ".join(map(_escaped_repr, alike))
+                        reply += (
+                            f"\nNamed like one this call already ran: {named}. "
+                            "Run them with overwrite=false or send them to another folder: with "
+                            "overwrite=true they could replace it."
                         )
-                    )
-                reply = handoff_reply(
-                    verb=f"Still {_PRESENT[operation].lower()}",
-                    path=p,
-                    handle=outcome.handle,
-                    status=outcome.status,
-                    stall=outcome.stall,
-                    dest=task_dest,
-                    done=done,
-                    skipped=skipped_so_far,
-                    landed=placed,
-                    dest_of=went,
-                    not_started=normalized[i + 1 :] + list(later or []),
-                )
-                if running is not None:
-                    other = task_dest if task_dest != dest else None
-                    reply = _already_running(operation, p, other) + "\n" + reply
-                # A skipped folder lands its other items, and a hand-off can't tell it from a file.
-                ran = {name_key(path) for path in [*placed, *skipped_so_far]}
-                alike = [q for q in normalized[i + 1 :] if name_key(q) in ran]
-                if alike:
-                    # #580: "Run them again" with overwrite=true would replace what it placed.
-                    named = ", ".join(map(_escaped_repr, alike))
-                    reply += (
-                        f"\nNamed like one this call already ran: {named}. "
-                        "Run them with overwrite=false or send them to another folder: with "
-                        "overwrite=true they could replace it."
-                    )
-                return reply, True
-            size, skipped = outcome
-            total_processed += size
-            went[p] = dest
-            if skipped:
-                skipped_paths.append(p)
-                skipped_so_far.append(p)
-            else:
-                landed_here.append(p)
-                done.append(p)
+                    return reply, True
+                size, skipped = outcome
+                total_processed += size
+                went[p] = dest
+                if skipped:
+                    skipped_paths.append(p)
+                    skipped_so_far.append(p)
+                else:
+                    landed_here.append(p)
+                    done.append(p)
+        except ToolError as refused:
+            # A later item failed: say which done ones replaced something (pre-QA r4 on #623).
+            raise _with_replaced_note(refused, operation, done, seen, went, dest) from None
 
         text = await _copy_move_summary(
             client,
@@ -1844,6 +1896,7 @@ async def restore_from_recycle_bin(
             restored: list[str] = []
             restored_skipped: list[str] = []
             restored_to: dict[str, str] = {}
+            restored_replaced: dict[str, bool] = {}
             for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False)):
                 r, handed_off = await _copy_move(
                     client,
@@ -1861,6 +1914,7 @@ async def restore_from_recycle_bin(
                     records=records,
                     on_progress=on_progress,
                     fresh=recreated,
+                    replaced_so_far=restored_replaced,
                 )
                 if handed_off:
                     earlier_skips = sum(x.startswith("[!]") for x in results)

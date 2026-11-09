@@ -6053,7 +6053,11 @@ async def test_a_task_starting_during_an_earlier_path_is_seen(
     with pytest.raises(ToolError) as refused:
         await move_files(mock_client, paths=["/b/big", "/b/x"], dest_folder="/d", overwrite=True)
     message = json.loads(str(refused.value))["error"]["message"]
-    assert message.endswith("Already moved before this failure: /b/big.")
+    # The mock answers every destination name as there, so /b/big replaced one (#620).
+    assert message.endswith(
+        "Already moved before this failure: /b/big. Of what was moved, these replaced what was "
+        "already there: /b/big. A file replaced this way may not be in the recycle bin."
+    ), message
     assert started == ["/b/big"]
 
 
@@ -7140,3 +7144,47 @@ class TestSourcesDsmWontShow:
         perm = error_from_code(407, "SYNO.FileStation.List").suggestion
         missing = error_from_code(408, "SYNO.FileStation.List").suggestion
         assert err["suggestion"] == f"{missing} For one with no permission: {perm}"
+
+    @respx.mock
+    async def test_a_call_failing_later_names_what_done_items_replaced(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r4 on #623: a copy whose second item failed said a.txt was copied, not that
+        it replaced the a.txt that was there."""
+        exists = {"/w/dst": True, "/w/dst/a.txt": False, "/w/src/a.txt": False, "/w/src/f": True}
+        starts: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                starts.append(p["path"])
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data: dict[str, Any] = {"finished": True, "processed_size": 1}
+                if len(starts) == 2:
+                    data = {"finished": True, "error": {"code": 1004}, "path": "/w/src/f"}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a.txt", "/w/src/f"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/a.txt. Of what was copied, these "
+            "replaced what was already there: /w/src/a.txt. A file replaced this way may not "
+            "be in the recycle bin."
+        ), message
