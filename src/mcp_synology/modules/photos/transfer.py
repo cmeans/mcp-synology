@@ -193,7 +193,7 @@ async def download_photos(
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
-            replaced += result.endswith(f"({_REPLACED})")
+            replaced += result.endswith((f"({_REPLACED})", f"({_REPLACED_LINK})"))
             lines.append(f"  {item_id}  {name}  {result}")
     if len(unique) > 1 and retry:
         # A name depends on every item in the call, so retrying only the ones that failed
@@ -218,6 +218,7 @@ async def download_photos(
 
 _ALREADY_THERE = "already there"
 _REPLACED = "replaced the file that was there"
+_REPLACED_LINK = "replaced the symlink that was there; its target is untouched"
 
 
 def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
@@ -271,6 +272,7 @@ async def _download_one(
     # one. Names are unique within a call, so it's never this call's own file. Checked before
     # the download starts; a file that appears while it streams is replaced without the note.
     replaced = os.path.lexists(dest)
+    replaced_link = replaced and dest.is_symlink()  # the link, not its target
     if size == "original":
         api, method, version = ph.api("Download"), "download", 1
         params = {"item_id": json.dumps([int(item["id"])]), "force_download": "true"}
@@ -313,7 +315,8 @@ async def _download_one(
         # A permission or read-only folder doesn't change by repeating the call.
         return f"not downloaded: couldn't write the file ({e.strerror or e})", False
     logger.debug("Downloaded item %s to %s (replaced a file there: %s)", item["id"], dest, replaced)
-    return format_size(written) + (f" ({_REPLACED})" if replaced else ""), False
+    note = f" ({_REPLACED_LINK})" if replaced_link else f" ({_REPLACED})" if replaced else ""
+    return format_size(written) + note, False
 
 
 # -- upload_photos ------------------------------------------------------------------

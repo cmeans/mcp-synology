@@ -380,6 +380,8 @@ async def download_file(
     # read like a new file. Checked before the download starts; a file that appears while it
     # streams is replaced without the note.
     replaced = overwrite and os.path.lexists(dest_file)
+    # A link is replaced, not what it points to (pre-QA r3 on #626).
+    replaced_link = replaced and dest_file.is_symlink()
 
     if nas_file_size:
         free_space = shutil.disk_usage(local_dir).free
@@ -478,7 +480,12 @@ async def download_file(
     # The server log, too, says which local file was written and whether one was replaced
     # (pre-QA r2 on #626): the reply alone reaches only the model's context.
     logger.debug("Downloaded %s to %s (replaced a file there: %s)", nas_path, dest_file, replaced)
-    if replaced:
+    if replaced_link:
+        result += (
+            f"\n    It replaced the symlink {dest_file.name} that was there (its target is "
+            "untouched)."
+        )
+    elif replaced:
         result += f"\n    It replaced the {dest_file.name} that was there."
 
     if bytes_written >= _LARGE_FILE_THRESHOLD:

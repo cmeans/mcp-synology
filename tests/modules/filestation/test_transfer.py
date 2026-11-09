@@ -364,7 +364,9 @@ class TestDownloadFile:
         assert str(existing) in body["error"]["message"]
 
     @respx.mock
-    async def test_download_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
+    async def test_download_overwrite_success(
+        self, mock_client: DsmClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         existing = tmp_path / "movie.mkv"
         existing.write_text("old content")
 
@@ -374,29 +376,35 @@ class TestDownloadFile:
             headers={"content-type": "application/octet-stream"},
         )
 
-        result = await download_file(
-            mock_client,
-            path="/video/movie.mkv",
-            dest_folder=str(tmp_path),
-            overwrite=True,
-        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.transfer"):
+            result = await download_file(
+                mock_client,
+                path="/video/movie.mkv",
+                dest_folder=str(tmp_path),
+                overwrite=True,
+            )
         assert "[+]" in result
         assert existing.read_bytes() == new_content
+        assert f"Downloaded /video/movie.mkv to {existing} (replaced a file there: True)" in (
+            caplog.text
+        )
         # #625: an overwrite says it replaced the file (worded like upload_file's note in #623).
         assert result.splitlines()[1:] == ["    It replaced the movie.mkv that was there."]
 
     @respx.mock
     async def test_download_overwrite_with_nothing_there_says_nothing_extra(
-        self, mock_client: DsmClient, tmp_path: Path
+        self, mock_client: DsmClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             content=b"data", headers={"content-type": "application/octet-stream"}
         )
-        result = await download_file(
-            mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
-        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.transfer"):
+            result = await download_file(
+                mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
+            )
         assert result.startswith("[+] Downloaded movie.mkv"), result
         assert "replaced" not in result, result
+        assert "(replaced a file there: False)" in caplog.text
 
     @respx.mock
     async def test_download_custom_filename(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -1242,19 +1250,24 @@ class TestDownloadFile:
         assert [c.request.url.params.get("method") for c in route.calls] == ["getinfo"]
 
     @respx.mock
-    async def test_download_overwrite_over_a_dangling_symlink_says_it_replaced_it(
-        self, mock_client: DsmClient, tmp_path: Path
+    @pytest.mark.parametrize("target", ["missing-target", "real.txt"])
+    async def test_download_overwrite_over_a_symlink_says_it_replaced_the_link(
+        self, mock_client: DsmClient, tmp_path: Path, target: str
     ) -> None:
         """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists),
-        so the note says it was replaced."""
-        (tmp_path / "report.txt").symlink_to(tmp_path / "missing-target")
+        so the note says it was replaced. Pre-QA r3: a link is replaced, not its target."""
+        (tmp_path / "real.txt").write_bytes(b"keep")
+        (tmp_path / "report.txt").symlink_to(tmp_path / target)
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             content=b"new", headers={"content-type": "application/octet-stream"}
         )
         result = await download_file(
             mock_client, path="/docs/report.txt", dest_folder=str(tmp_path), overwrite=True
         )
-        assert result.splitlines()[1:] == ["    It replaced the report.txt that was there."]
+        assert result.splitlines()[1:] == [
+            "    It replaced the symlink report.txt that was there (its target is untouched)."
+        ]
+        assert (tmp_path / "real.txt").read_bytes() == b"keep"
         assert not (tmp_path / "report.txt").is_symlink()
         assert (tmp_path / "report.txt").read_bytes() == b"new"
 

@@ -147,25 +147,35 @@ class TestOriginals:
         assert "  12  forest-trail.jpg  3 B (replaced the file that was there)" in out, out
 
     @respx.mock
-    async def test_overwrite_over_a_dangling_symlink_says_it_replaced_it(
-        self, tmp_path: Path
+    @pytest.mark.parametrize("target", ["missing-target", "real.jpg"])
+    async def test_overwrite_over_a_symlink_says_it_replaced_the_link(
+        self, tmp_path: Path, target: str, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists)."""
-        (tmp_path / "forest-trail.jpg").symlink_to(tmp_path / "missing-target")
+        """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists).
+        Pre-QA r3: a link is replaced, not its target."""
+        (tmp_path / "real.jpg").write_bytes(b"keep")
+        (tmp_path / "forest-trail.jpg").symlink_to(tmp_path / target)
         fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
         fake.on("SYNO.Foto.Download", "download", 1, binary(b"new"))
         install(fake)
         client = make_client()
-        async with client:
-            out = await download_photos(
-                client,
-                ids=[12],
-                dest_folder=str(tmp_path),
-                overwrite=True,
-                allowed_roots=[tmp_path],
-            )
-        assert "  12  forest-trail.jpg  3 B (replaced the file that was there)" in out, out
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.photos.transfer"):
+            async with client:
+                out = await download_photos(
+                    client,
+                    ids=[12],
+                    dest_folder=str(tmp_path),
+                    overwrite=True,
+                    allowed_roots=[tmp_path],
+                )
+        assert (
+            "  12  forest-trail.jpg  3 B (replaced the symlink that was there; its target is "
+            "untouched)" in out
+        ), out
+        assert ", 1 replaced a file that was there)" in out, out
         assert (tmp_path / "forest-trail.jpg").read_bytes() == b"new"
+        assert (tmp_path / "real.jpg").read_bytes() == b"keep"
+        assert f"to {tmp_path / 'forest-trail.jpg'} (replaced a file there: True)" in caplog.text
 
     @respx.mock
     async def test_only_the_item_that_replaced_a_file_says_so(self, tmp_path: Path) -> None:
