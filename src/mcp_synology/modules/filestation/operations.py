@@ -73,7 +73,7 @@ from mcp_synology.modules.filestation.tasks import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from mcp_synology.core.client import DsmClient
 
@@ -903,6 +903,7 @@ async def _copy_move(
     later: list[str] | None = None,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
+    fresh: Sequence[str] = (),
 ) -> tuple[str, bool]:
     """Shared implementation for copy and move operations.
 
@@ -942,25 +943,99 @@ async def _copy_move(
     # parameter encoding that our path-as-form-param shape doesn't support.
     copymove_version = min(2, client.negotiate_version("SYNO.FileStation.CopyMove", max_version=2))
 
-    if check_sources:
-        await _refuse_missing_sources(client, operation, normalized, paths)
-    await _refuse_missing_destination(
-        client, operation, dest, anything_done=bool(already_done or already_skipped)
-    )
     # With overwrite, which sources' names are already at the destination, so the reply can
     # say what was replaced or merged into (#620, 0.11.0rc3 live test: an overwrite read like
-    # a plain copy). Only the reply's wording depends on it: a lookup that fails leaves it
-    # unsaid.
-    already_there: dict[str, bool] = {}
+    # a plain copy). It runs alongside the source and destination checks, never after them:
+    # run after, it delayed this call's landing records and let a parallel call start a task
+    # this one replaced (#597; pre-QA on #623). Not a target that is the source itself, nor one
+    # in or at a folder this call re-created (`fresh`), nor one an earlier item of the call
+    # landed: those weren't there before. A lookup that fails leaves the note unsaid.
+    targets: dict[str, str] = {}
     if overwrite:
-        targets = {q: f"{dest}/{q.rsplit('/', 1)[-1]}" for q in normalized}
-        try:
-            kinds = await paths_isdir(client, list(targets.values()))
-        except Exception as e:  # noqa: BLE001 - never fail the copy over a reply note
-            logger.debug("Couldn't check the destination for existing names: %s", e)
-            kinds = {}
-        already_there = {q: kinds[t] for q, t in targets.items() if t in kinds}
+        earlier_names = {
+            name_key(q) for q in (already_done or []) if (dest_of or {}).get(q) == dest
+        }
+        targets = {
+            q: t
+            for q in normalized
+            if (t := f"{dest}/{q.rsplit('/', 1)[-1]}") != q
+            and dest not in fresh
+            and t not in fresh
+            and name_key(q) not in earlier_names
+        }
+    # One request per target, all sent at once, before the checks below: awaited only for the
+    # reply, after every task started, so this call's landing records and starts aren't
+    # delayed (#597; pre-QA on #623 measured a parallel call slipping in when they were).
+    lookups = {q: asyncio.ensure_future(paths_isdir(client, [t])) for q, t in targets.items()}
+    try:
+        if check_sources:
+            await _refuse_missing_sources(client, operation, normalized, paths)
+        await _refuse_missing_destination(
+            client, operation, dest, anything_done=bool(already_done or already_skipped)
+        )
+        return await _copy_move_tasks(
+            client,
+            normalized=normalized,
+            paths=paths,
+            dest=dest,
+            overwrite=overwrite,
+            remove_src=remove_src,
+            operation=operation,
+            timeout=timeout,
+            copymove_version=copymove_version,
+            already_done=already_done,
+            already_skipped=already_skipped,
+            dest_of=dest_of,
+            later=later,
+            records=records,
+            on_progress=on_progress,
+            lookups=lookups,
+            targets=targets,
+        )
+    finally:
+        for future in lookups.values():
+            future.cancel()
+            if future.done() and not future.cancelled():
+                future.exception()  # retrieved, so an unawaited failure isn't logged
 
+
+async def _replaced(
+    lookups: Mapping[str, asyncio.Future[dict[str, bool]]], targets: dict[str, str]
+) -> dict[str, bool]:
+    """Which sources' names were already at the destination, and whether as a folder (#620)."""
+    found: dict[str, bool] = {}
+    for q, future in lookups.items():
+        try:
+            kinds = await future
+        except Exception as e:  # noqa: BLE001 - never fail the copy over a reply note
+            logger.debug("Couldn't check the destination for %s: %s", targets[q], e)
+            continue
+        if targets[q] in kinds:
+            found[q] = kinds[targets[q]]
+    return found
+
+
+async def _copy_move_tasks(
+    client: DsmClient,
+    *,
+    normalized: list[str],
+    paths: Sequence[str],
+    dest: str,
+    overwrite: bool,
+    remove_src: bool,
+    operation: str,
+    timeout: float,
+    copymove_version: int,
+    already_done: list[str] | None,
+    already_skipped: list[str] | None,
+    dest_of: dict[str, str] | None,
+    later: list[str] | None,
+    records: TaskRecords | None,
+    on_progress: ProgressCallback | None,
+    lookups: Mapping[str, asyncio.Future[dict[str, bool]]],
+    targets: dict[str, str],
+) -> tuple[str, bool]:
+    """``_copy_move``'s tasks, once its checks passed: start each source, wait, hand off."""
     total_processed = 0
     done = list(already_done or [])
     skipped_so_far = already_skipped if already_skipped is not None else []
@@ -1147,7 +1222,7 @@ async def _copy_move(
             earlier=[
                 q for q in [*done, *skipped_so_far] if q not in normalized and went.get(q) == dest
             ],
-            replaced=already_there,
+            replaced=await _replaced(lookups, targets),
         )
         return text, False
 
@@ -1767,6 +1842,7 @@ async def restore_from_recycle_bin(
                     later=full_paths[i + 1 :],
                     records=records,
                     on_progress=on_progress,
+                    fresh=recreated,
                 )
                 if handed_off:
                     earlier_skips = sum(x.startswith("[!]") for x in results)
@@ -1812,6 +1888,7 @@ async def restore_from_recycle_bin(
             check_sources=False,
             records=records,
             on_progress=on_progress,
+            fresh=recreated,
         )
         if handed_off:
             return result + note

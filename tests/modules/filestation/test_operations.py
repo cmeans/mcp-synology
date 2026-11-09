@@ -6764,3 +6764,80 @@ class TestOverwriteSaysWhatItReplaced:
         )
         await copy_files(mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst")
         assert "/w/dst/a.txt" not in lookups
+
+
+class TestOverwriteNoteEdges:
+    """Pre-QA on #623: the note is about what was there before the call, nothing else."""
+
+    @respx.mock
+    async def test_a_failed_lookup_leaves_the_copy_and_says_nothing(
+        self, mock_client: DsmClient
+    ) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method, path = params.get("method", ""), params.get("path", "")
+            if method == "getinfo" and path == "/w/dst/a.txt":
+                return httpx.Response(502, text="Bad Gateway")
+            if method == "getinfo":
+                entry = {"isdir": path == "/w/dst", "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert result.startswith("[+] Copied 1 item(s)"), result
+        assert "Replaced" not in result and "Merged" not in result, result
+
+    @respx.mock
+    async def test_a_source_landing_on_itself_isnt_called_replaced(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Copying /w/d/a.txt into /w/d: its own path is no file it replaced."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method, path = params.get("method", ""), params.get("path", "")
+            if method == "getinfo":
+                entry = {"isdir": path == "/w/d", "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(
+            mock_client, paths=["/w/d/a.txt"], dest_folder="/w/d", overwrite=True
+        )
+        assert "Replaced" not in result, result
+
+    @respx.mock
+    async def test_a_folder_the_call_re_created_isnt_called_already_there(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A restore re-creates a missing folder, then restores into it: that folder wasn't
+        there before the call (pre-QA on #623)."""
+        from mcp_synology.modules.filestation.operations import _copy_move
+
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=TestOverwriteSaysWhatItReplaced._dsm({"/w/dst/f": True}, lookups)
+        )
+        text, _ = await _copy_move(
+            mock_client,
+            paths=["/w/src/f"],
+            dest_folder="/w/dst",
+            overwrite=True,
+            remove_src=True,
+            operation="Restore",
+            fresh=["/w/dst/f"],
+        )
+        assert "Merged" not in text, text
+        assert "/w/dst/f" not in lookups

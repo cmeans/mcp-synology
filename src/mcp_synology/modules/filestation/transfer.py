@@ -169,9 +169,9 @@ async def upload_file(
     replaced = False
     if overwrite:
         try:
-            replaced = f"{dest}/{effective_name}" in await paths_isdir(
-                client, [f"{dest}/{effective_name}"]
-            )
+            # A file only: a folder of that name isn't something an upload replaces.
+            kinds = await paths_isdir(client, [f"{dest}/{effective_name}"])
+            replaced = kinds.get(f"{dest}/{effective_name}") is False
         except Exception as e:  # noqa: BLE001 - only the reply's wording depends on it
             logger.debug("Couldn't check for an existing %s: %s", effective_name, e)
 
