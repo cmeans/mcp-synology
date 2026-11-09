@@ -1029,6 +1029,7 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
 
 
 _NO_PERMISSION = frozenset({105, 407})
+_CHECK_ACCESS = "check it and the account's access to it in DSM."
 
 
 def missing_text(path: str, code: int) -> str:
@@ -1053,6 +1054,12 @@ def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, s
         return ErrorCode.PERMISSION_DENIED, perm
     if all(code == 408 for code in codes):
         return ErrorCode.NOT_FOUND, missing_paths_suggestion(missing)
+    if not any(code == 408 or code in _NO_PERMISSION for code in codes):
+        # Only other codes: the first code's own advice, as before #620 (pre-QA r5 on #623).
+        mapped = error_from_code(codes[0], "SYNO.FileStation.List")
+        return mapped.error_code, mapped.suggestion or (
+            "Check the paths and the account's access to them in DSM."
+        )
     parts = []
     if 408 in codes:
         parts.append(error_from_code(408, "SYNO.FileStation.List").suggestion or "")
@@ -1062,14 +1069,10 @@ def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, s
     if any(code in _NO_PERMISSION for code in codes):
         parts.append(f"For one with no permission: {perm}")
     if any(code != 408 and code not in _NO_PERMISSION for code in codes):
-        parts.append(
-            "For one DSM gave another code for: check it and the account's access to it in DSM."
-        )
+        parts.append(f"For one DSM gave another code for: {_CHECK_ACCESS}")
     if 408 in codes:
         return ErrorCode.NOT_FOUND, " ".join(parts)
-    if any(code in _NO_PERMISSION for code in codes):
-        return ErrorCode.PERMISSION_DENIED, " ".join(parts)
-    return error_from_code(codes[0], "SYNO.FileStation.List").error_code, " ".join(parts)
+    return ErrorCode.PERMISSION_DENIED, " ".join(parts)
 
 
 def _wildcard_hint(missing: list[tuple[str, int]]) -> str:

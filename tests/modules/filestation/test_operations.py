@@ -7188,3 +7188,134 @@ class TestSourcesDsmWontShow:
             "replaced what was already there: /w/src/a.txt. A file replaced this way may not "
             "be in the recycle bin."
         ), message
+
+    @staticmethod
+    def _failing_second(exists: dict[str, bool]) -> Any:
+        """getinfo from ``exists`` (path -> isdir; others 408); the second start's task fails
+        with 1004."""
+        starts: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                starts.append(p["path"])
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data: dict[str, Any] = {"finished": True, "processed_size": 1}
+                if len(starts) == 2:
+                    data = {"finished": True, "error": {"code": 1004}, "path": starts[1]}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return respond
+
+    @respx.mock
+    async def test_a_restore_carries_the_note_across_its_destinations(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r5 on #623: each destination is its own group; the second group's failure
+        still names what the first replaced."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing_second(
+                {
+                    "/s": True,
+                    "/s/x": True,
+                    "/s/y": True,
+                    "/s/x/a": False,
+                    "/s/#recycle/x/a": False,
+                    "/s/#recycle/y/b": False,
+                }
+            )
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="s", paths=["x/a", "y/b"], overwrite=True
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already restored before this failure: /s/#recycle/x/a (to /s/x). Of what was "
+            "restored, these replaced what was already there: /s/#recycle/x/a (to /s/x). A file "
+            "replaced this way may not be in the recycle bin."
+        ), message
+
+    @respx.mock
+    async def test_a_merged_folder_is_named_when_a_later_item_fails(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing_second(
+                {
+                    "/w/dst": True,
+                    "/w/dst/f": True,
+                    "/w/dst/a.txt": False,
+                    "/w/src/f": True,
+                    "/w/src/a.txt": False,
+                    "/w/src/g": False,
+                }
+            )
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/f", "/w/src/g"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/f. Of what was copied, these merged "
+            "into the folder(s) already there, replacing files with the same names: /w/src/f. "
+            "A file replaced this way may not be in the recycle bin."
+        ), message
+
+    @respx.mock
+    async def test_a_replaced_file_and_a_merged_folder_both_named_on_failure(
+        self, mock_client: DsmClient
+    ) -> None:
+        state = {"starts": 0}
+        base = self._failing_second(
+            {
+                "/w/dst": True,
+                "/w/dst/f": True,
+                "/w/dst/a.txt": False,
+                "/w/src/f": True,
+                "/w/src/a.txt": False,
+                "/w/src/g": False,
+            }
+        )
+
+        def third_fails(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            if p.get("method") == "start":
+                state["starts"] += 1
+            if p.get("method") == "status" and state["starts"] == 3:
+                data = {"finished": True, "error": {"code": 1004}, "path": "/w/src/g"}
+                return httpx.Response(200, json={"success": True, "data": data})
+            if p.get("method") == "status":
+                data2: dict[str, Any] = {"finished": True, "processed_size": 1}
+                return httpx.Response(200, json={"success": True, "data": data2})
+            return base(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=third_fails)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a.txt", "/w/src/f", "/w/src/g"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/a.txt, /w/src/f. Of what was copied, "
+            "these replaced what was already there: /w/src/a.txt; these merged into the "
+            "folder(s) already there, replacing files with the same names: /w/src/f. A file "
+            "replaced this way may not be in the recycle bin."
+        ), message

@@ -169,7 +169,8 @@ async def upload_file(
     replaced = False
     if overwrite:
         try:
-            # A file only: a folder of that name isn't something an upload replaces.
+            # A file only: what DSM's Upload does with a same-named folder isn't captured,
+            # so no note claims it replaced one.
             kinds = await paths_isdir(client, [f"{dest}/{effective_name}"])
             replaced = kinds.get(f"{dest}/{effective_name}") is False
         except Exception as e:  # noqa: BLE001 - only the reply's wording depends on it

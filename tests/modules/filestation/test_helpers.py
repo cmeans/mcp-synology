@@ -1462,11 +1462,17 @@ class TestUnreadablePathsError:
     GONE = error_from_code(408, "SYNO.FileStation.List").suggestion
     OTHER = "For one DSM gave another code for: check it and the account's access to it in DSM."
 
-    def test_another_code_alone(self) -> None:
-        code, suggestion = unreadable_paths_error([("/v/b", 400)])
-        assert code == error_from_code(400, "SYNO.FileStation.List").error_code
-        assert suggestion == self.OTHER
-        assert "retry" not in suggestion
+    @pytest.mark.parametrize("codes", [(400,), (400, 401)])
+    def test_only_other_codes_keep_the_first_code_s_own_advice(
+        self, codes: tuple[int, ...]
+    ) -> None:
+        """Pre-QA r5 on #623: no "For one …" when every path got another code."""
+        code, suggestion = unreadable_paths_error([(f"/v/{c}", c) for c in codes])
+        mapped = error_from_code(codes[0], "SYNO.FileStation.List")
+        assert code == mapped.error_code
+        fallback = "Check the paths and the account's access to them in DSM."
+        assert suggestion == (mapped.suggestion or fallback)
+        assert not suggestion.startswith("For one")
 
     def test_no_permission_and_another_code(self) -> None:
         code, suggestion = unreadable_paths_error([("/v/a", 407), ("/v/b", 400)])

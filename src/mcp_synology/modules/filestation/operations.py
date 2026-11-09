@@ -1323,8 +1323,9 @@ async def _copy_move_summary(
         )
 
     gone_over = {p: isdir for p, isdir in (replaced or {}).items() if p in ok}
-    over_files = [name(p) for p, isdir in gone_over.items() if not isdir]
-    over_folders = [name(p) for p, isdir in gone_over.items() if isdir]
+    # shown(): a padded name, or one with a comma, is unambiguous in the list (pre-QA r5).
+    over_files = [shown(name(p)) for p, isdir in gone_over.items() if not isdir]
+    over_folders = [shown(name(p)) for p, isdir in gone_over.items() if isdir]
     if over_files:
         lines.append(f"\nReplaced what was already there: {', '.join(over_files)}")
     if over_folders:
