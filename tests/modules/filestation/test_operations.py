@@ -15,6 +15,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.errors import error_from_code
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.operations import (
     _delete_summary,
@@ -3454,7 +3455,7 @@ class TestShareRootSourcesRefused:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {"files": [{"path": "/video/#recycle/x", "code": 408}]}}
         )
-        with pytest.raises(ToolError, match="not found"):
+        with pytest.raises(ToolError, match="doesn't exist"):
             await move_files(mock_client, paths=["/video/#recycle/x"], dest_folder="/photo")
 
     @respx.mock
@@ -3535,7 +3536,7 @@ class TestShareRootSourcesRefused:
         # quoting rule itself is tested in test_helpers (TestShown).
         from mcp_synology.modules.filestation.helpers import shown
 
-        assert f"not found: {shown(checked)} (DSM error 408)" in message
+        assert f"{shown(checked)}: doesn't exist (DSM error 408)" in message
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -3565,7 +3566,7 @@ class TestShareRootSourcesRefused:
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        with pytest.raises(ToolError, match="not found"):
+        with pytest.raises(ToolError, match="doesn't exist"):
             await restore_from_recycle_bin(mock_client, share="video", paths=[item])
         assert looked_up == [checked]
 
@@ -6052,7 +6053,11 @@ async def test_a_task_starting_during_an_earlier_path_is_seen(
     with pytest.raises(ToolError) as refused:
         await move_files(mock_client, paths=["/b/big", "/b/x"], dest_folder="/d", overwrite=True)
     message = json.loads(str(refused.value))["error"]["message"]
-    assert message.endswith("Already moved before this failure: /b/big.")
+    # The mock answers every destination name as there, so /b/big replaced one (#620).
+    assert message.endswith(
+        "Already moved before this failure: /b/big. Of what was moved, these replaced what was "
+        "already there: /b/big. A file replaced this way may not be in the recycle bin."
+    ), message
     assert started == ["/b/big"]
 
 
@@ -6686,3 +6691,813 @@ async def test_a_started_source_keeps_its_record_after_its_call_returns(
     assert isinstance(restored, ToolError), restored
     assert "another move call through this server is landing in '/s/y'" in str(restored)
     assert starts == ["/a/b"]
+
+
+class TestOverwriteSaysWhatItReplaced:
+    """#620 (0.11.0rc3 live test): a copy or move with overwrite=true read like a plain one,
+    whether or not it replaced something. The reply now says what was already there."""
+
+    @staticmethod
+    def _dsm(existing: dict[str, bool], lookups: list[str]) -> object:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method = params.get("method", "")
+            if method == "getinfo":
+                path = params["path"]
+                lookups.append(path)
+                is_source = path.startswith("/w/src/")
+                if is_source or path == "/w/dst" or path in existing:
+                    isdir = path == "/w/dst" or existing.get(path, False)
+                    entry: dict[str, object] = {
+                        "isdir": isdir,
+                        "name": path.rsplit("/", 1)[-1],
+                        "path": path,
+                    }
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(
+                    200,
+                    json={
+                        "success": True,
+                        "data": {"finished": True, "processed_size": 10, "skipstatus": None},
+                    },
+                )
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_a_replaced_file_and_a_merged_folder_are_named(
+        self, mock_client: DsmClient
+    ) -> None:
+        lookups: list[str] = []
+        # QA round 1: f is a folder on both sides, so it's a merge.
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm(
+                {"/w/dst/a.txt": False, "/w/dst/f": True, "/w/src/f": True}, lookups
+            )
+        )
+        result = await copy_files(
+            mock_client,
+            paths=["/w/src/a.txt", "/w/src/f", "/w/src/new.txt"],
+            dest_folder="/w/dst",
+            overwrite=True,
+        )
+        tail = result.split("\n\nReplaced", 1)[1]
+        assert tail.startswith(
+            " what was already there:\n  a.txt\n\n"
+            "Merged into the folder(s) already there, replacing files with the same names:\n"
+            "  f\nA file replaced this way may not be in the recycle bin."
+        ), result
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("source_is_dir", "target_is_dir"), [(False, True), (True, False)], ids=["file", "folder"]
+    )
+    async def test_the_other_kind_under_the_name_isnt_called_replaced_or_merged(
+        self, mock_client: DsmClient, source_is_dir: bool, target_is_dir: bool
+    ) -> None:
+        """QA round 1 on #623: a file onto a same-named folder read as "Merged"; what DSM
+        does with the other kind isn't captured, so the reply says that."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/dst/f": target_is_dir, "/w/src/f": source_is_dir}, [])
+        )
+        result = await copy_files(
+            mock_client, paths=["/w/src/f"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "Replaced" not in result and "Merged" not in result, result
+        assert (
+            "\nAlready there as the other kind (a file for a folder, or a folder for a file); "
+            "what DSM did with it isn't known:\n  f"
+        ) in result, result
+        assert "recycle bin" not in result, result
+
+    @respx.mock
+    async def test_a_failed_lookup_says_it_couldnt_check(self, mock_client: DsmClient) -> None:
+        """QA round 1 on #623: with no line for a failed lookup, "nothing said" read as
+        "nothing was there"."""
+        base = self._dsm({}, [])
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("path") == "/w/dst/a.txt":
+                return httpx.Response(502, text="bad gateway")
+            return base(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        result = await copy_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "\nCouldn't check whether anything was already there for:\n  a.txt" in result
+        assert "Replaced" not in result, result
+
+    @respx.mock
+    async def test_nothing_there_says_nothing_extra(self, mock_client: DsmClient) -> None:
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({}, lookups))
+        result = await move_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "Replaced" not in result and "Merged" not in result, result
+
+    @respx.mock
+    async def test_without_overwrite_the_destination_isnt_looked_up(
+        self, mock_client: DsmClient
+    ) -> None:
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/dst/a.txt": False}, lookups)
+        )
+        await copy_files(mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst")
+        assert "/w/dst/a.txt" not in lookups
+
+
+class TestOverwriteNoteEdges:
+    """Pre-QA on #623: the note is about what was there before the call, nothing else."""
+
+    @respx.mock
+    async def test_a_failed_lookup_leaves_the_copy_and_says_nothing(
+        self, mock_client: DsmClient
+    ) -> None:
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method, path = params.get("method", ""), params.get("path", "")
+            if method == "getinfo" and path == "/w/dst/a.txt":
+                return httpx.Response(502, text="Bad Gateway")
+            if method == "getinfo":
+                entry = {"isdir": path == "/w/dst", "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert result.startswith("[+] Copied 1 item(s)"), result
+        assert "Replaced" not in result and "Merged" not in result, result
+
+    @respx.mock
+    async def test_a_source_landing_on_itself_isnt_called_replaced(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Copying /w/d/a.txt into /w/d: its own path is no file it replaced."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            method, path = params.get("method", ""), params.get("path", "")
+            if method == "getinfo":
+                entry = {"isdir": path == "/w/d", "name": path.rsplit("/", 1)[-1], "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await copy_files(
+            mock_client, paths=["/w/d/a.txt"], dest_folder="/w/d", overwrite=True
+        )
+        assert "Replaced" not in result, result
+
+    @respx.mock
+    async def test_a_folder_the_call_re_created_isnt_called_already_there(
+        self, mock_client: DsmClient
+    ) -> None:
+        """A restore re-creates a missing folder, then restores into it: that folder wasn't
+        there before the call (pre-QA on #623)."""
+        from mcp_synology.modules.filestation.operations import _copy_move
+
+        lookups: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=TestOverwriteSaysWhatItReplaced._dsm({"/w/dst/f": True}, lookups)
+        )
+        text, _ = await _copy_move(
+            mock_client,
+            paths=["/w/src/f"],
+            dest_folder="/w/dst",
+            overwrite=True,
+            remove_src=True,
+            operation="Restore",
+            fresh=["/w/dst/f"],
+        )
+        assert "Merged" not in text, text
+        assert "/w/dst/f" not in lookups
+
+
+def _note_info(path: str, isdir: bool) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "success": True,
+            "data": {"files": [{"isdir": isdir, "path": path, "name": path.rsplit("/", 1)[-1]}]},
+        },
+    )
+
+
+def _note_gone(path: str) -> httpx.Response:
+    return httpx.Response(
+        200, json={"success": True, "data": {"files": [{"code": 408, "path": path}]}}
+    )
+
+
+class TestOverwriteNoteLookups:
+    """#620's overwrite note reflects only what was there before the call, never what the
+    call made, and its lookups never outlive or burst the call (pre-QA r2 on #623)."""
+
+    @respx.mock
+    async def test_nested_restore_implicit_parent(self, mock_client: DsmClient) -> None:
+        """A restore that re-creates /home/X as the parent of X/Y (force_parent) doesn't say
+        it merged X into a folder that was there (pre-QA r2 on #623)."""
+        exists: dict[str, bool] = {
+            "/home": True,
+            "/home/#recycle/X": True,
+            "/home/#recycle/X/Y/f.txt": False,
+        }
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            api, method = p.get("api", ""), p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                return _note_info(path, exists[path]) if path in exists else _note_gone(path)
+            if api == "SYNO.FileStation.CreateFolder":
+                folder = f"{p['folder_path']}/{json.loads(p['name'])}"
+                exists["/home/X"] = True
+                exists[folder] = True
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": folder}]}}
+                )
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t-1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        out = await restore_from_recycle_bin(
+            mock_client, share="home", paths=["X", "X/Y/f.txt"], overwrite=True
+        )
+        assert "Merged" not in out, out
+
+    @respx.mock
+    async def test_late_lookup_sees_own_landing(self, mock_client: DsmClient) -> None:
+        """A lookup that answers slowly is read before the first start, so it can't see this
+        call's own landing and call a fresh move a replace (pre-QA r2 on #623)."""
+        landed = {"v": False}
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path == "/w/dst/a.txt":
+                    await asyncio.sleep(0.3)  # a slow answer (busy NAS, retried connection)
+                    return _note_info(path, False) if landed["v"] else _note_gone(path)
+                return _note_info(path, path == "/w/dst")
+            if method == "start":
+                landed["v"] = True
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        out = await move_files(
+            mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True
+        )
+        assert "Replaced" not in out, out
+
+    @respx.mock
+    async def test_refused_call_leaves_no_task(self, mock_client: DsmClient) -> None:
+        """A call refused by its source check, with lookups still pending or failing, leaves
+        no task running and logs nothing."""
+        loop = asyncio.get_running_loop()
+        errors: list[dict] = []
+        loop.set_exception_handler(lambda _l, ctx: errors.append(ctx))
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            path = p.get("path", "")
+            if p.get("method") == "getinfo":
+                if path.startswith("/w/dst/"):
+                    await asyncio.sleep(0.05)
+                    return httpx.Response(502, text="bad")
+                if path == "/w/src/b.txt":
+                    return _note_gone(path)
+                return _note_info(path, path == "/w/dst")
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError):
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a.txt", "/w/src/b.txt"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        await asyncio.sleep(0.2)
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        gc.collect()
+        await asyncio.sleep(0)
+        assert not pending and not errors
+
+    @respx.mock
+    async def test_a_failed_lookup_s_error_is_retrieved(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lookup that failed while a refusal was on its way is marked seen (its cancel()),
+        so asyncio never logs "exception was never retrieved" for it."""
+        futures: list[asyncio.Future[Any]] = []
+        real = asyncio.ensure_future
+
+        def spy(coro: Any) -> asyncio.Future[Any]:
+            future = real(coro)
+            futures.append(future)
+            return future
+
+        monkeypatch.setattr(
+            "mcp_synology.modules.filestation.operations.asyncio.ensure_future", spy
+        )
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            path = p.get("path", "")
+            if p.get("method") == "getinfo":
+                if path.startswith("/w/dst/"):
+                    raise httpx.ConnectError("boom")
+                if path == "/w/src/b.txt":
+                    await asyncio.sleep(0.05)
+                    return _note_gone(path)
+                return _note_info(path, path == "/w/dst")
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError):
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a.txt", "/w/src/b.txt"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        done = [f for f in futures if f.done() and not f.cancelled()]
+        # asyncio's own flag for "not retrieved": set on failure, cleared by exception(). Read
+        # first: calling exception() here would clear it.
+        unretrieved = [f._log_traceback for f in done]  # type: ignore[attr-defined]
+        assert any(f.exception() for f in done), futures  # the lookups did fail
+        assert not any(unretrieved), unretrieved
+
+    @respx.mock
+    async def test_cancel_mid_wait(self, mock_client: DsmClient) -> None:
+        """A call cancelled while its lookups wait leaves no task running and logs nothing."""
+        loop = asyncio.get_running_loop()
+        errors: list[dict] = []
+        loop.set_exception_handler(lambda _l, ctx: errors.append(ctx))
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            path, method = p.get("path", ""), p.get("method", "")
+            if method == "getinfo":
+                if path.startswith("/w/dst/"):
+                    await asyncio.sleep(5)
+                    return _note_gone(path)
+                return _note_info(path, path == "/w/dst")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+            if method == "status":
+                return httpx.Response(200, json={"success": True, "data": {"finished": False}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        t = asyncio.ensure_future(
+            copy_files(mock_client, paths=["/w/src/a.txt"], dest_folder="/w/dst", overwrite=True)
+        )
+        await asyncio.sleep(0.5)
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+        await asyncio.sleep(0.2)
+        pending = [x for x in asyncio.all_tasks() if x is not asyncio.current_task()]
+        assert not pending and not errors
+
+    @respx.mock
+    async def test_burst(self, mock_client: DsmClient) -> None:
+        """An overwrite of 300 sources keeps at most a few requests in flight: the lookups
+        are capped at 4 (pre-QA r2 on #623)."""
+        state = {"now": 0, "max": 0}
+
+        async def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            path, method = p.get("path", ""), p.get("method", "")
+            state["now"] += 1
+            state["max"] = max(state["max"], state["now"])
+            try:
+                await asyncio.sleep(0.02)
+                if method == "getinfo":
+                    if path.startswith("/w/dst/"):
+                        return _note_gone(path)
+                    return _note_info(path, path == "/w/dst")
+                if method == "start":
+                    return httpx.Response(200, json={"success": True, "data": {"taskid": "t1"}})
+                if method == "status":
+                    return httpx.Response(200, json={"success": True, "data": {"finished": True}})
+                return httpx.Response(200, json={"success": True, "data": {}})
+            finally:
+                state["now"] -= 1
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        await copy_files(
+            mock_client,
+            paths=[f"/w/src/f{i}" for i in range(300)],
+            dest_folder="/w/dst",
+            overwrite=True,
+        )
+        # The lookups are capped (4) so the checks and starts aren't queued behind a burst.
+        assert state["max"] <= 6, state
+
+
+class TestSourcesDsmWontShow:
+    """Pre-QA r3 on #623 (#620's class): a source DSM answered 407 for was refused as "not
+    found" with "retry with paths that exist". Each path is now named in words, and the code
+    follows DSM's."""
+
+    @staticmethod
+    def _dsm(codes: dict[str, int]) -> Any:
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            if p.get("method") == "getinfo":
+                path = p["path"]
+                if path in codes:
+                    entry: dict[str, Any] = {"code": codes[path], "path": path}
+                else:
+                    entry = {"isdir": path == "/w/dst", "path": path, "name": path.rsplit("/")[-1]}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return respond
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [407, 105])
+    @pytest.mark.parametrize("tool", ["copy", "move", "delete"])
+    async def test_no_permission_is_permission_denied(
+        self, mock_client: DsmClient, tool: str, code: int
+    ) -> None:
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/locked": code})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            if tool == "delete":
+                await delete_files(mock_client, paths=["/w/locked"])
+            else:
+                fn = copy_files if tool == "copy" else move_files
+                await fn(mock_client, paths=["/w/locked"], dest_folder="/w/dst")
+        err = json.loads(str(exc_info.value))["error"]
+        label = {"copy": "Copy", "move": "Move", "delete": "Delete"}[tool]
+        past = {"copy": "copied", "move": "moved", "delete": "deleted"}[tool]
+        assert err["code"] == "permission_denied", err
+        assert err["message"] == (
+            f"{label} files refused: /w/locked: no permission (DSM error {code}). "
+            f"Nothing was {past}."
+        )
+        assert err["suggestion"] == error_from_code(407, "SYNO.FileStation.List").suggestion
+        assert not any(c.request.url.params.get("method") == "start" for c in route.calls)
+
+    @respx.mock
+    async def test_a_mix_names_each_and_gives_each_kind_s_advice(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"/w/gone": 408, "/w/locked": 407})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(mock_client, paths=["/w/gone", "/w/locked"], dest_folder="/w/dst")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "not_found", err
+        assert err["message"] == (
+            "Copy files refused: /w/gone: doesn't exist (DSM error 408); "
+            "/w/locked: no permission (DSM error 407). Nothing was copied."
+        )
+        perm = error_from_code(407, "SYNO.FileStation.List").suggestion
+        assert err["suggestion"] == (
+            "Use list_files or search_files to find the correct path. "
+            f"For one with no permission: {perm}"
+        )
+
+    @respx.mock
+    async def test_a_call_failing_later_names_what_done_items_replaced(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r4 on #623: a copy whose second item failed said a.txt was copied, not that
+        it replaced the a.txt that was there."""
+        exists = {"/w/dst": True, "/w/dst/a.txt": False, "/w/src/a.txt": False, "/w/src/f": True}
+        starts: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                starts.append(p["path"])
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data: dict[str, Any] = {"finished": True, "processed_size": 1}
+                if len(starts) == 2:
+                    data = {"finished": True, "error": {"code": 1004}, "path": "/w/src/f"}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a.txt", "/w/src/f"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/a.txt. Of what was copied, these "
+            "replaced what was already there: /w/src/a.txt. A file replaced this way may not "
+            "be in the recycle bin."
+        ), message
+
+    @staticmethod
+    def _failing_second(exists: dict[str, bool], fail_at: int = 2) -> Any:
+        """getinfo from ``exists`` (path -> isdir; others 408); the ``fail_at``-th start's
+        task fails with 1004."""
+        starts: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                starts.append(p["path"])
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data: dict[str, Any] = {"finished": True, "processed_size": 1}
+                if len(starts) == fail_at:
+                    data = {"finished": True, "error": {"code": 1004}, "path": starts[-1]}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        return respond
+
+    @respx.mock
+    async def test_a_restore_carries_the_note_across_its_destinations(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r5 on #623: each destination is its own group; the second group's failure
+        still names what the first replaced."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing_second(
+                {
+                    "/s": True,
+                    "/s/x": True,
+                    "/s/y": True,
+                    "/s/x/a": False,
+                    "/s/#recycle/x/a": False,
+                    "/s/#recycle/y/b": False,
+                }
+            )
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await restore_from_recycle_bin(
+                mock_client, share="s", paths=["x/a", "y/b"], overwrite=True
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already restored before this failure: /s/#recycle/x/a (to /s/x). Of what was "
+            "restored, these replaced what was already there: /s/#recycle/x/a (to /s/x). A file "
+            "replaced this way may not be in the recycle bin."
+        ), message
+
+    @respx.mock
+    async def test_a_merged_folder_is_named_when_a_later_item_fails(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing_second(
+                {
+                    "/w/dst": True,
+                    "/w/dst/f": True,
+                    "/w/dst/a.txt": False,
+                    "/w/src/f": True,
+                    "/w/src/a.txt": False,
+                    "/w/src/g": False,
+                }
+            )
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/f", "/w/src/g"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/f. Of what was copied, these merged "
+            "into the folder(s) already there, replacing files with the same names: /w/src/f. "
+            "A file replaced this way may not be in the recycle bin."
+        ), message
+
+    @respx.mock
+    async def test_a_replaced_file_and_a_merged_folder_both_named_on_failure(
+        self, mock_client: DsmClient
+    ) -> None:
+        state = {"starts": 0}
+        base = self._failing_second(
+            {
+                "/w/dst": True,
+                "/w/dst/f": True,
+                "/w/dst/a.txt": False,
+                "/w/src/f": True,
+                "/w/src/a.txt": False,
+                "/w/src/g": False,
+            }
+        )
+
+        def third_fails(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            if p.get("method") == "start":
+                state["starts"] += 1
+            if p.get("method") == "status" and state["starts"] == 3:
+                data = {"finished": True, "error": {"code": 1004}, "path": "/w/src/g"}
+                return httpx.Response(200, json={"success": True, "data": data})
+            if p.get("method") == "status":
+                data2: dict[str, Any] = {"finished": True, "processed_size": 1}
+                return httpx.Response(200, json={"success": True, "data": data2})
+            return base(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=third_fails)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a.txt", "/w/src/f", "/w/src/g"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/a.txt, /w/src/f. Of what was copied, "
+            "these replaced what was already there: /w/src/a.txt; these merged into the "
+            "folder(s) already there, replacing files with the same names: /w/src/f. A file "
+            "replaced this way may not be in the recycle bin."
+        ), message
+
+    @respx.mock
+    async def test_a_restore_keeps_the_note_for_a_parent_that_was_there(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA round 1 on #623: a parent of a re-created folder was counted as made even when
+        it was there, so restoring ``a`` into the existing /s/a said nothing."""
+        exists = {
+            "/s": True,
+            "/s/a": True,
+            "/s/#recycle/a": True,
+            "/s/#recycle/a/b/f.txt": False,
+        }
+        created: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            api, method = p.get("api", ""), p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if api == "SYNO.FileStation.CreateFolder":
+                folder = f"{p['folder_path']}/{json.loads(p['name'])}"
+                created.append(folder)
+                exists[folder] = True
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": folder}]}}
+                )
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data = {"finished": True, "processed_size": 1}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        out = await restore_from_recycle_bin(
+            mock_client, share="s", paths=["a/b/f.txt", "a"], overwrite=True
+        )
+        assert created == ["/s/a/b"], created
+        assert (
+            "Merged into the folder(s) already there, replacing files with the same names:\n  a"
+            in out
+        ), out
+
+    @respx.mock
+    async def test_the_failure_note_names_the_other_kind_and_unchecked_items(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r6 on #623: on a failure, a kind mismatch is named without the recycle-bin
+        line, and a failed lookup isn't read as "nothing was there"."""
+        base = self._failing_second(
+            {
+                "/w/dst": True,
+                "/w/dst/f": True,
+                "/w/src/f": False,
+                "/w/src/u.txt": False,
+                "/w/src/g": False,
+            },
+            fail_at=3,
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.params.get("path") == "/w/dst/u.txt":
+                return httpx.Response(502, text="bad gateway")
+            return base(request)
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/f", "/w/src/u.txt", "/w/src/g"],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith(
+            "Already copied before this failure: /w/src/f, /w/src/u.txt. Of what was copied, "
+            "these met an item of the other kind (a file or a folder) under the same name, and "
+            "what DSM did with it isn't known: /w/src/f; for these, whether anything was "
+            "already there couldn't be checked: /w/src/u.txt."
+        ), message
+        assert "recycle bin" not in message, message
+
+    @respx.mock
+    async def test_a_not_started_name_cant_move_the_note(self, mock_client: DsmClient) -> None:
+        """Pre-QA r6 on #623: the note went before the last ". Not started: " in the message,
+        which a source's own name could hold. A name with ", " is quoted in the note."""
+        evil = "/w/src/b. Not started: c"
+        exists = {
+            "/w/dst": True,
+            "/w/dst/a, b": False,
+            "/w/src/a, b": False,
+            "/w/src/f": False,
+            evil: False,
+        }
+        starts: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            p = dict(request.url.params)
+            method = p.get("method", "")
+            if method == "getinfo":
+                path = p["path"]
+                if path in exists:
+                    entry: dict[str, Any] = {"isdir": exists[path], "path": path, "name": "x"}
+                else:
+                    entry = {"code": 408, "path": path}
+                return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+            if method == "start":
+                starts.append(p["path"])
+                if len(starts) == 2:
+                    raise httpx.ConnectError("down")
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
+            if method == "status":
+                data = {"finished": True, "processed_size": 1}
+                return httpx.Response(200, json={"success": True, "data": data})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await copy_files(
+                mock_client,
+                paths=["/w/src/a, b", "/w/src/f", evil],
+                dest_folder="/w/dst",
+                overwrite=True,
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert (
+            "Already copied before this failure: /w/src/a, b. Of what was copied, these "
+            "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
+            "be in the recycle bin. Not started: "
+        ) in message, message
+        assert message.endswith("Not started: /w/src/b. Not started: c."), message

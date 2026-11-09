@@ -250,6 +250,42 @@ class TestUploadFile:
         assert "[+]" in result
         assert "test.txt" in result
 
+    @pytest.mark.parametrize(
+        ("there", "said"),
+        [(True, True), (False, False), (None, False), ("folder", False)],
+    )
+    @respx.mock
+    async def test_overwrite_says_when_it_replaced_a_file(
+        self, mock_client: DsmClient, tmp_path: Path, there: bool | str | None, said: bool
+    ) -> None:
+        """#620 (0.11.0rc3 live test): an overwrite read like a plain upload. ``there``: the
+        file was there (True), wasn't (False), the lookup failed (None), or a folder has the
+        name ("folder"): only a file there is said to be replaced."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("updated content")
+        info: dict[str, object]
+        if there is None:
+            info = {"success": False, "error": {"code": 119}}
+        elif there:
+            isdir = there == "folder"
+            info = {"success": True, "data": {"files": [{"isdir": isdir, "path": "/v/test.txt"}]}}
+        else:
+            info = {"success": True, "data": {"files": [{"code": 408, "path": "/v/test.txt"}]}}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json=info)
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        result = await upload_file(
+            mock_client, local_path=str(local_file), dest_folder="/v", overwrite=True
+        )
+        assert result.startswith("[+] Uploaded test.txt"), result
+        assert (
+            "\n    It replaced the test.txt that was there. A file replaced this way may not be "
+            "in the recycle bin." in result
+        ) is said, result
+        # A failed lookup says so (QA round 1 on #623).
+        assert ("Couldn't check whether a file named test.txt was already there." in result) is (
+            there is None
+        ), result
+
     @respx.mock
     async def test_upload_custom_filename(self, mock_client: DsmClient, tmp_path: Path) -> None:
         local_file = tmp_path / "test.txt"
@@ -364,7 +400,9 @@ class TestDownloadFile:
         assert str(existing) in body["error"]["message"]
 
     @respx.mock
-    async def test_download_overwrite_success(self, mock_client: DsmClient, tmp_path: Path) -> None:
+    async def test_download_overwrite_success(
+        self, mock_client: DsmClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         existing = tmp_path / "movie.mkv"
         existing.write_text("old content")
 
@@ -374,14 +412,35 @@ class TestDownloadFile:
             headers={"content-type": "application/octet-stream"},
         )
 
-        result = await download_file(
-            mock_client,
-            path="/video/movie.mkv",
-            dest_folder=str(tmp_path),
-            overwrite=True,
-        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.transfer"):
+            result = await download_file(
+                mock_client,
+                path="/video/movie.mkv",
+                dest_folder=str(tmp_path),
+                overwrite=True,
+            )
         assert "[+]" in result
         assert existing.read_bytes() == new_content
+        assert f"Downloaded /video/movie.mkv to {existing} (replaced a file there: True)" in (
+            caplog.text
+        )
+        # #625: an overwrite says it replaced the file (worded like upload_file's note in #623).
+        assert result.splitlines()[1:] == ["    It replaced the movie.mkv that was there."]
+
+    @respx.mock
+    async def test_download_overwrite_with_nothing_there_says_nothing_extra(
+        self, mock_client: DsmClient, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"data", headers={"content-type": "application/octet-stream"}
+        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.transfer"):
+            result = await download_file(
+                mock_client, path="/video/movie.mkv", dest_folder=str(tmp_path), overwrite=True
+            )
+        assert result.startswith("[+] Downloaded movie.mkv"), result
+        assert "replaced" not in result, result
+        assert "(replaced a file there: False)" in caplog.text
 
     @respx.mock
     async def test_download_custom_filename(self, mock_client: DsmClient, tmp_path: Path) -> None:
@@ -582,10 +641,11 @@ class TestDownloadFile:
         assert err["code"] == "already_exists"
         assert str(tmp_path / "shows.zip") in err["message"]
         assert calls == ["getinfo"]
-        await download_file(
+        out = await download_file(
             mock_client, path="/video/shows", dest_folder=str(tmp_path), overwrite=True
         )
         assert (tmp_path / "shows.zip").read_bytes() == b"PK\x03\x04"
+        assert "\n    It replaced the shows.zip that was there." in out, out
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -1224,6 +1284,28 @@ class TestDownloadFile:
         # Refused before the download: only the getinfo check, which picks the local
         # name (a folder's gets ".zip"), went to the NAS.
         assert [c.request.url.params.get("method") for c in route.calls] == ["getinfo"]
+
+    @respx.mock
+    @pytest.mark.parametrize("target", ["missing-target", "real.txt"])
+    async def test_download_overwrite_over_a_symlink_says_it_replaced_the_link(
+        self, mock_client: DsmClient, tmp_path: Path, target: str
+    ) -> None:
+        """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists),
+        so the note says it was replaced. Pre-QA r3: a link is replaced, not its target."""
+        (tmp_path / "real.txt").write_bytes(b"keep")
+        (tmp_path / "report.txt").symlink_to(tmp_path / target)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new", headers={"content-type": "application/octet-stream"}
+        )
+        result = await download_file(
+            mock_client, path="/docs/report.txt", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert result.splitlines()[1:] == [
+            "    It replaced the symlink report.txt that was there (its target is untouched)."
+        ]
+        assert (tmp_path / "real.txt").read_bytes() == b"keep"
+        assert not (tmp_path / "report.txt").is_symlink()
+        assert (tmp_path / "report.txt").read_bytes() == b"new"
 
     @pytest.mark.parametrize("overwrite", [False, True])
     @respx.mock

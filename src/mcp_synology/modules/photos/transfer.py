@@ -158,7 +158,7 @@ async def download_photos(
         synology_error_response(op, e)
     found = {int(i["id"]): i for i in data.get("list", [])}
     lines: list[str] = []
-    done = kept = 0
+    done = kept = replaced = 0
     retry = False  # a failure that can succeed on a later call
     used: set[str] = set()
     for n, item_id in enumerate(unique):
@@ -193,6 +193,7 @@ async def download_photos(
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
+            replaced += result.endswith((f"({_REPLACED})", f"({_REPLACED_LINK})"))
             lines.append(f"  {item_id}  {name}  {result}")
     if len(unique) > 1 and retry:
         # A name depends on every item in the call, so retrying only the ones that failed
@@ -207,6 +208,7 @@ async def download_photos(
         )
     what = "original" if size == "original" else f"{size} preview"
     there = f", {kept:,} already there" if kept else ""
+    there += f", {replaced:,} replaced a file that was there" if replaced else ""
     head = (
         f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} "
         f"({what}, {space_label(sp)}{there})"
@@ -215,6 +217,8 @@ async def download_photos(
 
 
 _ALREADY_THERE = "already there"
+_REPLACED = "replaced the file that was there"
+_REPLACED_LINK = "replaced the symlink that was there; its target is untouched"
 
 
 def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
@@ -264,6 +268,11 @@ async def _download_one(
         return "not downloaded: a folder has that name", False
     if os.path.lexists(dest) and not overwrite:
         return _existing(dest, item, size), False
+    # With overwrite, the line says a local file was replaced (#625): it read like a new
+    # one. Names are unique within a call, so it's never this call's own file. Checked before
+    # the download starts; a file that appears while it streams is replaced without the note.
+    replaced = os.path.lexists(dest)
+    replaced_link = replaced and dest.is_symlink()  # the link, not its target
     if size == "original":
         api, method, version = ph.api("Download"), "download", 1
         params = {"item_id": json.dumps([int(item["id"])]), "force_download": "true"}
@@ -305,7 +314,9 @@ async def _download_one(
             return f"not downloaded: no space left on the local disk{detail}", True
         # A permission or read-only folder doesn't change by repeating the call.
         return f"not downloaded: couldn't write the file ({e.strerror or e})", False
-    return format_size(written), False
+    logger.debug("Downloaded item %s to %s (replaced a file there: %s)", item["id"], dest, replaced)
+    note = f" ({_REPLACED_LINK})" if replaced_link else f" ({_REPLACED})" if replaced else ""
+    return format_size(written) + note, False
 
 
 # -- upload_photos ------------------------------------------------------------------

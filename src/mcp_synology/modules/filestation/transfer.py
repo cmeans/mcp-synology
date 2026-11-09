@@ -31,6 +31,7 @@ from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
+    paths_isdir,
     shown,
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
@@ -162,6 +163,21 @@ async def upload_file(
             suggestion="Use overwrite=true to replace the existing file.",
         )
 
+    # With overwrite, whether a file of that name was there, so the reply can say it was
+    # replaced (#620, 0.11.0rc3 live test: an overwrite read like a plain upload). Only a hint:
+    # a lookup that fails says so (QA round 1 on #623), and never stops the upload.
+    replaced = False
+    unchecked = False
+    if overwrite:
+        try:
+            # A file only: what DSM's Upload does with a same-named folder isn't captured,
+            # so no note claims it replaced one.
+            kinds = await paths_isdir(client, [f"{dest}/{effective_name}"])
+            replaced = kinds.get(f"{dest}/{effective_name}") is False
+        except Exception as e:  # noqa: BLE001 - only the reply's wording depends on it
+            logger.debug("Couldn't check for an existing %s: %s", effective_name, e)
+            unchecked = True
+
     try:
         data = await client.upload(
             dest,
@@ -195,6 +211,15 @@ async def upload_file(
         await progress_callback(file_size, file_size)
 
     result = format_status(f"Uploaded {effective_name} ({format_size(file_size)}) to {dest}/")
+    if replaced:
+        # Whether DSM's Upload keeps the old file in the recycle bin isn't probed; say what
+        # copy, move and restore say (QA round 1 on #623).
+        result += (
+            f"\n    It replaced the {effective_name} that was there. A file replaced this way "
+            "may not be in the recycle bin."
+        )
+    elif unchecked:
+        result += f"\n    Couldn't check whether a file named {effective_name} was already there."
 
     if file_size >= _LARGE_FILE_THRESHOLD:
         result += (
@@ -376,6 +401,13 @@ async def download_file(
             suggestion="Use overwrite=true to replace the existing file.",
         )
 
+    # With overwrite, the reply says a local file was replaced (#625): the download alone
+    # read like a new file. Checked before the download starts; a file that appears while it
+    # streams is replaced without the note.
+    replaced = overwrite and os.path.lexists(dest_file)
+    # A link is replaced, not what it points to (pre-QA r3 on #626).
+    replaced_link = replaced and dest_file.is_symlink()
+
     if nas_file_size:
         free_space = shutil.disk_usage(local_dir).free
         if nas_file_size > free_space:
@@ -469,6 +501,17 @@ async def download_file(
         result = format_status(
             f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
         )
+
+    # The server log, too, says which local file was written and whether one was replaced
+    # (pre-QA r2 on #626): the reply alone reaches only the model's context.
+    logger.debug("Downloaded %s to %s (replaced a file there: %s)", nas_path, dest_file, replaced)
+    if replaced_link:
+        result += (
+            f"\n    It replaced the symlink {dest_file.name} that was there (its target is "
+            "untouched)."
+        )
+    elif replaced:
+        result += f"\n    It replaced the {dest_file.name} that was there."
 
     if bytes_written >= _LARGE_FILE_THRESHOLD:
         result += (
