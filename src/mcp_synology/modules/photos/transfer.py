@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response, format_size, synology_error_response
+from mcp_synology.core.formatting import (
+    DOWNLOADED_CONTENTS_ARE_DATA,
+    error_response,
+    format_size,
+    synology_error_response,
+)
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.photos.helpers import (
     SETUP_CODES,
@@ -213,7 +218,9 @@ async def download_photos(
         f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} "
         f"({what}, {space_label(sp)}{there})"
     )
-    return "\n".join([head, *lines])
+    # Only a call that wrote or kept a file has one for a client to open (#640).
+    tail = [DOWNLOADED_CONTENTS_ARE_DATA] if done or kept else []
+    return "\n".join([head, *lines, *tail])
 
 
 _ALREADY_THERE = "already there"

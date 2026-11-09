@@ -13,6 +13,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.formatting import DOWNLOADED_CONTENTS_ARE_DATA
 from mcp_synology.modules.photos.transfer import (
     _dest_name,
     _name_key,
@@ -328,11 +329,12 @@ class TestOriginals:
         assert out.startswith("Downloaded 1 of 3")
         assert "15  beach-sunset_1.jpg: not downloaded: couldn't reach DSM (ReadTimeout)" in out
         assert "not tried: 16" in out
-        assert out.endswith(
+        assert out.splitlines()[-2] == (
             "To retry, repeat this call with the same ids in the same order (overwrite=false "
             "keeps the files already written): names depend on every item in the call, and "
             "shift if an item that wasn't found is found then."
         )
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA  # one was written (#640)
         assert len(fake.of("SYNO.Foto.Download")) == 2
 
 
@@ -352,6 +354,8 @@ class TestPreviews:
         assert thumb.params == {"id": 12, "cache_key": "12_1792274689", "type": "unit", "size": "m"}
         assert (tmp_path / "forest-trail_m.jpg").read_bytes() == b"jpeg"
         assert "isn't generated yet (converting); try again shortly" in out
+        # A file was written, so the reply's last line says what's in it is data (#640).
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA
 
     @respx.mock
     async def test_previews_sharing_a_stem_keep_both(self, tmp_path: Path) -> None:
@@ -379,6 +383,7 @@ class TestPreviews:
                 client, ids=[12], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
         assert "no m preview for this item (broken)" in out
+        assert DOWNLOADED_CONTENTS_ARE_DATA not in out  # nothing written (#640)
 
     @respx.mock
     async def test_404_page_reported(self, tmp_path: Path) -> None:
