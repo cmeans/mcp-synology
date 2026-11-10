@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import error_response, format_key_value, format_table
 from mcp_synology.modules.storage.helpers import (
+    SMART_API,
     STORAGE_API,
     Sections,
     as_dict,
@@ -23,7 +24,12 @@ from mcp_synology.modules.storage.helpers import (
     size,
     value_text,
 )
-from mcp_synology.modules.storage.overview import disk_notes, disk_roles
+from mcp_synology.modules.storage.overview import (
+    disk_notes,
+    disk_roles,
+    low_performance,
+    slow_disks,
+)
 
 if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
@@ -60,7 +66,7 @@ _KNOWN = {
     "summary_status_category",
 }
 
-_SMART = "SYNO.Storage.CGI.Smart"
+_SMART = SMART_API
 _DISK = "SYNO.Core.Storage.Disk"
 
 # get_health_info's monthly series: unc = bad sectors, idnf = ID-not-found errors.
@@ -95,8 +101,14 @@ def location(disk: dict[str, Any]) -> str:
     return ", ".join([where, *extra])
 
 
-def disk_pairs(disk: dict[str, Any], role: str, tasks: Any) -> list[tuple[str, str]]:
+def disk_pairs(
+    disk: dict[str, Any], role: str, tasks: Any, slow: str | None = None
+) -> list[tuple[str, str]]:
+    """``slow``: DSM's low-performance-in-RAID value for the disk, when it's raised (#659)."""
     notes = disk_notes(disk, tasks)
+    status = str(disk.get("overview_status") or disk.get("status") or "—")
+    if slow:
+        status += f" (low performance in RAID: {slow})"
     return [
         ("Device", str(disk.get("device") or "—")),
         ("Model", f"{str(disk.get('vendor') or '').strip()} {disk.get('model') or ''}".strip()),
@@ -105,7 +117,7 @@ def disk_pairs(disk: dict[str, Any], role: str, tasks: Any) -> list[tuple[str, s
         ("Size", size(disk.get("size_total"))),
         ("Type", disk_type(disk)),
         ("Temperature", f"{disk.get('temp')}°C" if disk.get("temp") is not None else "—"),
-        ("Status", str(disk.get("overview_status") or disk.get("status") or "—")),
+        ("Status", status),
         ("S.M.A.R.T. status", str(disk.get("smart_status") or "—")),
         ("Bad sectors", _metric(disk.get("unc"))),
         (
@@ -140,10 +152,12 @@ async def list_disks(client: DsmClient) -> str:
         return "No disks reported."
     optional = Sections("List disks")
     tasks = await optional.get(client, "Running tests", STORAGE_API, "get_sche_task_list")
+    slow = await slow_disks(client, info, optional)
     roles = disk_roles(info)
     blocks = []
     for disk in disks:
-        pairs = disk_pairs(disk, roles.get(str(disk.get("id")), "—"), tasks)
+        disk_id = str(disk.get("id"))
+        pairs = disk_pairs(disk, roles.get(disk_id, "—"), tasks, slow.get(disk_id))
         pairs.extend(other_fields(disk, _KNOWN))
         blocks.append(format_key_value(pairs, title=disk_label(disk)))
     text = "\n\n".join(blocks)
@@ -302,7 +316,9 @@ async def get_disk(client: DsmClient, disk: str, history_limit: int = 10) -> str
         client, "Health prediction", _DISK, "disk_health_prediction_log_get"
     )
 
-    pairs = disk_pairs(d, disk_roles(info).get(str(d.get("id")), "—"), tasks)
+    pairs = disk_pairs(
+        d, disk_roles(info).get(str(d.get("id")), "—"), tasks, low_performance(health)
+    )
     if isinstance(wcache, dict) and "wcache_en" in wcache:
         pairs.append(("Write cache", "on" if wcache["wcache_en"] else "off"))
     if isinstance(warnings, list):

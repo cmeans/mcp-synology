@@ -111,10 +111,20 @@ async def list_external_storage(client: DsmClient) -> str:
     optional = Sections(OPERATION)
     usb = _devices(await _usb(client, optional))
     esata_api = "SYNO.Core.ExternalDevice.Storage.eSATA"
-    probe = Sections(OPERATION)  # eSATA with `additional` is unverified: fall back without it
-    esata = _devices(await probe.get(client, "eSATA drives", esata_api, "list", _ALL))
-    if esata is None:
+    # eSATA with `additional` is unverified: fall back without it. The probe shares the stall
+    # (a request DSM didn't answer sends nothing more), and its notes count only then. After an
+    # earlier stall it isn't tried: the skip goes in the shared note (QA round 1 on #661).
+    if optional.stalled:
         esata = _devices(await optional.get(client, "eSATA drives", esata_api, "list"))
+    else:
+        probe = Sections(OPERATION)
+        esata = _devices(await probe.get(client, "eSATA drives", esata_api, "list", _ALL))
+        if probe.stalled:
+            optional.stalled = True
+            optional.unreached = probe.unreached
+            optional.notes.extend(probe.notes)
+        elif esata is None:
+            esata = _devices(await optional.get(client, "eSATA drives", esata_api, "list"))
     eunits = _devices(
         await optional.get(
             client, "Expansion units", "SYNO.Core.ExternalDevice.Storage.EUnit", "list"

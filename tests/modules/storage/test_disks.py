@@ -4,10 +4,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
+from mcp_synology.core.errors import DsmReplyError
 from mcp_synology.modules.storage.disks import get_disk, list_disks, smart_table, trend_lines
-from tests.modules.storage.dsm import VDSM, Replay, flat, load_info_with, ok, run, run_error
+from mcp_synology.modules.storage.overview import get_storage_overview, low_performance
+from tests.modules.storage.dsm import (
+    VDSM,
+    Replay,
+    err,
+    flat,
+    load_info_with,
+    ok,
+    run,
+    run_error,
+)
 
 
 async def test_real_nas_list() -> None:
@@ -21,6 +33,30 @@ async def test_real_nas_list() -> None:
     assert flat("Bad sectors: —") in flat(text)  # the SSD doesn't report it
     assert flat("Type: SSD SATA") in flat(text)
     assert "i18nNamingInfo" not in text
+
+
+async def test_real_nas_low_performance_in_raid() -> None:
+    """#659: DSM flags sdb as lagging its RAID only in sdb's own get_health_info. list_disks
+    reads each disk's and shows the flag on that disk's status, and only there."""
+    text, replay = await run(list_disks)
+    assert replay.unmatched == []
+    flagged = [line for line in text.splitlines() if "low performance in RAID" in line]
+    assert [line.split(":", 1)[1].strip() for line in flagged] == [
+        "normal (low performance in RAID: now)"
+    ]
+    sdb = text.split("Drive 2 (sdb)", 1)[1].split("\n\nDrive ", 1)[0]
+    assert flat("Status: normal (low performance in RAID: now)") in flat(sdb)
+    devices = [c["device"] for c in replay.calls("SYNO.Storage.CGI.Smart", "get_health_info")]
+    assert devices == [f"/dev/sd{x}" for x in "abcdef"]
+
+
+async def test_real_nas_get_disk_low_performance_in_raid() -> None:
+    # The capture has only get_health_info for sdb, sdc and sdd (#659), so their other sections
+    # are unmatched here and read as notes; the status line is what's checked.
+    text, _ = await run(get_disk, disk="sdb")
+    assert flat("Status: normal (low performance in RAID: now)") in flat(text)
+    other, _ = await run(get_disk, disk="sdc")
+    assert "low performance" not in other
 
 
 @pytest.mark.parametrize("fixture", VDSM)
@@ -131,3 +167,276 @@ def test_smart_table_missing_cell_is_a_dash() -> None:
     """Pre-QA sibling of QA R1 #3: a S.M.A.R.T. attribute without ``raw`` showed None."""
     table = smart_table({"smartInfo": [{"id": 5, "name": "Reallocated", "current": 100}]})
     assert "None" not in table and "—" in table
+
+
+@pytest.mark.parametrize(
+    ("health", "expected"),
+    [
+        ({"healthInfo": {"overview": {"low_performance_in_raid": "now"}}}, "now"),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": "normal"}}}, None),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": ""}}}, None),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": False}}}, None),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": {"x": 1}}}}, None),
+        ({"healthInfo": {"overview": {}}}, None),
+        ({"healthInfo": {}}, None),
+        ({"healthInfo": None}, None),
+        (None, None),
+        ([], None),
+    ],
+)
+def test_low_performance(health: Any, expected: str | None) -> None:
+    assert low_performance(health) == expected
+
+
+@pytest.mark.parametrize("reply", [500, err(117)], ids=["http-500", "dsm-117"])
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_a_disk_whose_flag_cant_be_read_is_a_note(tool: Any, reply: Any) -> None:
+    """Pre-QA on #661: one disk's get_health_info failing leaves a note naming the flag, not
+    the disk's health, and the tool still answers."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        replay.answer(
+            {"api": "SYNO.Storage.CGI.Smart", "method": "get_health_info", "device": "/dev/sda"},
+            reply,
+        )
+
+    text, _ = await run(tool, setup=setup)
+    assert "Drive 1 (sda) low-performance-in-RAID flag:" in text
+    assert "Drive 1 (sda) health" not in text
+    assert "low performance in RAID: now" in text or "low performance in RAID (now)" in text
+
+
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_without_the_smart_api_one_note(tool: Any) -> None:
+    def setup(replay: Replay, client: Any) -> None:
+        client._api_cache.pop("SYNO.Storage.CGI.Smart", None)
+
+    text, replay = await run(tool, setup=setup)
+    assert text.count("Low-performance-in-RAID flags: not available on this NAS") == 1
+    assert "low-performance-in-RAID flag:" not in text
+    assert replay.calls("SYNO.Storage.CGI.Smart", "get_health_info") == []
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [httpx.ReadTimeout("slow"), httpx.RemoteProtocolError("dropped")],
+    ids=["timeout", "drop"],
+)
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_a_disk_whose_flag_gets_no_answer_is_a_note(tool: Any, exc: Exception) -> None:
+    """Pre-QA r2 on #661: a transport error on one disk's flag failed the whole tool."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def reply(query: dict[str, str]) -> Any:
+            if query.get("method") == "get_health_info" and query.get("device") == "/dev/sda":
+                raise exc
+            return original(query)
+
+        replay._reply = reply  # type: ignore[method-assign]
+
+    text, _ = await run(tool, setup=setup)
+    assert (
+        f"Drive 1 (sda) low-performance-in-RAID flag: couldn't be read "
+        f"(no answer: {type(exc).__name__})"
+    ) in text
+    assert "Low-performance-in-RAID flags of the other disks: not read" in text
+    assert "slow" not in text and "dropped" not in text
+
+
+@pytest.mark.parametrize("fixture", VDSM)
+async def test_no_disks_no_flag_note(fixture: str) -> None:
+    """Without disks there's nothing to flag: no note even when the API is missing."""
+
+    def setup(replay: Replay, client: Any) -> None:
+        client._api_cache.pop("SYNO.Storage.CGI.Smart", None)
+
+    text, _ = await run(get_storage_overview, fixture, setup=setup)
+    assert "Low-performance-in-RAID" not in text
+
+
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_after_one_unanswered_request_nothing_more_is_sent(tool: Any) -> None:
+    """Pre-QA r3 on #661: on a NAS that stops answering, each section waited out its own
+    timeout (12 x 30 s for the overview, past claude.ai's 60 s). After the first, the rest
+    aren't sent."""
+    sent_after: list[str] = []
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+        stalled = {"on": False}
+
+        def reply(query: dict[str, str]) -> Any:
+            if query.get("method") == "load_info":
+                return original(query)
+            if stalled["on"]:
+                sent_after.append(query.get("method", ""))
+            stalled["on"] = True
+            raise httpx.ReadTimeout("busy")
+
+        replay._reply = reply  # type: ignore[method-assign]
+
+    text, _ = await run(tool, setup=setup)
+    assert sent_after == []
+    assert text.count("couldn't be read (no answer: ReadTimeout)") == 1
+    assert "not read (DSM didn't answer an earlier request)" in text
+    assert text.count("Low-performance-in-RAID flags") == 1
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectError("refused"),
+        httpx.ConnectTimeout("t"),
+        httpx.PoolTimeout("t"),
+        httpx.ProxyError("tunnel refused"),
+        httpx.UnsupportedProtocol("no scheme"),
+        httpx.LocalProtocolError("bad header"),
+    ],
+    ids=["connect", "connect-timeout", "pool", "proxy", "unsupported-protocol", "local-protocol"],
+)
+async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer(
+    exc: Exception,
+) -> None:
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def reply(query: dict[str, str]) -> Any:
+            if query.get("method") == "get_health_info":
+                raise exc
+            return original(query)
+
+        replay._reply = reply  # type: ignore[method-assign]
+
+    name = type(exc).__name__
+    text, _ = await run(list_disks, setup=setup)
+    assert f"Drive 1 (sda) low-performance-in-RAID flag: couldn't be read ({name})" in text
+    assert f"no answer: {name}" not in text
+    # Pre-QA r6 on #661: the skipped disks' note doesn't say DSM didn't answer either.
+    assert (
+        "Low-performance-in-RAID flags of the other disks: not read (DSM couldn't be reached "
+        "for an earlier request)"
+    ) in text, text
+    assert "didn't answer" not in text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [502, 503, 504, "html"],
+    ids=["502", "503", "504", "non-dsm-page"],
+)
+async def test_a_proxy_error_stalls_too(reply: Any) -> None:
+    """Pre-QA r4 on #661: a proxy's 5xx is how a proxy reports a stall (#282); each later
+    section waited out the proxy's own timeout."""
+    sent_after: list[str] = []
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+        seen = {"first": False}
+
+        def answer(query: dict[str, str]) -> Any:
+            if query.get("method") == "load_info":
+                return original(query)
+            if seen["first"]:
+                sent_after.append(query.get("method", ""))
+            seen["first"] = True
+            if reply == "html":
+                raise DsmReplyError("not DSM's reply")
+            return reply
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(get_storage_overview, setup=setup)
+    assert sent_after == []
+    shown = "no DSM reply" if reply == "html" else f"HTTP {reply}"
+    assert f"couldn't be read ({shown})" in text
+
+
+async def test_a_reply_dsm_sent_but_unreadable_doesnt_stall() -> None:
+    """Pre-QA r5 on #661: colliding escaped keys are a reply DSM did send (retryable=False);
+    later sections are still read."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def answer(query: dict[str, str]) -> Any:
+            if query.get("method") == "load_bad_disks":
+                raise DsmReplyError("colliding keys", retryable=False)
+            return original(query)
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(get_storage_overview, setup=setup)
+    assert "not read (DSM didn't answer" not in text
+    assert "low performance in RAID (now)" in text
+
+
+async def test_skipped_sections_share_one_note() -> None:
+    """Pre-QA r5 on #661: list_snapshots' per-share loop gave one note per share after a stall."""
+    from mcp_synology.modules.storage.helpers import Sections
+
+    optional = Sections("Test")
+    optional.stalled = True
+    optional.notes.append("earlier: couldn't be read (no answer: ReadTimeout)")
+
+    class _Client:
+        _api_cache = {"API": object()}
+
+    for n in range(20):
+        assert await optional.get(_Client(), f"s{n} schedule", "API", "get_schedule") is None  # type: ignore[arg-type]
+    assert optional.notes == [
+        "earlier: couldn't be read (no answer: ReadTimeout)",
+        "s0 schedule and 19 more: not read (DSM didn't answer an earlier request)",
+    ]
+
+
+@pytest.mark.parametrize("stall", ["usb", "esata"])
+async def test_external_storage_sends_one_unanswered_request(stall: str) -> None:
+    """Pre-QA r4 on #661: the eSATA probe had its own Sections, so a stall on USB still sent
+    eSATA, and a stall on the probe resent eSATA without `additional`."""
+    from mcp_synology.modules.storage.external import list_external_storage
+
+    unanswered: list[str] = []
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def answer(query: dict[str, str]) -> Any:
+            api = query.get("api", "")
+            if (stall == "usb" and "USB" in api) or "eSATA" in api or unanswered:
+                unanswered.append(api)
+                raise httpx.ReadTimeout("busy")
+            return original(query)
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(list_external_storage, setup=setup)
+    assert len(unanswered) == 1, unanswered
+    assert text.count("no answer: ReadTimeout") == 1
+    # QA round 1 on #661: the skipped sections share one note, the eSATA probe's included.
+    assert text.count("not read (DSM didn't answer an earlier request)") == 1, text
+    if stall == "usb":
+        assert "eSATA drives and 1 more: not read (DSM didn't answer an earlier request)" in text
+    else:
+        assert "Expansion units: not read (DSM didn't answer an earlier request)" in text
+
+
+async def test_an_esata_probe_that_never_reached_dsm_says_so_for_the_rest() -> None:
+    """Pre-QA r6 on #661: the probe passes on why it stalled, so the sections skipped after it
+    say DSM couldn't be reached, not that it didn't answer."""
+    from mcp_synology.modules.storage.external import list_external_storage
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def answer(query: dict[str, str]) -> Any:
+            if "eSATA" in query.get("api", ""):
+                raise httpx.ProxyError("tunnel refused")
+            return original(query)
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(list_external_storage, setup=setup)
+    assert "eSATA drives: couldn't be read (ProxyError)" in text, text
+    assert "Expansion units: not read (DSM couldn't be reached for an earlier request)" in text

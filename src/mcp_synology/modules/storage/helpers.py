@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -104,12 +106,43 @@ async def call(
         synology_error_response(operation, e)
 
 
+SMART_API = "SYNO.Storage.CGI.Smart"
+
+
 @dataclass
 class Sections:
     """Results of optional calls, with a note for each one that gave nothing."""
 
     operation: str
     notes: list[str] = field(default_factory=list)
+    # Set by the first request DSM didn't answer: a busy NAS would make each later section
+    # wait out its own timeout, past an MCP client's 60 s, so the rest aren't sent.
+    stalled: bool = False
+    # The stall was a request that never reached DSM (``_NOT_SENT``): the skipped sections'
+    # note then says DSM couldn't be reached, not that it didn't answer (pre-QA r6 on #661).
+    unreached: bool = False
+    # Sections skipped since: one shared note, not one each (a loop over 500 shares).
+    _skipped: list[str] = field(default_factory=list)
+    _skip_note: int = -1
+
+    def _skip(self, label: str) -> None:
+        """Note a section not sent after the stall: the first by name, the rest counted."""
+        self._skipped.append(label)
+        more = len(self._skipped) - 1
+        what = self._skipped[0] + (f" and {more} more" if more else "")
+        note = f"{what}: not read ({self.skip_reason})"
+        if self._skip_note < 0:
+            self._skip_note = len(self.notes)
+            self.notes.append(note)
+        else:
+            self.notes[self._skip_note] = note
+
+    @property
+    def skip_reason(self) -> str:
+        """Why sections after the stall weren't sent, for their note."""
+        if self.unreached:
+            return "DSM couldn't be reached for an earlier request"
+        return "DSM didn't answer an earlier request"
 
     async def get(
         self,
@@ -130,11 +163,21 @@ class Sections:
         if api not in client._api_cache:
             self.notes.append(f"{label}: not available on this NAS")
             return None
+        if self.stalled:
+            self._skip(label)
+            return None
         try:
             return await client.request(api, method, version=version, params=params)
         except SynologyError as e:
             if e.code in refusals:
                 refuse_non_admin(self.operation)
+            # A proxy's 502/503/504 or its own page (not DSM's reply) is how a proxy reports
+            # the same stall (#282): nothing more is sent, as for a transport error.
+            # A reply DSM did send but that can't be read safely (colliding keys) isn't one.
+            if (isinstance(e, DsmHttpError) and e.status in (502, 503, 504)) or (
+                isinstance(e, DsmReplyError) and e.retryable
+            ):
+                self.stalled = True
             if e.code == NOT_SUPPORTED:
                 self.notes.append(f"{label}: not available on this NAS")
             elif e.code == METHOD_MISSING:
@@ -143,6 +186,31 @@ class Sections:
                 logger.debug("%s %s/%s failed: %s", self.operation, api, method, e)
                 self.notes.append(f"{label}: couldn't be read ({failure(e)})")
             return None
+        except httpx.TransportError as e:
+            # No answer (a timeout, a dropped connection) or no connection: one optional
+            # section, so a note, not a failed tool; and nothing more is sent (``stalled``).
+            # The error's type only, never its text.
+            logger.debug("%s %s/%s got no answer: %r", self.operation, api, method, e)
+            self.stalled = True
+            sent = not isinstance(e, _NOT_SENT)
+            self.unreached = not sent
+            why = f"no answer: {type(e).__name__}" if sent else type(e).__name__
+            self.notes.append(f"{label}: couldn't be read ({why})")
+            return None
+
+
+# Transport errors raised before anything reached DSM: no connection, no free connection in the
+# pool, a proxy that refused the tunnel (httpx honors an environment proxy, #565), a URL httpx
+# can't send, or a request h11 refused to write. Anything else may have reached it: "no answer"
+# (QA round 1 on #661). #442 tracks one shared predicate for every module.
+_NOT_SENT = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+    httpx.UnsupportedProtocol,
+    httpx.LocalProtocolError,
+)
 
 
 def failure(e: SynologyError) -> str:

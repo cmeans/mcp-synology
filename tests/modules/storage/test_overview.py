@@ -29,11 +29,15 @@ class TestRealNas:
         text, _ = await run(get_storage_overview)
         assert (
             "Drive 2 (sdb)   WD142KFGX-68AFPN0   12.7 TiB   41°C   normal   pool 1   "
-            "extended S.M.A.R.T. test 90%, not on Synology's compatibility list"
+            "extended S.M.A.R.T. test 90%, not on Synology's compatibility list, "
+            "low performance in RAID (now)"
         ) in text
+        assert sum("low performance in RAID" in line for line in text.splitlines()) == 1
         assert "Drive 5 (sde)   WD142KFGX-68AFPN0   12.7 TiB   39°C   normal   hot spare" in text
         assert "SSD cache 1 (shared_cache_1)   67% life left" in text
-        # A running test and an off-list disk aren't problems: no disk is under attention.
+        # A running test, an off-list disk and DSM's low-performance-in-RAID flag aren't
+        # problems DSM warns about (Storage Manager shows none for sdb, #659): no disk is under
+        # attention, and the flag is on the disk's line.
         attention = text.split("Needs attention", 1)[1].split("Storage pools", 1)[0]
         assert "Drive" not in attention
 
