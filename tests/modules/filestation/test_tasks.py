@@ -2122,6 +2122,29 @@ class TestFileTask:
         assert "then: 1000 B" not in text
         assert 'call file_task with action="stop" again' in text
 
+    @pytest.mark.parametrize(
+        ("then", "named"),
+        [("1 of 342 items, 0%", True), ("8 of 342 items, 2%", False)],
+        ids=["differs", "same-text"],
+    )
+    @respx.mock
+    async def test_a_delete_s_later_baseline_gets_the_plain_hint(
+        self, mock_client: DsmClient, then: str, named: bool
+    ) -> None:
+        """Pre-QA r7 on #660: a delete whose note settled later gets the plain hint, naming the
+        baseline only when its text differs from the stop's."""
+        from mcp_synology.modules.filestation.tasks import StopNote, file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(RUNNING))
+        records = TaskRecords()
+        h = Handle("delete", "FileStation_D1")
+        records.note_stop(h, StopNote(1_700_000_000.0, records.now(), then, settled=False))
+        await file_task(mock_client, records=records, handle=str(h))  # the baseline
+        text = await file_task(mock_client, records=records, handle=str(h))
+        since = " since the first check after the stop (8 of 342 items, 2%)" if named else " since"
+        assert f"The progress hasn't moved{since}. Don't send another stop before " in text, text
+        assert "most likely" not in text
+
     @respx.mock
     async def test_frozen_counts_past_the_limit_name_a_later_baseline(
         self, mock_client: DsmClient

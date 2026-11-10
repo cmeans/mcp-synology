@@ -1700,8 +1700,11 @@ async def file_task(
         counts_now = progress_mark(status)
         verdict = records.stop_verdict(record, status)
         logger.debug("Stop note of %s: %s", parsed, verdict)
-        # What the counts were compared with, when it isn't the progress shown as "then".
+        # What the counts were compared with, when it isn't the progress shown as "then" (named
+        # only when its text differs: two equal points would read as a puzzle).
         baseline = record.stop.baseline if record.stop is not None else None
+        if baseline == then:
+            baseline = None
         since = f" since the first check after the stop ({baseline})" if baseline else " since"
         if verdict != "pending":
             later = _elapsed_text(records.stop_age(record))
