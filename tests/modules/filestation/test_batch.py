@@ -9,8 +9,9 @@ Two parts:
   behavior is known to get wrong, each with the issue that fixes it. A fix that closes a gap fails
   here until its cell leaves the table; a change that opens one fails too.
 - **The structural test**: no module but ``batch.py`` calls ``poll_task``, and none but it and
-  ``tasks.py`` stops a task or writes a ``TaskRecord``, or sends a task's start, status read or
-  stop other than Search's and DirSize's (named by a literal API).
+  ``tasks.py`` stops a task or writes a ``TaskRecord``, or sends a start, status read or stop
+  named by a literal method (directly or through ``task_request``) other than Search's and
+  DirSize's, named by a literal API.
 """
 
 from __future__ import annotations
@@ -175,6 +176,11 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
     ),
     # A delete whose path is gone counts as done (#521); a copy, move or restore can't tell.
     "lost": (lambda t, i, s: setattr(s, "statuses", [599]), "lost"),
+    # Lost, and the path is still there: a delete checks it (a bounded getinfo), then hands off.
+    "lost_still_there": (
+        lambda t, i, s: (setattr(s, "statuses", [599]), setattr(s, "gone_after", False)),
+        "handed_off",
+    ),
     "budget_out": (lambda t, i, s: setattr(s, "statuses", [RUNNING]), "handed_off"),
     "cancel_mid_poll": (lambda t, i, s: setattr(s, "statuses", [RUNNING, CANCEL]), "canceled"),
     "already_running": (lambda t, i, s: setattr(s, "running", _running(t, i)), "handed_off"),
@@ -351,11 +357,21 @@ async def test_matrix(
     if last is not None and last.state == "handed_off":
         # No DSM request between the hand-off and the reply: the call that decided it (the
         # task's last status read, or the task list that showed it already running) is the last.
+        # A lost delete's check of its own path (#521) comes after the status read, so it
+        # decides too.
+        handed = last.item.source
         deciding = [
             n
             for n, c in enumerate(dsm.calls)
             if (c.api == tool.api and c.method == "status")
             or (c.api == "SYNO.FileStation.BackgroundTask" and c.method == "list")
+            or (
+                tool.kind == "delete"
+                and c.method == "getinfo"
+                and c.params.get("path") == handed
+                and n > 0
+                and dsm.calls[n - 1].method == "status"
+            )
         ]
         if not deciding or deciding[-1] != len(dsm.calls) - 1:
             broken.add("request_after_handoff")
@@ -458,7 +474,10 @@ def test_only_the_runner_starts_polls_stops_and_records() -> None:
             # A task's start, status read or stop, positionally or by keyword: outside the runner
             # and tasks.py, only Search's and DirSize's, named by a literal API. An API in a
             # variable, an attribute or a constant could be Delete's or CopyMove's.
-            given = dict(zip(("api", "method"), call.args, strict=False))
+            # `task_request(client, api, method, …)`, Search's and DirSize's helper, takes them
+            # after the client.
+            positional = call.args[1:] if name == "task_request" else call.args
+            given = dict(zip(("api", "method"), positional, strict=False))
             given.update({k.arg: k.value for k in call.keywords if k.arg in ("api", "method")})
             api, method = given.get("api"), given.get("method")
             if (
@@ -502,16 +521,25 @@ def test_the_runner_sends_the_start() -> None:
 
 
 def test_every_tool_reaching_the_runner_is_in_the_matrix() -> None:
-    tree = ast.parse(Path(operations.__file__).read_text())
-    functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+    public: set[str] = set()
+    for _, tree in _modules():
+        functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        }
 
-    def reaches(name: str, seen: frozenset[str] = frozenset()) -> bool:
-        node = functions.get(name)
-        if node is None or name in seen:
-            return False
-        names = {_name(c) for c in _calls(node)}
-        return "run_batch" in names or any(reaches(n, seen | {name}) for n in names)
+        def reaches(name: str, seen: frozenset[str], functions: Any = functions) -> bool:
+            node = functions.get(name)
+            if node is None or name in seen:
+                return False
+            names = {_name(c) for c in _calls(node)}
+            return "run_batch" in names or any(reaches(n, seen | {name}) for n in names)
 
-    public = {name for name in functions if not name.startswith("_") and reaches(name)}
+        public |= {
+            name
+            for name in functions
+            if not name.startswith("_") and name != "run_batch" and reaches(name, frozenset())
+        }
     assert public == set(BATCH_TOOLS)
     assert {t.name for t in TOOLS} >= set(BATCH_TOOLS) - {"restore_from_recycle_bin"}

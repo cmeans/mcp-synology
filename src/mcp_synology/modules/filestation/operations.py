@@ -968,7 +968,7 @@ async def _copy_move(
     _refuse_no_paths(operation, paths)
     normalized = _collapse_overlaps([normalize_path(p) for p in paths], drop_nested=remove_src)
     dest = normalize_path(dest_folder)
-    items = [Item(p, dest, i) for i, p in enumerate(normalized)]
+    items = [Item(p, dest) for p in normalized]
     adapter = CopyMoveAdapter(
         client,
         items,
@@ -1697,7 +1697,7 @@ async def delete_files(
         recursive=recursive,
         recycle_bin_status=recycle_bin_status,
     )
-    items = [Item(p, None, i) for i, p in enumerate(normalized)]
+    items = [Item(p, None) for p in normalized]
     outcome = await run_batch(
         client, adapter, items, budget=Budget(timeout), records=records, on_progress=on_progress
     )
@@ -1975,7 +1975,7 @@ async def restore_from_recycle_bin(
             # Multiple different destinations: one batch, an item and a group per destination's
             # item, each checked and summarized as its own (#512).
             items = [
-                Item(normalize_path(fp), normalize_path(dest), i, group=i)
+                Item(normalize_path(fp), normalize_path(dest), group=i)
                 for i, (fp, dest) in enumerate(zip(full_paths, restore_destinations, strict=False))
             ]
             adapter = CopyMoveAdapter(

@@ -79,7 +79,6 @@ class Item:
 
     source: str
     dest: str | None
-    index: int
     group: int = 0
 
 
