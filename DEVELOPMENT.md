@@ -121,6 +121,18 @@ The setup script:
 
 Golden images are stored in `.vdsm/golden/` (about 1.2 GB each, gitignored).
 
+**The container image** is pinned by digest in `tests/vdsm/config.py` `VDSM_IMAGE`, from the maintainer's public mirror `ghcr.io/cmeans/virtual-dsm`: Docker Hub stopped serving `vdsm/virtual-dsm` on 2026-11-10. To move to a newer upstream release, copy it with its digests kept, then pin the new digest and bump `BAKE_VERSION` (a new image is a bake change). Run these one at a time (the two `refresh` steps open a browser and wait for Enter) in your own terminal, with `GH_TOKEN` unset, so `gh auth status` shows the keyring account: with `GH_TOKEN` set, `gh auth token` returns that token instead and `gh auth refresh` refuses.
+
+```bash
+gh auth refresh -h github.com -s write:packages   # the copy needs write:packages
+gh auth token | skopeo login ghcr.io -u cmeans --password-stdin
+skopeo copy --all --preserve-digests docker://ghcr.io/vdsm/virtual-dsm:<tag> docker://ghcr.io/cmeans/virtual-dsm:<tag>
+skopeo logout ghcr.io
+gh auth refresh -h github.com -r write:packages   # afterwards: drop the scope again
+```
+
+skopeo doesn't read gh's token on its own, hence the login. The last two steps matter: `gh auth refresh -s` keeps the scope on the stored token until it's removed, and other sessions and tools on the machine use that token too. The package must stay public for CI's anonymous pulls. If the mirror goes, upstream's `ghcr.io/vdsm/virtual-dsm` with the same digest names the same image: change `VDSM_IMAGE`'s repository (`test_vdsm_image_is_pinned` accepts either).
+
 ### Running
 
 ```bash

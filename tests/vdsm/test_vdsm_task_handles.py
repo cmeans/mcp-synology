@@ -528,8 +528,8 @@ async def test_a_handle_of_the_wrong_kind_stops_the_task(admin_client: Any, nas:
         handle = _handle(reply)
         handles.append(handle)
         wrong = "copy:" + handle.partition(":")[2]
-        stop = await file_task(client, records=TaskRecords(), handle=wrong, action="stop")
-        assert stop.startswith("Stopped copy of"), stop
+        # DSM 7.1 can answer the stop late, as _stop allows for (#669).
+        await _stop(client, TaskRecords(), wrong, "Stopped copy of")
         await _gone(client, records, handle)
 
 
