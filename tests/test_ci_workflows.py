@@ -429,6 +429,7 @@ case "$*" in
     fi
     exit 0 ;;
 esac
+case "$*" in "pr comment"*) [ -f "$ANSWERS/comment_fail" ] && exit 1 ;; esac
 echo "$*" >> "{self.log}"
 """,
             encoding="utf-8",
@@ -686,7 +687,8 @@ def test_the_recheck_comments_once_when_a_result_never_comes(github: _FakeGitHub
     comments = [write for write in github.writes() if write.startswith("pr comment 7")]
     assert len(comments) == 1
     assert "vdsm (7.1)" in " ".join(github.writes())
-    marker = "<!-- pr-labels-recheck abc -->"
+    # The missing names are in the marker, without their status (QA round 3 on #582).
+    marker = "<!-- pr-labels-recheck abc vdsm.yml: vdsm (7.1) -->"
     assert marker in " ".join(github.writes())
     github.answer(comments=f"{marker}\n")
     assert github.run("pr-labels-recheck.sh").returncode == 0
@@ -840,6 +842,95 @@ def test_a_failure_at_ready_for_qa_comments_and_keeps_the_label(
     assert "This PR stays at `Ready for QA`" in writes
     assert "--remove-label" not in writes
     assert "--add-label" not in writes
+
+
+@_NEEDS_JQ
+def test_the_failure_comment_s_advice_can_be_followed(github: _FakeGitHub) -> None:
+    """QA round 3 on #582: "clears with a push" read as an empty commit, "on purpose" couldn't
+    be checked, and "the Checks tab" was a UI pointer; a fork gets no CI Failed by itself."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs=_GOOD,
+        codeql="completed failure\n",
+        labels="Ready for QA\n",
+        prs_json=json.dumps([_pr(7, "Ready for QA")]),
+    )
+    assert github.run("pr-labels-recheck.sh").returncode == 0
+    writes = "\n".join(github.writes())
+    assert "`gh pr checks 7` names each failure and shows the current state" in writes
+    assert "this comment isn't updated when a check is re-run" in writes
+    assert "needs what its alert reports fixed and pushed: an empty commit won't clear it" in writes
+    assert "`gh api repos/o/r/issues/7/events` shows who added it" in writes
+    assert "on a fork nothing adds a label, so add `CI Failed` by hand" in writes
+    assert "Checks tab" not in writes
+
+
+@_NEEDS_JQ
+def test_a_lagging_job_s_comment_doesnt_silence_a_stuck_codeql(github: _FakeGitHub) -> None:
+    """QA round 3 on #582: one marker per commit meant a later stuck CodeQL got no comment."""
+    github.runs(ci="in_progress null", vdsm="completed success")
+    github.answer(
+        vdsm_jobs=_GOOD,
+        codeql="in_progress\n",
+        labels="Awaiting CI\n",
+        prs_json=json.dumps([_pr(7, "Awaiting CI")]),
+        comments="<!-- pr-labels-recheck abc vdsm.yml: vdsm (7.1) -->\n",
+    )
+    github.runs(ci="completed success", vdsm="completed success")
+    github.answer(ci_jobs=_GOOD)
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 0, done.stderr
+    writes = "\n".join(github.writes())
+    assert "<!-- pr-labels-recheck abc CodeQL -->" in writes, done.stderr
+
+
+@_NEEDS_JQ
+@pytest.mark.parametrize("comments", ["", "<!-- pr-labels-codeql-failed abc -->\n"])
+def test_ci_failed_from_codeql_says_so(github: _FakeGitHub, comments: str) -> None:
+    """QA round 3 on #582: at Awaiting CI with both workflows green, CodeQL's failure moved the
+    label with no word on the PR; it gets one comment per commit."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql="completed failure\n", labels="Awaiting CI\n",
+        comments=comments,
+    )  # fmt: skip
+    done = github.run("pr-labels-settle.sh", "7", "abc")
+    assert done.returncode == 0, done.stderr
+    writes = "\n".join(github.writes())
+    assert "--add-label CI Failed" in writes
+    if comments:
+        assert "pr comment" not in writes
+    else:
+        assert "<!-- pr-labels-codeql-failed abc -->" in writes
+        assert "re-running CI won't change it" in writes
+        assert "an empty commit won't clear it" in writes
+
+
+@_NEEDS_JQ
+def test_ci_failed_from_a_job_gets_no_codeql_comment(github: _FakeGitHub) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs="completed\tfailure\tvdsm (7.1)\n", labels="Awaiting CI\n"
+    )
+    assert github.run("pr-labels-settle.sh", "7", "abc").returncode == 0
+    writes = "\n".join(github.writes())
+    assert "--add-label CI Failed" in writes
+    assert "pr comment" not in writes
+
+
+@_NEEDS_JQ
+def test_a_codeql_comment_that_can_t_be_posted_doesnt_fail_the_step(github: _FakeGitHub) -> None:
+    """A fork's on-unlabel token is read-only: the label is what counts."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql="completed failure\n", labels="Awaiting CI\n",
+        comment_fail="",
+    )  # fmt: skip
+    done = github.run("pr-labels-settle.sh", "7", "abc")
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "fail"
+    assert "couldn't comment on the CodeQL failure" in done.stderr
 
 
 @_NEEDS_JQ
@@ -1084,11 +1175,12 @@ def test_which_prs_the_recheck_settles(
     github.answer(prs_json=json.dumps([pr]), labels="")
     done = github.run("pr-labels-recheck.sh")
     assert done.returncode == 0, done.stderr
-    assert (
-        (f"PR #7 at abc (adopt: {expected.split(chr(9))[2]})" in done.stderr)
-        if expected
-        else ("PR #7" not in done.stderr)
-    )
+    if not expected:
+        assert "PR #7" not in done.stderr
+    elif expected.split(chr(9))[2] == "2":
+        assert "PR #7 at abc (Ready for QA: report only)" in done.stderr
+    else:
+        assert f"PR #7 at abc (adopt: {expected.split(chr(9))[2]})" in done.stderr
 
 
 def test_the_recheck_lists_only_prs_into_main() -> None:

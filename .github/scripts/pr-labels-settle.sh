@@ -14,6 +14,12 @@ HEAD_SHA=$2
 export HEAD_SHA
 HERE=$(dirname "${BASH_SOURCE[0]}")
 
+# The details say what failed, for the CodeQL comment below; a caller may pass its own file.
+if [ -z "${PENDING_DETAILS:-}" ]; then
+  PENDING_DETAILS=$(mktemp)
+  trap 'rm -f "$PENDING_DETAILS"' EXIT
+fi
+export PENDING_DETAILS
 STATE=$(bash "$HERE/pr-checks-state.sh")
 
 # The state took up to 80 s to read: if a newer commit was pushed meanwhile, its own runs decide.
@@ -68,7 +74,9 @@ case "$STATE" in
     ;;
   fail)
     # On a CI or vdsm event, or Dev Active coming off: take Ready for QA back. The recheck only
-    # comments (pr-labels-recheck.sh).
+    # comments on a PR at Ready for QA (pr-labels-recheck.sh), except one that also has Awaiting CI
+    # or CI Failed, which it settles here: on a fork, a hand-applied Ready for QA beside one of
+    # those goes (maintainer, 2026-11-06). A CodeQL failure says so in a comment (CODEQL_FAILED).
     REMOVE=""
     has "Awaiting CI" && REMOVE="Awaiting CI"
     has "Ready for QA" && REMOVE="${REMOVE:+$REMOVE,}Ready for QA"
@@ -77,6 +85,19 @@ case "$STATE" in
     fi
     if [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ]; then
       gh pr edit "$PR" --repo "$REPO" --add-label "CI Failed" >&2
+      # The workflows are green when CodeQL alone failed, so say which (QA round 3 on #582): a
+      # reader re-running them would change nothing. Once per commit; the step doesn't fail over
+      # it (a fork's on-unlabel token is read-only).
+      if grep -q '^failed CodeQL:' "$PENDING_DETAILS"; then
+        MARKER="<!-- pr-labels-codeql-failed $HEAD_SHA -->"
+        if COMMENTS=$(gh pr view "$PR" --repo "$REPO" --json comments \
+          --jq '.comments[] | select(.author.login | test("^github-actions(\\[bot\\])?$")) | .body') \
+          && ! printf '%s\n' "$COMMENTS" | grep -qxF "$MARKER"; then
+          gh pr comment "$PR" --repo "$REPO" --body "$MARKER
+\`CI Failed\` on \`$HEAD_SHA\` is from the \`CodeQL\` check: GitHub's default setup, not a workflow here, so re-running CI won't change it. \`gh pr checks $PR\` shows the alert's check; fix what it reports and push (an empty commit won't clear it)." >&2 \
+            || echo "PR #$PR: couldn't comment on the CodeQL failure" >&2
+        fi
+      fi
     fi
     ;;
   pending)

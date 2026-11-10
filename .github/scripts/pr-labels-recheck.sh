@@ -4,7 +4,12 @@
 # that. So: settle each open PR on Awaiting CI or CI Failed, and each same-repository PR with no
 # workflow label at all. A PR at Ready for QA keeps its label, which someone may have applied by
 # hand: CodeQL can fail after promotion with nothing firing on it (#578), so a failed check gets
-# one comment per commit, and no label changes (maintainer, 2026-11-06). If a result is still missing long after its runs finished, comment once on the PR.
+# one comment per commit and failed check name, and no label changes (maintainer, 2026-11-06).
+# The exception: a PR that also has Awaiting CI or CI Failed is settled as those, so a failure
+# takes Ready for QA back. On a same-repository PR on-label clears the stale label first; on a
+# fork its token is read-only, so a hand label beside one goes until a push (maintainer,
+# 2026-11-06: rare and forks only, so it's stated, not coded). If a result is still missing long
+# after its runs finished, comment once on the PR, per commit and missing name.
 #
 # Env: REPO, GH_TOKEN. STRANDED_AFTER_MINUTES defaults to 30. Fork PRs with none of those labels are left
 # alone: their runs wait for the maintainer's approval, and the label is the maintainer's call.
@@ -50,19 +55,30 @@ $body" >&2; then
   fi
 }
 
-echo "PRs to settle: $(printf '%s' "$PRS" | grep -c . || true)" >&2
+# What a reader can do about a failure. The Ready for QA comment and the CodeQL CI Failed one share
+# it (QA round 3 on #582): a push that doesn't fix the alert fails again, as CodeQL judges the
+# PR's changed code; and this comment isn't updated, so the live state is gh pr checks.
+fail_advice() {
+  local pr=$1
+  printf '%s' "\`gh pr checks $pr\` names each failure and shows the current state; this comment isn't updated when a check is re-run. A failed job can be re-run in Actions. A failed \`CodeQL\` check needs what its alert reports fixed and pushed: an empty commit won't clear it."
+}
+
+echo "PRs to settle or report on: $(printf '%s' "$PRS" | grep -c . || true)" >&2
 DETAILS=$(mktemp)
 # On its own descriptor, so a command in the loop that reads stdin can't take the list.
 while IFS=$'\t' read -r PR SHA ADOPT <&3; do
   if [ -z "$PR" ]; then continue; fi
-  echo "PR #$PR at $SHA (adopt: $ADOPT)" >&2
+  case $ADOPT in
+    2) echo "PR #$PR at $SHA (Ready for QA: report only)" >&2 ;;
+    *) echo "PR #$PR at $SHA (adopt: $ADOPT)" >&2 ;;
+  esac
   : > "$DETAILS"
   if [ "$ADOPT" = 2 ]; then
     if ! STATE=$(HEAD_SHA=$SHA PENDING_DETAILS=$DETAILS bash "$HERE/pr-checks-state.sh"); then
       echo "PR #$PR: couldn't read its checks" >&2
       FAILED=1
     elif [ "$STATE" = fail ]; then
-      # The state read takes up to a minute, and a push or QA may have moved the PR on since the list.
+      # The state read takes up to 80 s, and a push or QA may have moved the PR on since the list.
       if ! NOW=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid) \
         || ! LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '.labels[].name'); then
         echo "PR #$PR: couldn't read it again" >&2
@@ -72,7 +88,9 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
       else
         # Workflow or check names only: a fork chooses its job names, and this is the bot's comment.
         # The state stops at its first failure, so the names are in the marker: re-running one
-        # failure mustn't silence the next, on this same commit.
+        # failure mustn't silence the next, on this same commit. Per workflow or check name, not
+        # per job: a second job of the same workflow failing later on this commit isn't
+        # commented on again (the first comment already sends the reader to gh pr checks).
         NAMES=$(sed -nE 's/^failed ([^:]+):.*/\1/p' "$DETAILS" | sort -u)
         comment_once "$PR" "<!-- pr-labels-recheck-failed $SHA $(printf '%s' "$NAMES" | tr '\n' ' ') -->" "A check has failed on \`$SHA\`:
 
@@ -80,7 +98,9 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
 $NAMES
 \`\`\`
 
-This PR stays at \`Ready for QA\`, in case that label was applied on purpose; if it wasn't, take it off. The PR's Checks tab has the detail. A failed job can be re-run. A failed CodeQL check clears with a push, the one known way."
+This PR stays at \`Ready for QA\`, in case someone applied that label on purpose (\`gh api repos/$REPO/issues/$PR/events\` shows who added it). If it shouldn't be there, take it off: on a branch of this repository the next recheck then gives \`CI Failed\`; on a fork nothing adds a label, so add \`CI Failed\` by hand.
+
+$(fail_advice "$PR")"
       fi
     fi
     continue
@@ -124,7 +144,10 @@ This PR stays at \`Ready for QA\`, in case that label was applied on purpose; if
   else
     CLEAR="$CLEAR $HAND once \`gh pr checks $PR\` shows every check passed except \`QA Gate\`."
   fi
-  comment_once "$PR" "<!-- pr-labels-recheck $SHA -->" "The label automation has no result for these on \`$SHA\`, $AGE minutes after its runs finished:
+  # The missing names are in the marker, so a comment about a lagging job doesn't silence a
+  # later stuck CodeQL on the same commit (QA round 3 on #582).
+  # Names only, with each line's status (": in_progress/none") cut, as that changes over time.
+  comment_once "$PR" "<!-- pr-labels-recheck $SHA $(printf '%s\n' "$MISSING" | sed -E 's/: [^:]*$//; s/[^A-Za-z0-9 ._:/()-]//g' | sort -u | paste -sd ' ') -->" "The label automation has no result for these on \`$SHA\`, $AGE minutes after its runs finished:
 
 \`\`\`
 $MISSING

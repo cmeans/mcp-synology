@@ -162,7 +162,8 @@ Two required sections:
 2. **Label automation takes over.** After CI and the vdsm integration
    tests pass, the PR auto-promotes from `Awaiting CI` → `Ready for QA`.
    `CI Failed` means a job in CI or vdsm failed, or the CodeQL check did.
-   The PR's Checks tab shows which, and a fix needs a push. Otherwise you
+   `gh pr checks <number>` (or the PR's Checks tab) shows which; a fix needs a push
+   that fixes it (for a CodeQL alert, an empty commit won't clear it). Otherwise you
    don't need to do anything.
 3. **Maintainer reviews.** If there are issues, the PR gets
    `QA Failed` and a review comment. Push your fix; labels reset
