@@ -36,6 +36,7 @@ from mcp_synology.modules.filestation.helpers import (
     describe_transport_error,
     dsm_str,
     name_key,
+    never_sent,
     shown,
 )
 
@@ -91,6 +92,21 @@ def parse_handle(text: str) -> Handle:
     return Handle(kind=kind, taskid=taskid)  # type: ignore[arg-type]
 
 
+@dataclass(frozen=True)
+class StopNote:
+    """A stop sent for a task that DSM hasn't confirmed (#657)."""
+
+    # When it was sent: Unix time, as shown, and the record store's monotonic clock, which
+    # times STOP_CONFIRM_LIMIT whatever the wall clock does meanwhile (an NTP step, a resume).
+    sent: float
+    sent_clock: float
+    # The task's progress then, as shown, when a status read gave it.
+    progress: str | None = None
+    # The raw counts behind it (``processed_num``, ``processed_size``), compared to tell whether
+    # the task moved: the shown text rounds (a 4 TiB copy reads the same 10 GiB later).
+    mark: tuple[Any, ...] | None = None
+
+
 @dataclass
 class TaskRecord:
     """What the server remembers about a task it started."""
@@ -115,18 +131,9 @@ class TaskRecord:
     # this task: a name only clashes at one destination, and a reply says which it means. One per
     # source: a source skipped at two destinations by two calls keeps the later one.
     dest_of: dict[str, str] = field(default_factory=dict)
-    # When (Unix time) a stop was sent that DSM hasn't confirmed (#657): a status reply then says
-    # so instead of offering another stop.
-    stop_sent: float | None = None
-    # The task's progress when that stop was noted, when a status read gave it: progress that
-    # has moved since means the stop didn't take effect.
-    stop_progress: str | None = None
-    # The raw counts behind it (``processed_num``, ``processed_size``), compared to tell whether
-    # the task moved: the shown text rounds (a 4 TiB copy reads the same 10 GiB later).
-    stop_mark: tuple[Any, ...] | None = None
-    # The store's clock (monotonic) when the stop was noted: how long ago, whatever the wall
-    # clock does meanwhile (an NTP step, a resume).
-    stop_noted: float | None = None
+    # A stop sent that DSM hasn't confirmed (#657): a status reply then says so instead of
+    # offering another stop.
+    stop: StopNote | None = None
 
 
 class TaskRecords:
@@ -169,10 +176,7 @@ class TaskRecords:
                 dict.fromkeys([*old.landed_earlier, *record.landed_earlier])
             )
             record.dest_of = {**old.dest_of, **record.dest_of}
-            if record.stop_sent is None:
-                record.stop_sent, record.stop_progress = old.stop_sent, old.stop_progress
-                record.stop_mark = old.stop_mark
-                record.stop_noted = old.stop_noted
+            record.stop = record.stop or old.stop
         self._items[key] = (self._clock(), record)
         while len(self._items) > self._max:
             self._items.popitem(last=False)
@@ -182,44 +186,40 @@ class TaskRecords:
         entry = self._items.get(str(handle))
         return entry[1] if entry else None
 
-    def note_stop(
-        self,
-        handle: Handle,
-        when: float,
-        progress: str | None,
-        mark: tuple[Any, ...] | None = None,
-    ) -> None:
-        """A stop was sent for this task and DSM hasn't confirmed it (#657). ``progress``: the
-        task's progress then, as shown, when a status read gave it; ``mark``: its raw counts."""
+    def now(self) -> float:
+        """The store's own clock (monotonic), for a ``StopNote.sent_clock``."""
+        return self._clock()
+
+    def note_stop(self, handle: Handle, note: StopNote) -> None:
+        """A stop was sent for this task and DSM hasn't confirmed it (#657)."""
         record = self.get(handle)
         if record is None:
             record = TaskRecord(handle=handle, paths=[])
             self.add(record)
-        record.stop_sent, record.stop_progress, record.stop_mark = when, progress, mark
-        record.stop_noted = self._clock()
-        logger.debug("Noted an unconfirmed stop of %s (progress then: %s)", handle, progress)
+        record.stop = note
+        logger.debug("Noted an unconfirmed stop of %s (progress then: %s)", handle, note.progress)
 
     def clear_stop(self, handle: Handle) -> None:
-        """DSM confirmed a stop: an earlier unconfirmed one's note no longer holds."""
+        """DSM confirmed a stop, or refused one: an earlier unconfirmed note no longer holds."""
         record = self.get(handle)
         if record is not None:
-            record.stop_sent = record.stop_progress = record.stop_noted = None
-            record.stop_mark = None
+            record.stop = None
 
     def stop_age(self, record: TaskRecord) -> float:
-        """Seconds since the record's unconfirmed stop was noted (0 if none)."""
-        return 0.0 if record.stop_noted is None else self._clock() - record.stop_noted
+        """Seconds since the record's unconfirmed stop was sent (0 if none)."""
+        return 0.0 if record.stop is None else self._clock() - record.stop.sent_clock
 
     def stop_lapsed(self, record: TaskRecord) -> bool:
         """The noted stop is past ``STOP_CONFIRM_LIMIT``: it doesn't look like it took effect."""
-        return record.stop_sent is not None and self.stop_age(record) > STOP_CONFIRM_LIMIT
+        return record.stop is not None and self.stop_age(record) > STOP_CONFIRM_LIMIT
 
     def stop_verdict(self, record: TaskRecord, status: dict[str, Any] | None) -> str:
         """For a running task with a noted stop: ``moved`` (its counts changed since),
         ``lapsed`` (past ``STOP_CONFIRM_LIMIT``) or ``pending``. The list and the status reply
         both ask this, so they agree."""
+        then = record.stop.mark if record.stop is not None else None
         now = progress_mark(status) if status is not None else None
-        if record.stop_mark is not None and now is not None and now != record.stop_mark:
+        if then is not None and now is not None and now != then:
             return "moved"
         return "lapsed" if self.stop_lapsed(record) else "pending"
 
@@ -1018,7 +1018,7 @@ async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> Dis
     return DiscoveryNote(lines)
 
 
-async def _list_reply(client: DsmClient, records: TaskRecords | None = None) -> str:
+async def _list_reply(client: DsmClient, records: TaskRecords) -> str:
     try:
         tasks = await _list_running(client)
     except SynologyError as e:
@@ -1051,17 +1051,13 @@ async def _list_reply(client: DsmClient, records: TaskRecords | None = None) -> 
     )
 
 
-def _stop_note(
-    records: TaskRecords | None, handle: Handle, status: dict[str, Any] | None = None
-) -> str:
+def _stop_note(records: TaskRecords, handle: Handle, status: dict[str, Any] | None = None) -> str:
     """A list row's note for a task a stop was sent to, unconfirmed (#657). ``status``: the
     task's status in the list, so the row says what a status call would."""
-    if records is None:
-        return ""
     record = records.get(handle)
-    if record is None or record.stop_sent is None:
+    if record is None or record.stop is None:
         return ""
-    sent = f"; stop sent {format_timestamp(record.stop_sent)}"
+    sent = f"; stop sent {format_timestamp(record.stop.sent)}"
     if records.stop_verdict(record, status) != "pending":
         return f"{sent}, doesn't look like it took effect"
     return f"{sent}, not confirmed yet"
@@ -1189,7 +1185,7 @@ def _unanswered(
     """Raise the structured error for a status or stop request DSM didn't answer (#237)."""
     timed_out = isinstance(exc, httpx.TimeoutException)
     what = "didn't answer" if timed_out else "lost the connection during"
-    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
+    if never_sent(exc):
         # The connection was never opened, so the request never reached DSM (as Photos says).
         what = "couldn't be reached for"
     error_response(
@@ -1393,29 +1389,38 @@ async def file_task(
             )
         return "\n" + "\n".join(lines)
 
-    def note_unconfirmed(before: dict[str, Any] | None) -> None:
-        """#657: a later status call says a stop was sent, with the progress then."""
+    def note_unconfirmed(sent: tuple[float, float], status: dict[str, Any] | None) -> None:
+        """#657: a later status call says a stop was sent (``sent``: Unix time and the store's
+        clock just before it went), with the progress a status read gave."""
         records.note_stop(
             parsed,
-            time.time(),
-            progress_text(before) if before else None,
-            progress_mark(before) if before else None,
+            StopNote(
+                sent=sent[0],
+                sent_clock=sent[1],
+                progress=progress_text(status) if status else None,
+                mark=progress_mark(status) if status else None,
+            ),
+        )
+
+    def partway_line() -> str:
+        """After a stop DSM hadn't confirmed (#657), a task that has ended may have stopped
+        partway rather than run to the end: the line before its result, or ""."""
+        if record is None or record.stop is None:
+            return ""
+        return (
+            f"A stop was sent at {format_timestamp(record.stop.sent)}, and the task has ended "
+            "since, so it may have stopped partway: check what's left.\n"
         )
 
     def ended_first() -> str:
-        """The line before a finished task's result. After a stop DSM hadn't confirmed (#657),
-        the task may have stopped partway rather than run to the end."""
-        if record is not None and record.stop_sent is not None:
-            return (
-                f"A stop was sent at {format_timestamp(record.stop_sent)}, and the task has ended "
-                "since, so it may have stopped partway: check what's left.\n"
-            )
-        return f"{_NOT_STOPPED}\n"
+        """The line before a finished task's result in a stop's reply."""
+        return partway_line() or f"{_NOT_STOPPED}\n"
 
     async def send_stop(*, before: dict[str, Any] | None) -> int | str | None:
         """Send the stop. DSM's code when it says it has no such task (401, 599), the reply
         when DSM didn't answer within ``STOP_WAIT`` (the status decides it, #630), or None.
         ``before``: the running task's status read just before, when there was one."""
+        sent = (time.time(), records.now())  # the note's time is when the stop went (#657)
         try:
             await client.request(
                 parsed.api,
@@ -1425,26 +1430,26 @@ async def file_task(
                 read_timeout=wait_left(),
             )
         except httpx.ReadTimeout:
-            return await unanswered_stop(before)
+            return await unanswered_stop(before, sent)
         except DsmHttpError as e:
             if e.status in (502, 504):
                 # A proxy giving up on the stop before DSM answered: the same slow stop (#630).
-                return await unanswered_stop(before)
-            note_unconfirmed(before)
+                return await unanswered_stop(before, sent)
+            note_unconfirmed(sent, before)
             _unreadable(
                 parsed, e, operation="Stop task", note=" The stop may or may not have taken effect."
             )
         except (DsmReplyError, RequestTooLongError) as e:
             # A 414 is rejected before anything acts on it: nothing was stopped.
-            sent = not isinstance(e, RequestTooLongError)
-            if sent:
-                note_unconfirmed(before)
+            reached = not isinstance(e, RequestTooLongError)
+            if reached:
+                note_unconfirmed(sent, before)
             _unreadable(
                 parsed,
                 e,
                 operation="Stop task",
                 note=" The stop may or may not have taken effect."
-                if sent
+                if reached
                 else " Nothing was stopped.",
             )
         except SynologyError as e:
@@ -1454,21 +1459,21 @@ async def file_task(
         except httpx.TransportError as e:
             # A connection that couldn't be opened never carried the stop (as in Photos'
             # photo_task): nothing to note, and nothing was stopped.
-            never_sent = isinstance(e, httpx.ConnectError | httpx.ConnectTimeout)
-            if not never_sent:
-                note_unconfirmed(before)
+            lost = never_sent(e)
+            if not lost:
+                note_unconfirmed(sent, before)
             _unanswered(
                 parsed,
                 e,
                 operation="Stop task",
                 request="stop",
                 note=" Nothing was stopped."
-                if never_sent
+                if lost
                 else " The stop may or may not have taken effect.",
             )
         return None
 
-    async def unanswered_stop(before: dict[str, Any] | None) -> str:
+    async def unanswered_stop(before: dict[str, Any] | None, sent: tuple[float, float]) -> str:
         """DSM didn't answer the stop in time; the stop usually took effect at once (#630), so the
         task's status says what happened. ``before``: a read just before the stop showed it
         running, so its being gone now is the stop working; otherwise it was gone before.
@@ -1521,12 +1526,13 @@ async def file_task(
             # DSM keeps saying it has no such task.
             if before is None:
                 return gone(stop_sent=True) + earlier_skip()
+            records.clear_stop(parsed)  # gone right after a read showed it running: stopped
             return (
                 f"Stopped {parsed.kind} of {what}; it may be partly done. DSM was slow to answer "
                 f"the stop, but the task is gone. {_LIST_HINT}{earlier_skip()}"
             )
         if now is None:
-            note_unconfirmed(before)
+            note_unconfirmed(sent, before)
             return (
                 f"A stop was sent for the {parsed.kind} of {what}, but DSM was slow to answer it "
                 f"and {unknown}, so whether it stopped isn't known. Check with file_task and this "
@@ -1539,7 +1545,7 @@ async def file_task(
                 "A stop was sent and DSM was slow to answer it; the task ended meanwhile, so it "
                 f"may have stopped partway: check what's left.\n{final}"
             )
-        note_unconfirmed(now)
+        note_unconfirmed(sent, now)
         return (
             f"A stop was sent for the {parsed.kind} of {what}, but DSM hasn't confirmed it "
             f"yet: the task still shows as running ({progress_text(now)}). Check with "
@@ -1556,6 +1562,9 @@ async def file_task(
             records.set_final(parsed, now)
             final = await final_in_time(now)
             return ended_first() + final
+        # DSM just refused a stop of a running task: an earlier note's "don't send another"
+        # would contradict this reply (pre-QA r4 on #660).
+        records.clear_stop(parsed)
         return (
             f"DSM didn't accept the stop (error {refused}), and the task is still running "
             f"({progress_text(now)}). Try the stop again; if DSM keeps refusing it, stop it in "
@@ -1596,7 +1605,7 @@ async def file_task(
         return stopped + earlier_skip()
 
     # A task that ends after a stop DSM hadn't confirmed may have stopped partway (#657).
-    partway = ended_first() if record is not None and record.stop_sent is not None else ""
+    partway = partway_line()
     if status is None:
         if record is not None and record.final_status is not None:
             return partway + await _final_text(client, parsed, record.final_status, record)
@@ -1620,12 +1629,12 @@ async def file_task(
         if parsed.kind == "delete"
         else "A busy NAS can go minutes without visible progress; that doesn't mean it's stuck."
     )
-    if record is not None and record.stop_sent is not None:
+    if record is not None and record.stop is not None:
         # A stop DSM hasn't confirmed (#657): DSM 7.1 can take a minute to answer one that took
         # effect at once (#630), so another stop would change nothing, unless the progress has
         # moved since or it's been running far longer than that.
-        sent = f"A stop was sent at {format_timestamp(record.stop_sent)}"
-        then = record.stop_progress
+        sent = f"A stop was sent at {format_timestamp(record.stop.sent)}"
+        then = record.stop.progress
         verdict = records.stop_verdict(record, status)
         if verdict != "pending":
             why = (
@@ -1643,7 +1652,7 @@ async def file_task(
         # With no counts to compare, "hasn't moved" can't be judged, so it isn't offered.
         hint = (
             ": if the progress hasn't moved, it most likely has"
-            if record.stop_mark is not None and progress_mark(status) is not None
+            if record.stop.mark is not None and progress_mark(status) is not None
             else ""
         )
         return (
