@@ -4,13 +4,21 @@
 # "success" even when a job failed (#241). tool-quality is report-only and is ignored; every other
 # job must succeed or be skipped. Everything else goes to stderr, for the run's log.
 #
+# CodeQL counts too (#578): it isn't one of those workflows, but it posts a check run that fails on
+# a new alert. Not every commit gets one (a sample found none on a fork PR, #477), so none means no
+# verdict from it, not pending, which would hold such a PR forever. So one that hasn't posted yet
+# reads the same; the recheck looks again while the PR is at Ready for QA.
+#
 # Env: REPO, HEAD_SHA, GH_TOKEN. RECHECK_SECONDS is the wait between job reads, 20 by default (a
 # test shortens it). PENDING_DETAILS, if set, is a file that gets, for a pending state:
-#   running              a run hasn't finished
+#   running              a workflow run hasn't finished
 #   updated <time>       when a finished run last changed
-#   missing <text>       what has no result (a finished run's job, or a run not listed)
+#   missing <text>       what has no result (a finished run's job, a run not listed, or CodeQL)
+# And for a fail state:
+#   failed <text>        what failed
 #
-# NOTE: names the workflows by file (ci.yml, vdsm.yml). If one is renamed, update it here.
+# NOTE: names the workflows by file (ci.yml, vdsm.yml), and CodeQL's check and app. If one is
+# renamed, update it here: a renamed workflow's read fails, but a renamed check reads as none.
 set -e
 
 log() { echo "$*" >&2; }
@@ -68,9 +76,33 @@ for WF in ci.yml vdsm.yml; do
   if [ -z "$JOBS" ]; then BAD="(no jobs) run conclusion: $RUN_CONCLUSION"; fi
   if [ -n "$BAD" ]; then
     log "$WF: run $RUN_ID has failed jobs:"; log "$BAD"
+    while IFS= read -r LINE; do detail "failed $WF: $LINE"; done <<< "$BAD"
     STATE=fail; break
   fi
   log "$WF: run $RUN_ID passed"
 done
+
+if [ "$STATE" != fail ]; then
+  # By app as well as name, so a job someone names CodeQL can't stand in for it, or push the real
+  # one off the first page. 57789 is github-advanced-security.
+  CODEQL=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=CodeQL&app_id=57789" \
+    --jq '[.check_runs[] | select(.app.slug == "github-advanced-security")][0] // empty | "\(.status) \(.conclusion)"')
+  case "$CODEQL" in
+    "") log "CodeQL: no check run for $HEAD_SHA" ;;
+    "completed success" | "completed neutral" | "completed skipped") log "CodeQL: passed" ;;
+    # With no conclusion yet, as a job can read (#298): pending, not failed.
+    "completed null") log "CodeQL: completed with no result yet"; detail "missing CodeQL: $CODEQL"; STATE=pending ;;
+    completed\ *)
+      # action_required too: unlike a workflow run's, it isn't a fork's run awaiting approval.
+      log "CodeQL: ${CODEQL#completed }. See the PR's Checks tab."
+      detail "failed CodeQL: ${CODEQL#completed }"
+      STATE=fail ;;
+    # Missing, not running, so a stuck check gets the recheck's comment instead of a silent hold.
+    *)
+      log "CodeQL: $CODEQL"
+      detail "missing CodeQL: $CODEQL"
+      STATE=pending ;;
+  esac
+fi
 log "Checks on $HEAD_SHA: $STATE"
 echo "$STATE"

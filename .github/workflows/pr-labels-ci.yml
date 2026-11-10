@@ -9,7 +9,10 @@ name: PR Label Automation (CI)
 # have passed on its head commit, judged job by job (#241): vdsm's jobs (and
 # CI's tool-quality report) are continue-on-error, so a run's own conclusion
 # says "success" even when a job failed. tool-quality is report-only and is
-# ignored; every other job must succeed (or be skipped).
+# ignored; every other job must succeed (or be skipped). CodeQL's check run
+# counts too, when the commit has one (#578), though this doesn't fire on it:
+# pr-labels-recheck.yml sees a later failure (CI Notes in
+# docs/specs/project-scaffolding-spec.md).
 #
 # NOTE: References the workflows by name ("CI", "vdsm") here, and by file in
 # .github/scripts/pr-checks-state.sh, which pr-labels.yml (on-unlabel) and
@@ -28,9 +31,10 @@ permissions: {}
 
 jobs:
   # When CI or vdsm finishes on a PR: Ready for QA once both have passed on the
-  # head commit, CI Failed as soon as either has a failed job, nothing while one
-  # is still running (its own completion re-runs this) or has jobs with no result
-  # recorded yet (pr-labels-recheck.yml checks that again). Skips if Dev Active is
+  # head commit, with CodeQL's check if it has one, CI Failed once either has a
+  # failed job or CodeQL has failed, nothing while one is still running (its own
+  # completion re-runs this) or a result is missing, CodeQL's included
+  # (pr-labels-recheck.yml checks that again). Skips if Dev Active is
   # present (dev isn't done yet; on-unlabel in pr-labels.yml takes over).
   on-checks-complete:
     if: github.event.workflow_run.event == 'pull_request'
@@ -43,6 +47,7 @@ jobs:
       contents: read
       pull-requests: write
       actions: read
+      checks: read
     steps:
       # workflow_run always runs from main, so this is main's script, never a PR's.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

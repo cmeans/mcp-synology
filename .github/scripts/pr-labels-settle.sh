@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Settles a PR's labels from its head commit's checks: Ready for QA once CI and vdsm have passed,
-# CI Failed as soon as either has a failed job, nothing while a result is missing. Used by
-# pr-labels-ci.yml on each CI or vdsm completion, pr-labels.yml when Dev Active comes off, and
-# pr-labels-recheck.yml on a schedule.
+# with CodeQL's check if the commit has one, CI Failed once either has a failed job or CodeQL has
+# failed, when this next reads them, nothing while a result is missing. Used by pr-labels-ci.yml on each CI or vdsm
+# completion, pr-labels.yml when Dev Active comes off, and pr-labels-recheck.yml on a schedule.
 #
 # Usage: pr-labels-settle.sh <pr> <head sha>. Env: REPO, GH_TOKEN, PENDING_DETAILS (see
 # pr-checks-state.sh). ADOPT=1 is for a PR with no workflow label at all: it's labeled as if it
@@ -14,6 +14,12 @@ HEAD_SHA=$2
 export HEAD_SHA
 HERE=$(dirname "${BASH_SOURCE[0]}")
 
+# The details say what failed, for the CodeQL comment below; a caller may pass its own file.
+if [ -z "${PENDING_DETAILS:-}" ]; then
+  PENDING_DETAILS=$(mktemp)
+  trap 'rm -f "$PENDING_DETAILS"' EXIT
+fi
+export PENDING_DETAILS
 STATE=$(bash "$HERE/pr-checks-state.sh")
 
 # The state took up to 80 s to read: if a newer commit was pushed meanwhile, its own runs decide.
@@ -67,7 +73,10 @@ case "$STATE" in
     fi
     ;;
   fail)
-    # Never leave Ready for QA on a commit with a failed job.
+    # On a CI or vdsm event, or Dev Active coming off: take Ready for QA back. The recheck only
+    # comments on a PR at Ready for QA (pr-labels-recheck.sh), except one that also has Awaiting CI
+    # or CI Failed, which it settles here: on a fork, a hand-applied Ready for QA beside one of
+    # those goes (maintainer, 2026-11-06). A CodeQL failure says so in a comment (CODEQL_FAILED).
     REMOVE=""
     has "Awaiting CI" && REMOVE="Awaiting CI"
     has "Ready for QA" && REMOVE="${REMOVE:+$REMOVE,}Ready for QA"
@@ -77,9 +86,25 @@ case "$STATE" in
     if [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ]; then
       gh pr edit "$PR" --repo "$REPO" --add-label "CI Failed" >&2
     fi
+    # When CodeQL failed with no workflow job failed, say so (QA round 3 on #582): a reader
+    # re-running the workflows would change nothing. Also when CI Failed was already there from a
+    # job since re-run green (pre-QA r4). Once per commit; the step doesn't fail over it (a fork's
+    # on-unlabel token is read-only).
+    if { [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ] || has "CI Failed"; } \
+      && grep -q '^failed CodeQL:' "$PENDING_DETAILS"; then
+      MARKER="<!-- pr-labels-codeql-failed $HEAD_SHA -->"
+      if ! COMMENTS=$(gh pr view "$PR" --repo "$REPO" --json comments \
+        --jq '.comments[] | select(.author.login | test("^github-actions(\\[bot\\])?$")) | .body'); then
+        echo "PR #$PR: couldn't read its comments, so no CodeQL comment" >&2
+      elif ! printf '%s\n' "$COMMENTS" | grep -qxF "$MARKER"; then
+        gh pr comment "$PR" --repo "$REPO" --body "$MARKER
+\`CI Failed\` on \`$HEAD_SHA\` is from the \`CodeQL\` check: GitHub's default setup, not a workflow here, so re-running CI won't change it. \`gh pr checks $PR\` shows the alert's check and the current state (this comment isn't updated); fix what it reports and push (an empty commit is expected to fail it again)." >&2 \
+          || echo "PR #$PR: couldn't comment on the CodeQL failure" >&2
+      fi
+    fi
     ;;
   pending)
-    echo "Not every run has a result yet; leaving the labels" >&2
+    echo "Not every check has a result yet; leaving the labels" >&2
     if [ "${ADOPT:-}" = 1 ]; then
       gh pr edit "$PR" --repo "$REPO" --add-label "Awaiting CI" >&2
     fi
