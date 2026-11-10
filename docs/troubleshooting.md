@@ -133,7 +133,7 @@ then reads the task's status: still running, unreadable, or finished
 (with its full result when there's time, or what the status says and a note when there isn't).
 
 **What to do:** wait a minute, then call `file_task` with the handle: it says whether the task is
-gone, still running, or finished, with its full result. Don't send the stop again before then.
+gone, still running, or finished, with its full result. Don't send the stop again before then: until DSM confirms it, the status reply says when the stop was sent, the progress then, and the time after which another stop can be sent, and the list of running tasks marks it. If the progress moves after that, or the task is still running 5 minutes later, the reply says the stop doesn't look like it took effect and offers it again. The note lives in the running server, so a restart (restarting the client restarts it) forgets it.
 
 ### `file_task` says "A stop was sent, but DSM can't confirm it" or "DSM didn't accept the stop"
 
