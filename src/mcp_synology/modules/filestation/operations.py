@@ -386,6 +386,11 @@ def _with_progress_so_far(
     return ToolError(json.dumps(body))
 
 
+def _never_sent(exc: Exception) -> bool:
+    """The request never reached DSM: the connection couldn't be opened (as Photos says, #665)."""
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
+
+
 def _already_done(
     operation: str,
     done: list[str] | None,
@@ -1241,6 +1246,31 @@ async def _copy_move_tasks(
                     rest = normalized[i + 1 :] + list(later or [])
                     if not done and not skipped_so_far and not rest:
                         raise  # nothing to add: the server's usual timeout or connection error
+                    if _never_sent(e):
+                        # The connection couldn't be opened, so the start never reached DSM:
+                        # this item wasn't started either (#665). Writes are never resent.
+                        error_response(
+                            ErrorCode.TIMEOUT
+                            if isinstance(e, httpx.TimeoutException)
+                            else ErrorCode.UNAVAILABLE,
+                            f"{operation} files failed: DSM couldn't be reached "
+                            f"({describe_transport_error(e)})"
+                            # A retry runs p, so a skip named like it still gets its warning.
+                            + _already_done(
+                                operation,
+                                done,
+                                skipped_so_far,
+                                dest_of=went,
+                                dest=dest,
+                                failing=p,
+                            )
+                            + f". Not started: {', '.join(map(shown, [p, *rest]))}.",
+                            retryable=False,
+                            param="paths",
+                            value=p,
+                            suggestion="Retry what wasn't started once DSM can be reached"
+                            + (", and leave out what's already done." if done else "."),
+                        )
                     # The start got no answer (a status with none hands the item off in
                     # poll_task): it may have started. Say so, with what was done and what
                     # wasn't started, as delete_files does (#588).
@@ -1636,6 +1666,29 @@ async def delete_files(
             except httpx.TransportError as e:
                 if not deleted and not normalized[i + 1 :]:
                     raise  # nothing to add: the server's usual timeout or connection error
+                if _never_sent(e):
+                    # The connection couldn't be opened, so the start never reached DSM: this
+                    # path wasn't started either (#665).
+                    error_response(
+                        ErrorCode.TIMEOUT
+                        if isinstance(e, httpx.TimeoutException)
+                        else ErrorCode.UNAVAILABLE,
+                        f"Delete files failed: DSM couldn't be reached "
+                        f"({describe_transport_error(e)})"
+                        + _already_done("Delete", deleted)
+                        + f". Not started: {', '.join(map(shown, normalized[i:]))}.",
+                        # The same call again is refused once something was deleted.
+                        retryable=not deleted,
+                        param="paths",
+                        value=p,
+                        suggestion="Retry what wasn't started once DSM can be reached"
+                        + (
+                            ", and leave out the paths already deleted (the same call would be "
+                            "refused)."
+                            if deleted
+                            else "."
+                        ),
+                    )
                 # The start got no answer (a status with none hands the item off in
                 # poll_task): it may have started. Say so, with what was done and what
                 # wasn't started (QA round 1 on #480).
