@@ -109,6 +109,10 @@ class StopNote:
     # it (a stop whose answer was lost) isn't a baseline: the task moves until DSM acts on the
     # stop, so the first read after the note becomes the baseline instead (QA round 1 on #660).
     settled: bool = True
+    # A note that settled later: the shown progress of the read that became its baseline. The
+    # reply names it as what the counts were compared with, since ``progress`` is the stop's
+    # (QA round 2 on #660).
+    baseline: str | None = None
 
 
 @dataclass
@@ -229,7 +233,9 @@ class TaskRecords:
         now = progress_mark(status) if status is not None else None
         if record.stop is not None and not record.stop.settled:
             if now is not None:
-                record.stop = replace(record.stop, mark=now, settled=True)
+                record.stop = replace(
+                    record.stop, mark=now, settled=True, baseline=progress_text(status or {})
+                )
                 logger.debug("Stop note of %s: baseline counts %s", record.handle, now)
             return "lapsed" if self.stop_lapsed(record) else "pending"
         then = record.stop.mark if record.stop is not None else None
@@ -1694,15 +1700,25 @@ async def file_task(
         counts_now = progress_mark(status)
         verdict = records.stop_verdict(record, status)
         logger.debug("Stop note of %s: %s", parsed, verdict)
+        # What the counts were compared with, when it isn't the progress shown as "then".
+        baseline = record.stop.baseline if record.stop is not None else None
+        since = f" since the first check after the stop ({baseline})" if baseline else " since"
         if verdict != "pending":
             later = _elapsed_text(records.stop_age(record))
             if verdict == "moved":
                 # A note from a stop with no read before it has no progress to show.
-                why = "the progress has moved since" + (f" (then: {then})" if then else "")
+                if baseline:
+                    why = f"the progress has moved{since}"
+                else:
+                    why = "the progress has moved since" + (f" (then: {then})" if then else "")
             elif compared:
                 # Frozen counts past the limit: the 300 s is a chosen bound, not a measured
                 # one, so this says what's known rather than that the stop failed.
-                why = f"the progress hasn't moved, yet DSM still shows it running {later} later"
+                moved_since = since if baseline else ""
+                why = (
+                    f"the progress hasn't moved{moved_since}, yet DSM still shows it running "
+                    f"{later} later"
+                )
             else:
                 why = f"it's still running {later} later"
             return (
@@ -1718,10 +1734,10 @@ async def file_task(
         # CopyMove can read 0 bytes while it writes (DSM 7.1.1; QA round 1 on #660).
         hint = ""
         if compared:
-            hint = " The progress hasn't moved since."
+            hint = f" The progress hasn't moved{since}."
             wrote = any(isinstance(v, int | float) and v > 0 for v in counts_now or ())
             if parsed.kind != "delete" and wrote:
-                hint = " The progress hasn't moved since, so it most likely has."
+                hint = f" The progress hasn't moved{since}, so it most likely has."
         return (
             f"Still shows as {what} ({progress}). Handle: `{parsed}`\n"
             f"{sent}{then_text} and DSM hasn't confirmed it yet. DSM can be slow to confirm a "

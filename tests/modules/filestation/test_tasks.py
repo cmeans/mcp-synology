@@ -2106,12 +2106,41 @@ class TestFileTask:
         assert record.stop.mark == (None, 1001)
         assert record.stop.progress == "1000 B of 9.8 KiB, 10%"  # shown as it was at the stop
         assert _list_stop_note(records, h).endswith(", not confirmed yet")
+        assert record.stop.baseline == "1001 B of 9.8 KiB, 10%"
         text = await file_task(mock_client, records=records, handle=str(h))
-        assert "The progress hasn't moved since, so it most likely has." in text, text
+        # QA round 2 on #660: the reply names what it compared with, not only the stop's text.
+        assert "(progress then: 1000 B of 9.8 KiB, 10%)" in text, text
+        assert (
+            "The progress hasn't moved since the first check after the stop "
+            "(1001 B of 9.8 KiB, 10%), so it most likely has."
+        ) in text, text
         route.side_effect = lambda request: _ok(copying(1005))
         text = await file_task(mock_client, records=records, handle=str(h))
-        assert "the progress has moved since" in text, text
+        assert (
+            "the progress has moved since the first check after the stop (1001 B of 9.8 KiB, 10%)"
+        ) in text, text
+        assert "then: 1000 B" not in text
         assert 'call file_task with action="stop" again' in text
+
+    @respx.mock
+    async def test_frozen_counts_past_the_limit_name_a_later_baseline(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA round 2 on #660: past the limit, the frozen-counts reply names the baseline too."""
+        from mcp_synology.modules.filestation.tasks import STOP_CONFIRM_LIMIT, StopNote, file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(RUNNING))
+        now = [1000.0]
+        records = TaskRecords(clock=lambda: now[0])
+        h = Handle("copy", "FileStation_C1")
+        records.note_stop(h, StopNote(1_700_000_000.0, now[0], "1 of 342 items, 0%", settled=False))
+        await file_task(mock_client, records=records, handle=str(h))  # the baseline
+        now[0] += STOP_CONFIRM_LIMIT + 60
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert (
+            "the progress hasn't moved since the first check after the stop (8 of 342 items, "
+            "2%), yet DSM still shows it running"
+        ) in text, text
 
     @respx.mock
     async def test_a_slow_stop_s_running_read_is_the_baseline_at_once(
@@ -2247,7 +2276,10 @@ class TestFileTask:
         await tasks.file_task(mock_client, records=records, handle=str(h))  # the baseline
         route.side_effect = lambda request: _ok({**RUNNING, "processed_num": 20})
         text = await tasks.file_task(mock_client, records=records, handle=str(h))
-        assert "but the progress has moved since, so it doesn't look like it took effect" in text
+        assert (
+            "but the progress has moved since the first check after the stop (8 of 342 items, "
+            "2%), so it doesn't look like it took effect"
+        ) in text, text
         assert "then:" not in text and "None" not in text, text
 
     @respx.mock
