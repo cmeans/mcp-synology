@@ -55,12 +55,14 @@ $body" >&2; then
   fi
 }
 
-# What a reader can do about a failure. The Ready for QA comment and the CodeQL CI Failed one share
-# it (QA round 3 on #582): a push that doesn't fix the alert fails again, as CodeQL judges the
-# PR's changed code; and this comment isn't updated, so the live state is gh pr checks.
+# What a reader can do about a failure, in the Ready for QA comment (QA round 3 on #582); settle's
+# CodeQL CI Failed comment says the same in its own words. A push that doesn't fix the alert is
+# expected to fail again, as CodeQL judges the PR's changed code (inferred: an empty commit and
+# a dismissed alert are untested); and the comment isn't updated, so the live state is
+# gh pr checks.
 fail_advice() {
   local pr=$1
-  printf '%s' "\`gh pr checks $pr\` names each failure and shows the current state; this comment isn't updated when a check is re-run. A failed job can be re-run in Actions. A failed \`CodeQL\` check needs what its alert reports fixed and pushed: an empty commit won't clear it."
+  printf '%s' "\`gh pr checks $pr\` names each failure and shows the current state; this comment isn't updated when a check is re-run. A failed job can be re-run in Actions. A failed \`CodeQL\` check needs what its alert reports fixed and pushed: an empty commit is expected to fail it again."
 }
 
 echo "PRs to settle or report on: $(printf '%s' "$PRS" | grep -c . || true)" >&2
@@ -98,7 +100,7 @@ while IFS=$'\t' read -r PR SHA ADOPT <&3; do
 $NAMES
 \`\`\`
 
-This PR stays at \`Ready for QA\`, in case someone applied that label on purpose (\`gh api repos/$REPO/issues/$PR/events\` shows who added it). If it shouldn't be there, take it off: on a branch of this repository the next recheck then gives \`CI Failed\`; on a fork nothing adds a label, so add \`CI Failed\` by hand.
+This PR stays at \`Ready for QA\`, in case someone applied that label on purpose. Who added it, and when: \`gh api --paginate repos/$REPO/issues/$PR/events --jq '.[] | select(.event == \"labeled\" and .label.name == \"Ready for QA\") | \"\\(.created_at) \\(.actor.login)\"'\` (the last line is the latest). If it shouldn't be there, take it off: on a branch of this repository that isn't a draft, the next recheck then gives \`CI Failed\`; on a fork or a draft nothing adds a label, so add \`CI Failed\` by hand.
 
 $(fail_advice "$PR")"
       fi
@@ -146,7 +148,9 @@ $(fail_advice "$PR")"
   fi
   # The missing names are in the marker, so a comment about a lagging job doesn't silence a
   # later stuck CodeQL on the same commit (QA round 3 on #582).
-  # Names only, with each line's status (": in_progress/none") cut, as that changes over time.
+  # Names only, with each line's status (": in_progress/none") cut, as that changes over time. The
+  # filter keeps a fork's job name from writing "-->" into the marker. A PR that has the older
+  # one-per-commit marker gets one more comment, once, after this change.
   comment_once "$PR" "<!-- pr-labels-recheck $SHA $(printf '%s\n' "$MISSING" | sed -E 's/: [^:]*$//; s/[^A-Za-z0-9 ._:/()-]//g' | sort -u | paste -sd ' ') -->" "The label automation has no result for these on \`$SHA\`, $AGE minutes after its runs finished:
 
 \`\`\`

@@ -163,7 +163,7 @@ Two required sections:
    tests pass, the PR auto-promotes from `Awaiting CI` → `Ready for QA`.
    `CI Failed` means a job in CI or vdsm failed, or the CodeQL check did.
    `gh pr checks <number>` (or the PR's Checks tab) shows which; a fix needs a push
-   that fixes it (for a CodeQL alert, an empty commit won't clear it). Otherwise you
+   that fixes it (for a CodeQL alert, an empty commit is expected to fail again). Otherwise you
    don't need to do anything.
 3. **Maintainer reviews.** If there are issues, the PR gets
    `QA Failed` and a review comment. Push your fix; labels reset

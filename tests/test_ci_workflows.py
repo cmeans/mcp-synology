@@ -860,9 +860,13 @@ def test_the_failure_comment_s_advice_can_be_followed(github: _FakeGitHub) -> No
     writes = "\n".join(github.writes())
     assert "`gh pr checks 7` names each failure and shows the current state" in writes
     assert "this comment isn't updated when a check is re-run" in writes
-    assert "needs what its alert reports fixed and pushed: an empty commit won't clear it" in writes
-    assert "`gh api repos/o/r/issues/7/events` shows who added it" in writes
-    assert "on a fork nothing adds a label, so add `CI Failed` by hand" in writes
+    assert (
+        "needs what its alert reports fixed and pushed: an empty commit is expected to fail it"
+        in writes
+    )
+    # Paginated, as the latest label is on a later page of a busy PR (pre-QA r4 on #582).
+    assert "`gh api --paginate repos/o/r/issues/7/events --jq" in writes
+    assert "on a fork or a draft nothing adds a label, so add `CI Failed` by hand" in writes
     assert "Checks tab" not in writes
 
 
@@ -886,9 +890,43 @@ def test_a_lagging_job_s_comment_doesnt_silence_a_stuck_codeql(github: _FakeGitH
 
 
 @_NEEDS_JQ
+def test_the_missing_marker_names_every_missing_result(github: _FakeGitHub) -> None:
+    """Pre-QA r4 on #582: keeping only the first name passed every test."""
+    github.runs(ci="completed success", vdsm="completed success")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="in_progress\tnull\tvdsm (7.1)\n",
+        codeql="in_progress\n",
+        labels="Awaiting CI\n",
+        prs_json=json.dumps([_pr(7, "Awaiting CI")]),
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 0, done.stderr
+    marker = next(line for line in github.writes() if "<!-- pr-labels-recheck abc" in line)
+    assert "CodeQL" in marker and "vdsm.yml" in marker, marker
+
+
+@_NEEDS_JQ
+def test_a_forks_job_name_can_t_close_the_marker(github: _FakeGitHub) -> None:
+    """The marker's character filter keeps a job name's "-->" out (pre-QA r4 on #582)."""
+    github.runs(ci="completed success", vdsm="completed success")
+    github.answer(
+        ci_jobs=_GOOD,
+        vdsm_jobs="in_progress\tnull\tx --> y\n",
+        labels="Awaiting CI\n",
+        prs_json=json.dumps([_pr(7, "Awaiting CI", fork=True)]),
+    )
+    done = github.run("pr-labels-recheck.sh")
+    assert done.returncode == 0, done.stderr
+    marker = next(line for line in github.writes() if "<!-- pr-labels-recheck abc" in line)
+    body = marker.split("--body ", 1)[1]
+    assert body.count("-->") == 1 and body.endswith("-->"), marker
+
+
+@_NEEDS_JQ
 @pytest.mark.parametrize("comments", ["", "<!-- pr-labels-codeql-failed abc -->\n"])
 def test_ci_failed_from_codeql_says_so(github: _FakeGitHub, comments: str) -> None:
-    """QA round 3 on #582: at Awaiting CI with both workflows green, CodeQL's failure moved the
+    """QA round 3 on #582: at Awaiting CI with no workflow job failed, CodeQL's failure moved the
     label with no word on the PR; it gets one comment per commit."""
     github.runs()
     github.answer(
@@ -904,7 +942,37 @@ def test_ci_failed_from_codeql_says_so(github: _FakeGitHub, comments: str) -> No
     else:
         assert "<!-- pr-labels-codeql-failed abc -->" in writes
         assert "re-running CI won't change it" in writes
-        assert "an empty commit won't clear it" in writes
+        assert "this comment isn't updated" in writes
+        assert "an empty commit is expected to fail it again" in writes
+
+
+@_NEEDS_JQ
+def test_ci_failed_already_there_still_gets_the_codeql_comment(github: _FakeGitHub) -> None:
+    """Pre-QA r4 on #582: a job failed (CI Failed), was re-run green, and CodeQL failed too:
+    the label doesn't change, but the reason did."""
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql="completed failure\n", labels="CI Failed\n"
+    )
+    assert github.run("pr-labels-settle.sh", "7", "abc").returncode == 0
+    writes = "\n".join(github.writes())
+    assert "--add-label" not in writes
+    assert "<!-- pr-labels-codeql-failed abc -->" in writes
+
+
+@_NEEDS_JQ
+def test_an_unreadable_comment_list_skips_the_codeql_comment_and_says_so(
+    github: _FakeGitHub,
+) -> None:
+    github.runs()
+    github.answer(
+        ci_jobs=_GOOD, vdsm_jobs=_GOOD, codeql="completed failure\n", labels="Awaiting CI\n",
+        comments_fail="",
+    )  # fmt: skip
+    done = github.run("pr-labels-settle.sh", "7", "abc")
+    assert done.returncode == 0, done.stderr
+    assert "couldn't read its comments, so no CodeQL comment" in done.stderr
+    assert "pr comment" not in "\n".join(github.writes())
 
 
 @_NEEDS_JQ

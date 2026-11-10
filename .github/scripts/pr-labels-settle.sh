@@ -85,18 +85,21 @@ case "$STATE" in
     fi
     if [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ]; then
       gh pr edit "$PR" --repo "$REPO" --add-label "CI Failed" >&2
-      # The workflows are green when CodeQL alone failed, so say which (QA round 3 on #582): a
-      # reader re-running them would change nothing. Once per commit; the step doesn't fail over
-      # it (a fork's on-unlabel token is read-only).
-      if grep -q '^failed CodeQL:' "$PENDING_DETAILS"; then
-        MARKER="<!-- pr-labels-codeql-failed $HEAD_SHA -->"
-        if COMMENTS=$(gh pr view "$PR" --repo "$REPO" --json comments \
-          --jq '.comments[] | select(.author.login | test("^github-actions(\\[bot\\])?$")) | .body') \
-          && ! printf '%s\n' "$COMMENTS" | grep -qxF "$MARKER"; then
-          gh pr comment "$PR" --repo "$REPO" --body "$MARKER
-\`CI Failed\` on \`$HEAD_SHA\` is from the \`CodeQL\` check: GitHub's default setup, not a workflow here, so re-running CI won't change it. \`gh pr checks $PR\` shows the alert's check; fix what it reports and push (an empty commit won't clear it)." >&2 \
-            || echo "PR #$PR: couldn't comment on the CodeQL failure" >&2
-        fi
+    fi
+    # When CodeQL failed with no workflow job failed, say so (QA round 3 on #582): a reader
+    # re-running the workflows would change nothing. Also when CI Failed was already there from a
+    # job since re-run green (pre-QA r4). Once per commit; the step doesn't fail over it (a fork's
+    # on-unlabel token is read-only).
+    if { [ -n "$REMOVE" ] || [ "${ADOPT:-}" = 1 ] || has "CI Failed"; } \
+      && grep -q '^failed CodeQL:' "$PENDING_DETAILS"; then
+      MARKER="<!-- pr-labels-codeql-failed $HEAD_SHA -->"
+      if ! COMMENTS=$(gh pr view "$PR" --repo "$REPO" --json comments \
+        --jq '.comments[] | select(.author.login | test("^github-actions(\\[bot\\])?$")) | .body'); then
+        echo "PR #$PR: couldn't read its comments, so no CodeQL comment" >&2
+      elif ! printf '%s\n' "$COMMENTS" | grep -qxF "$MARKER"; then
+        gh pr comment "$PR" --repo "$REPO" --body "$MARKER
+\`CI Failed\` on \`$HEAD_SHA\` is from the \`CodeQL\` check: GitHub's default setup, not a workflow here, so re-running CI won't change it. \`gh pr checks $PR\` shows the alert's check and the current state (this comment isn't updated); fix what it reports and push (an empty commit is expected to fail it again)." >&2 \
+          || echo "PR #$PR: couldn't comment on the CodeQL failure" >&2
       fi
     fi
     ;;
