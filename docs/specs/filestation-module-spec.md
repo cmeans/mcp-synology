@@ -821,8 +821,8 @@ Follow up on, list, or stop a delete, copy, move or restore that was handed off 
 > Follow up on a delete, copy, move or restore handed off to the NAS. Those tools hand
 > off long operations and return a handle such as `delete:FileStation_…`, because the NAS keeps
 > working after the reply. With a handle: `action="status"` shows progress, or the final result
-> if DSM still has it; `action="stop"` stops it, and the operation may then be partly done. Without a
-> handle: lists this user's running operations, which is useful in a new chat or after a restart.
+> if DSM still has it; `action="stop"` stops it, and the operation may then be partly done; a stop DSM
+> is slow to confirm shows on later status calls. Without a handle: lists this user's running operations, which is useful in a new chat or after a restart.
 > Handles only work for the same NAS user. Don't poll in a loop: check when the user asks, or before
 > doing something that depends on the result.
 

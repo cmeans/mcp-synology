@@ -12,7 +12,7 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
 import anyio
@@ -105,6 +105,10 @@ class StopNote:
     # The raw counts behind it (``processed_num``, ``processed_size``), compared to tell whether
     # the task moved: the shown text rounds (a 4 TiB copy reads the same 10 GiB later).
     mark: tuple[Any, ...] | None = None
+    # Whether ``mark`` comes from a read after the stop went. A note taken from the read before
+    # it (a stop whose answer was lost) isn't a baseline: the task moves until DSM acts on the
+    # stop, so the first read after the note becomes the baseline instead (QA round 1 on #660).
+    settled: bool = True
 
 
 @dataclass
@@ -217,12 +221,32 @@ class TaskRecords:
     def stop_verdict(self, record: TaskRecord, status: dict[str, Any] | None) -> str:
         """For a running task with a noted stop: ``moved`` (its counts changed since),
         ``lapsed`` (past ``STOP_CONFIRM_LIMIT``) or ``pending``. The list and the status reply
-        both ask this, so they agree."""
-        then = record.stop.mark if record.stop is not None else None
+        both ask this, so they agree.
+
+        An unsettled note (counts from before the stop) takes this read's counts as its
+        baseline and isn't compared yet: movement before DSM acted on the stop isn't a sign
+        it failed."""
         now = progress_mark(status) if status is not None else None
+        if record.stop is not None and not record.stop.settled:
+            if now is not None:
+                record.stop = replace(record.stop, mark=now, settled=True)
+                logger.debug("Stop note of %s: baseline counts %s", record.handle, now)
+            return "lapsed" if self.stop_lapsed(record) else "pending"
+        then = record.stop.mark if record.stop is not None else None
         if then is not None and now is not None and now != then:
             return "moved"
         return "lapsed" if self.stop_lapsed(record) else "pending"
+
+    def compared(self, record: TaskRecord, status: dict[str, Any] | None) -> bool:
+        """Whether ``stop_verdict`` will compare this status's counts with a baseline: call it
+        first, since the verdict can make an unsettled note's baseline of this read."""
+        return (
+            record.stop is not None
+            and record.stop.settled
+            and record.stop.mark is not None
+            and status is not None
+            and progress_mark(status) is not None
+        )
 
     def set_final(self, handle: Handle, status: dict[str, Any]) -> None:
         record = self.get(handle)
@@ -1390,9 +1414,12 @@ async def file_task(
             )
         return "\n" + "\n".join(lines)
 
-    def note_unconfirmed(sent: tuple[float, float], status: dict[str, Any] | None) -> None:
+    def note_unconfirmed(
+        sent: tuple[float, float], status: dict[str, Any] | None, *, after: bool = False
+    ) -> None:
         """#657: a later status call says a stop was sent (``sent``: Unix time and the store's
-        clock just before it went), with the progress a status read gave."""
+        clock just before it went), with the progress a status read gave. ``after``: that read
+        came after the stop, so its counts are the baseline; otherwise the next read's are."""
         records.note_stop(
             parsed,
             StopNote(
@@ -1400,7 +1427,17 @@ async def file_task(
                 sent_clock=sent[1],
                 progress=progress_text(status) if status else None,
                 mark=progress_mark(status) if status else None,
+                settled=after,
             ),
+        )
+
+    def no_resend_before(sent: float) -> str:
+        """What a reply about an unconfirmed stop says to do next (QA round 1 on #660): no
+        polling, and when another stop becomes the advice."""
+        return (
+            f"Don't send another stop before {format_timestamp(sent + STOP_CONFIRM_LIMIT)}: if "
+            "it still shows as running after that, the stop can be sent again. Check when the "
+            "user asks, or before doing anything that depends on the result."
         )
 
     def partway_line() -> str:
@@ -1472,6 +1509,12 @@ async def file_task(
                 if lost
                 else " The stop may or may not have taken effect.",
             )
+        else:
+            # Sent while DSM said it had no such task: its "success" says nothing (CopyMove
+            # answers that for any task ID), so this stop is the one a later status call should
+            # quote, not an older note's (QA round 1 on #660).
+            if before is None:
+                note_unconfirmed(sent, None)
         return None
 
     async def unanswered_stop(before: dict[str, Any] | None, sent: tuple[float, float]) -> str:
@@ -1536,8 +1579,8 @@ async def file_task(
             note_unconfirmed(sent, before)
             return (
                 f"A stop was sent for the {parsed.kind} of {what}, but DSM was slow to answer it "
-                f"and {unknown}, so whether it stopped isn't known. Check with file_task and this "
-                f"handle in a minute.{earlier_skip()}"
+                f"and {unknown}, so whether it stopped isn't known. {no_resend_before(sent[0])}"
+                f"{earlier_skip()}"
             )
         if now.get("finished"):
             records.set_final(parsed, now)
@@ -1546,18 +1589,21 @@ async def file_task(
                 "A stop was sent and DSM was slow to answer it; the task ended meanwhile, so it "
                 f"may have stopped partway: check what's left.\n{final}"
             )
-        note_unconfirmed(sent, now)
+        note_unconfirmed(sent, now, after=True)
         return (
             f"A stop was sent for the {parsed.kind} of {what}, but DSM hasn't confirmed it "
-            f"yet: the task still shows as running ({progress_text(now)}). Check with "
-            f"file_task and this handle in a minute before doing anything else with it; it "
-            f"usually ends within a minute.{earlier_skip()}"
+            f"yet: the task still shows as running ({progress_text(now)}). DSM can be slow to "
+            f"confirm a stop that already took effect. {no_resend_before(sent[0])}"
+            f"{earlier_skip()}"
         )
 
     async def after_refusal(refused: int) -> str:
         """DSM says it has no such task, which can pass too, so a read says what's known."""
         now = await status_or_none(" The stop wasn't accepted.")
         if now is None:
+            # DSM refused this stop, so an older note's time would be quoted as the latest stop
+            # (QA round 1 on #660); the reply already says DSM can't confirm one.
+            records.clear_stop(parsed, f"DSM refused a stop (error {refused}) of a lost task")
             return gone(stop_sent=True) + earlier_skip()
         if now.get("finished"):
             records.set_final(parsed, now)
@@ -1610,7 +1656,8 @@ async def file_task(
     if status is None:
         if record is not None and record.final_status is not None:
             return partway + await _final_text(client, parsed, record.final_status, record)
-        return gone() + earlier_skip()
+        # A stop DSM hasn't confirmed: the reply says one was sent (QA round 1 on #660).
+        return gone(stop_sent=record is not None and record.stop is not None) + earlier_skip()
     logger.debug("%s status (%s): %s", parsed.api, parsed, status)
 
     if status.get("finished"):
@@ -1636,10 +1683,12 @@ async def file_task(
         # moved since or it's been running far longer than that.
         sent = f"A stop was sent at {format_timestamp(record.stop.sent)}"
         then = record.stop.progress
+        stop_sent_at = record.stop.sent
+        # Before the verdict, which can make this read an unsettled note's baseline.
+        compared = records.compared(record, status)
+        counts_now = progress_mark(status)
         verdict = records.stop_verdict(record, status)
         logger.debug("Stop note of %s: %s", parsed, verdict)
-        counts_now = progress_mark(status)
-        compared = record.stop.mark is not None and counts_now is not None
         if verdict != "pending":
             later = _elapsed_text(records.stop_age(record))
             if verdict == "moved":
@@ -1658,13 +1707,20 @@ async def file_task(
             )
         then_text = f" (progress then: {then})" if then is not None else ""
         # The server compared the counts (pending means unchanged), so it says so; with no
-        # counts to compare, it can't.
-        hint = " The progress hasn't moved since, so it most likely has." if compared else ""
+        # counts to compare, it can't. Unchanged counts suggest the stop took effect only for a
+        # copy or move that has written something: a delete counts finished items, and a
+        # CopyMove can read 0 bytes while it writes (DSM 7.1.1; QA round 1 on #660).
+        hint = ""
+        if compared:
+            hint = " The progress hasn't moved since."
+            wrote = any(isinstance(v, int | float) and v > 0 for v in counts_now or ())
+            if parsed.kind != "delete" and wrote:
+                hint = " The progress hasn't moved since, so it most likely has."
         return (
             f"Still shows as {what} ({progress}). Handle: `{parsed}`\n"
             f"{sent}{then_text} and DSM hasn't confirmed it yet. DSM can be slow to confirm a "
-            f"stop that already took effect.{hint} Check again in a minute; don't send another "
-            f"stop yet.{earlier_skip()}"
+            f"stop that already took effect.{hint} {no_resend_before(stop_sent_at)}"
+            f"{earlier_skip()}"
         )
     return (
         f"Still {what} ({progress}). Handle: `{parsed}`\n"
