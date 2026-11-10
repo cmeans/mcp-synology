@@ -132,6 +132,12 @@ API = "SYNO.FileStation.Delete"
 RUNNING = {"finished": False, "processed_num": 8, "total": 342, "progress": 0.02}
 
 
+def _list_stop_note(records: TaskRecords, handle: Handle) -> str:
+    from mcp_synology.modules.filestation.tasks import _stop_note
+
+    return _stop_note(records, handle)
+
+
 def _ok(data: dict[str, Any]) -> httpx.Response:
     return httpx.Response(200, json={"success": True, "data": data})
 
@@ -1556,7 +1562,10 @@ class TestFileTask:
     @respx.mock
     @pytest.mark.parametrize(
         ("exc", "code"),
-        [(httpx.ConnectError("refused"), "unavailable"), (httpx.WriteTimeout("t"), "timeout")],
+        [
+            (httpx.RemoteProtocolError("dropped"), "unavailable"),
+            (httpx.WriteTimeout("t"), "timeout"),
+        ],
     )
     async def test_file_task_stop_unanswered_stop(
         self, mock_client: DsmClient, exc: Exception, code: str
@@ -1686,15 +1695,38 @@ class TestFileTask:
         from mcp_synology.modules.filestation.tasks import STOP_CONFIRM_LIMIT, file_task
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(RUNNING))
-        records = TaskRecords()
+        now = [1000.0]
+        records = TaskRecords(clock=lambda: now[0])
         h = Handle("copy", "FileStation_C1")
-        records.note_stop(h, time.time() - STOP_CONFIRM_LIMIT + 30, None)
+        records.note_stop(h, time.time(), None)
+        now[0] += STOP_CONFIRM_LIMIT - 30
         text = await file_task(mock_client, records=records, handle=str(h))
         assert "don't send another stop yet" in text and "progress then" not in text
-        records.note_stop(h, time.time() - STOP_CONFIRM_LIMIT - 60, "8 of 342 items, 2%")
+        listed = _list_stop_note(records, h)
+        assert listed.endswith(", not confirmed yet"), listed
+        records.note_stop(h, time.time(), "8 of 342 items, 2%")
+        now[0] += STOP_CONFIRM_LIMIT + 60
         text = await file_task(mock_client, records=records, handle=str(h))
         assert "it's still running 6 min later" in text, text
         assert 'call file_task with action="stop" again' in text
+        # Pre-QA r2 on #660: the list row agrees with the status reply past the limit.
+        listed = _list_stop_note(records, h)
+        assert listed.endswith(", doesn't look like it took effect"), listed
+
+    @respx.mock
+    async def test_the_shown_time_doesnt_drive_the_limit(self, mock_client: DsmClient) -> None:
+        """Pre-QA r2 on #660: a wall-clock step (NTP, a resume) shifted the limit. The store's
+        monotonic clock decides it; the wall-clock time is only shown."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(RUNNING))
+        now = [1000.0]
+        records = TaskRecords(clock=lambda: now[0])
+        h = Handle("copy", "FileStation_C1")
+        records.note_stop(h, time.time() + 3600, None)  # the wall clock stepped back an hour
+        now[0] += 400
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert "doesn't look like it took effect" in text, text
 
     @respx.mock
     async def test_a_task_that_ended_after_an_unconfirmed_stop_may_be_partway(
@@ -1720,12 +1752,14 @@ class TestFileTask:
         "exc",
         [
             httpx.RemoteProtocolError("dropped"),
-            httpx.ConnectError("refused"),
+            httpx.ReadError("reset"),
+            httpx.Response(500, text="oops"),
+            httpx.Response(200, text="<html>login</html>", headers={"content-type": "text/html"}),
         ],
     )
     @respx.mock
     async def test_a_stop_lost_on_the_way_is_noted_too(
-        self, mock_client: DsmClient, exc: Exception
+        self, mock_client: DsmClient, exc: Any
     ) -> None:
         """Pre-QA on #660: a stop that may or may not have reached DSM is just as unconfirmed;
         with the progress noted, a later status call can tell whether it took effect."""
@@ -1742,6 +1776,109 @@ class TestFileTask:
         record = records.get(Handle("copy", "FileStation_C1"))
         assert record is not None and record.stop_sent is not None
         assert record.stop_progress == "8 of 342 items, 2%"
+
+    @pytest.mark.parametrize("exc", [httpx.ConnectError("refused"), httpx.ConnectTimeout("t")])
+    @respx.mock
+    async def test_a_stop_that_never_left_isnt_noted(
+        self, mock_client: DsmClient, exc: Exception
+    ) -> None:
+        """Pre-QA r2 on #660: a connection that couldn't be opened never carried the stop. A
+        note would say it most likely took effect and hold off another for 5 minutes."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING), "stop": exc})
+        )
+        records = TaskRecords()
+        with pytest.raises(ToolError) as exc_info:
+            await file_task(
+                mock_client, records=records, handle="copy:FileStation_C1", action="stop"
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "couldn't be reached for the stop request" in message
+        assert message.endswith("Nothing was stopped."), message
+        record = records.get(Handle("copy", "FileStation_C1"))
+        assert record is None or record.stop_sent is None
+
+    @respx.mock
+    async def test_a_stop_dsm_confirms_clears_an_earlier_note(self, mock_client: DsmClient) -> None:
+        """Pre-QA r2 on #660: #657 says a confirmed stop needs no note; the old one would have
+        offered yet another stop."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _ok(RUNNING), "stop": _ok({})})
+        )
+        records = TaskRecords()
+        h = Handle("copy", "FileStation_C1")
+        records.note_stop(h, 1_700_000_000.0, "1 of 342 items, 0%")
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert text.startswith("Stopped copy"), text
+        record = records.get(h)
+        assert record is not None
+        assert (record.stop_sent, record.stop_progress, record.stop_noted) == (None, None, None)
+
+    @pytest.mark.parametrize(
+        "replies",
+        [
+            {"status": "finished"},  # finished when the stop's first read came
+            {"status": 599, "final": True},  # gone, with a finished result remembered
+            {"status": "running-then-finished", "stop": 401},  # DSM refused: it had ended
+        ],
+        ids=["finished", "remembered", "refused"],
+    )
+    @respx.mock
+    async def test_a_stop_after_a_noted_one_says_it_may_have_stopped_partway(
+        self, mock_client: DsmClient, replies: dict[str, Any]
+    ) -> None:
+        """Pre-QA r2 on #660: the stop path said "already finished, so nothing was stopped"
+        with the full result, reading as if the task had run to the end."""
+        from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+        seen = {"status": 0}
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "stop":
+                return _err(replies["stop"]) if "stop" in replies else _ok({})
+            if method == "status":
+                seen["status"] += 1
+                kind = replies["status"]
+                if kind == 599:
+                    return _err(599)
+                if kind == "running-then-finished" and seen["status"] == 1:
+                    return _ok(RUNNING)
+                return _ok(MOVE_FINISHED)
+            return _ok({})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        records = TaskRecords()
+        h = Handle("move", "FileStation_M1")
+        records.add(TaskRecord(handle=h, paths=["/s/a"], dest="/s/d"))
+        if replies.get("final"):
+            records.set_final(h, MOVE_FINISHED)
+        records.note_stop(h, 1_700_000_000.0, "8 of 342 items, 2%")
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert text.startswith(
+            "A stop was sent at 2023-11-14 22:13:20 UTC, and the task has ended since, so it "
+            "may have stopped partway: check what's left.\n"
+        ), text
+        assert "nothing was stopped" not in text
+
+    @respx.mock
+    async def test_a_status_after_a_noted_stop_and_a_remembered_end_says_partway(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import TaskRecord, file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _err(599))
+        records = TaskRecords()
+        h = Handle("move", "FileStation_M1")
+        records.add(TaskRecord(handle=h, paths=["/s/a"], dest="/s/d"))
+        records.set_final(h, MOVE_FINISHED)
+        records.note_stop(h, 1_700_000_000.0, None)
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text.startswith("A stop was sent at 2023-11-14 22:13:20 UTC, and the task"), text
 
     @respx.mock
     async def test_a_running_task_with_no_stop_sent_still_offers_one(
@@ -2202,7 +2339,7 @@ class TestFileTask:
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "unavailable"
         assert error["message"].startswith(
-            "Check task failed: DSM lost the connection during the status request"
+            "Check task failed: DSM couldn't be reached for the status request"
         )
 
     @pytest.mark.parametrize("handle", [None, "", "  "])

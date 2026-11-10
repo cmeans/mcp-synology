@@ -76,6 +76,9 @@ def unanswered_status_response(
     """
     timed_out = isinstance(exc, httpx.TimeoutException)
     what = "didn't answer" if timed_out else "lost the connection during"
+    if isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout):
+        # The connection was never opened, so the request never reached DSM (as Photos says).
+        what = "couldn't be reached for"
     note = f" {task_note}" if task_note else ""
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
