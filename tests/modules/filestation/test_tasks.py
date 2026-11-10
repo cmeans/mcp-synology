@@ -896,6 +896,22 @@ def _router(replies: dict[str, Any], calls: list[tuple[str, str]] | None = None)
 
 class TestDiscover:
     @respx.mock
+    async def test_the_list_notes_an_unconfirmed_stop(self, mock_client: DsmClient) -> None:
+        """#657: the no-handle list marks a task a stop was sent to, unconfirmed."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(LIST_DELETE, LIST_MOVE)})
+        )
+        records = TaskRecords()
+        records.note_stop(Handle("move", "FileStation_M1"), 1_700_000_000.0)
+        text = await file_task(mock_client, records=records)
+        move_row = next(line for line in text.splitlines() if "FileStation_M1" in line)
+        assert "stop sent 2023-11-14 22:13:20 UTC, not confirmed yet" in move_row, move_row
+        delete_row = next(line for line in text.splitlines() if "FileStation_D1" in line)
+        assert "stop sent" not in delete_row
+
+    @respx.mock
     async def test_discover_seeds_records_and_returns_note(self, mock_client: DsmClient) -> None:
         from mcp_synology.modules.filestation.tasks import discover_running_tasks
 
@@ -1614,6 +1630,62 @@ class TestFileTask:
             "yet: the task still shows as running ("
         ), text
         assert "Stopped" not in text
+
+    @respx.mock
+    async def test_a_status_call_after_an_unconfirmed_stop_says_so(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#657 (0.11.0rc5 live test, 4m.4): the next status call answered as for any running
+        task and offered another stop; now it says when the stop was sent, and not to resend."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._slow_stop(_ok(RUNNING))
+        )
+        records = TaskRecords()
+        await file_task(mock_client, records=records, handle="copy:FileStation_C1", action="stop")
+        record = records.get(Handle("copy", "FileStation_C1"))
+        assert record is not None and record.stop_sent is not None
+        route.side_effect = lambda request: _ok(RUNNING)
+        text = await file_task(mock_client, records=records, handle="copy:FileStation_C1")
+        assert text.startswith("Still shows as copying on the NAS"), text
+        assert "A stop was sent at " in text and "UTC and DSM hasn't confirmed it yet" in text
+        assert "don't send another stop" in text
+        assert 'action="stop"' not in text
+
+    @respx.mock
+    async def test_a_running_task_with_no_stop_sent_still_offers_one(
+        self, mock_client: DsmClient
+    ) -> None:
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(RUNNING))
+        text = await file_task(mock_client, records=TaskRecords(), handle="copy:FileStation_C1")
+        assert 'action="stop"' in text
+        assert "A stop was sent" not in text
+
+    @respx.mock
+    async def test_an_unknown_slow_stop_is_noted_too(self, mock_client: DsmClient) -> None:
+        """A stop whose status couldn't be read is just as unconfirmed (#657)."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._slow_stop(httpx.ReadTimeout("slow too"))
+        )
+        records = TaskRecords()
+        await file_task(mock_client, records=records, handle="copy:FileStation_C1", action="stop")
+        record = records.get(Handle("copy", "FileStation_C1"))
+        assert record is not None and record.stop_sent is not None
+
+    def test_a_later_call_meeting_the_task_keeps_the_stop_note(self) -> None:
+        from mcp_synology.modules.filestation.tasks import TaskRecord
+
+        records = TaskRecords()
+        h = Handle("copy", "FileStation_C1")
+        records.note_stop(h, 1_000_000.0)
+        records.add(TaskRecord(handle=h, paths=["/s/a"], dest="/s/d"))
+        record = records.get(h)
+        assert record is not None and record.stop_sent == 1_000_000.0
 
     @respx.mock
     async def test_a_slow_stop_whose_task_finished_shows_its_result(
