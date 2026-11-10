@@ -7,8 +7,17 @@ from typing import Any
 import pytest
 
 from mcp_synology.modules.storage.disks import get_disk, list_disks, smart_table, trend_lines
-from mcp_synology.modules.storage.overview import low_performance
-from tests.modules.storage.dsm import VDSM, Replay, flat, load_info_with, ok, run, run_error
+from mcp_synology.modules.storage.overview import get_storage_overview, low_performance
+from tests.modules.storage.dsm import (
+    VDSM,
+    Replay,
+    err,
+    flat,
+    load_info_with,
+    ok,
+    run,
+    run_error,
+)
 
 
 async def test_real_nas_list() -> None:
@@ -40,7 +49,7 @@ async def test_real_nas_low_performance_in_raid() -> None:
 
 
 async def test_real_nas_get_disk_low_performance_in_raid() -> None:
-    # The capture has only get_health_info for sdb and sdc (#659), so their other sections
+    # The capture has only get_health_info for sdb, sdc and sdd (#659), so their other sections
     # are unmatched here and read as notes; the status line is what's checked.
     text, _ = await run(get_disk, disk="sdb")
     assert flat("Status: normal (low performance in RAID: now)") in flat(text)
@@ -164,6 +173,8 @@ def test_smart_table_missing_cell_is_a_dash() -> None:
         ({"healthInfo": {"overview": {"low_performance_in_raid": "now"}}}, "now"),
         ({"healthInfo": {"overview": {"low_performance_in_raid": "normal"}}}, None),
         ({"healthInfo": {"overview": {"low_performance_in_raid": ""}}}, None),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": False}}}, None),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": {"x": 1}}}}, None),
         ({"healthInfo": {"overview": {}}}, None),
         ({"healthInfo": {}}, None),
         ({"healthInfo": None}, None),
@@ -173,3 +184,32 @@ def test_smart_table_missing_cell_is_a_dash() -> None:
 )
 def test_low_performance(health: Any, expected: str | None) -> None:
     assert low_performance(health) == expected
+
+
+@pytest.mark.parametrize("reply", [502, err(117)], ids=["http-502", "dsm-117"])
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_a_disk_whose_flag_cant_be_read_is_a_note(tool: Any, reply: Any) -> None:
+    """Pre-QA on #661: one disk's get_health_info failing leaves a note naming the flag, not
+    the disk's health, and the tool still answers."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        replay.answer(
+            {"api": "SYNO.Storage.CGI.Smart", "method": "get_health_info", "device": "/dev/sda"},
+            reply,
+        )
+
+    text, _ = await run(tool, setup=setup)
+    assert "Drive 1 (sda) low-performance-in-RAID flag:" in text
+    assert "Drive 1 (sda) health" not in text
+    assert "low performance in RAID: now" in text or "low performance in RAID (now)" in text
+
+
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_without_the_smart_api_one_note(tool: Any) -> None:
+    def setup(replay: Replay, client: Any) -> None:
+        client._api_cache.pop("SYNO.Storage.CGI.Smart", None)
+
+    text, replay = await run(tool, setup=setup)
+    assert text.count("Low-performance-in-RAID flags: not available on this NAS") == 1
+    assert "low-performance-in-RAID flag:" not in text
+    assert replay.calls("SYNO.Storage.CGI.Smart", "get_health_info") == []

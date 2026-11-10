@@ -169,9 +169,13 @@ def low_performance(health: Any) -> str | None:
     value = as_dict(as_dict(as_dict(health).get("healthInfo")).get("overview")).get(
         "low_performance_in_raid"
     )
-    if value in (None, "", "normal"):
+    # Only DSM's text values ("now", "normal"); anything else isn't a flag this can name.
+    if not isinstance(value, str) or value in ("", "normal"):
         return None
-    return str(value)
+    return value
+
+
+_SMART_API = "SYNO.Storage.CGI.Smart"
 
 
 async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections) -> dict[str, str]:
@@ -181,12 +185,18 @@ async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections
     it's one call per disk. vdsm has no disks, so nothing is read there.
     """
     slow: dict[str, str] = {}
-    for disk in items(info, "disks"):
+    disks = items(info, "disks")
+    if disks and _SMART_API not in client._api_cache:
+        # One note, not one per disk: the API is missing for all of them.
+        optional.notes.append("Low-performance-in-RAID flags: not available on this NAS")
+        return slow
+    for disk in disks:
         device = str(disk.get("device") or f"/dev/{disk.get('id')}")
         health = await optional.get(
             client,
-            f"{disk_label(disk)} health",
-            "SYNO.Storage.CGI.Smart",
+            # Only this flag is read here, so the note names it, not the disk's whole health.
+            f"{disk_label(disk)} low-performance-in-RAID flag",
+            _SMART_API,
             "get_health_info",
             {"device": device},
         )
