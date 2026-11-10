@@ -32,6 +32,12 @@ from mcp_synology.modules.filestation.standardized_variants import (
 logger = logging.getLogger(__name__)
 
 
+def never_sent(exc: Exception) -> bool:
+    """The request never reached DSM: its connection couldn't be opened (as Photos'
+    ``photo_task`` says). A pool timeout belongs here too, but that's #442."""
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
+
+
 def dsm_str(value: str) -> str:
     """JSON-quote a free-text parameter value for a JSON-format File Station API.
 

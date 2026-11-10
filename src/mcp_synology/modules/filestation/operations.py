@@ -37,6 +37,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     missing_text,
     name_key,
+    never_sent,
     normalize_path,
     path_exists,
     paths_isdir,
@@ -384,11 +385,6 @@ def _with_progress_so_far(
         message = _unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
     body["error"]["message"] = message
     return ToolError(json.dumps(body))
-
-
-def _never_sent(exc: Exception) -> bool:
-    """The request never reached DSM: the connection couldn't be opened (as Photos says, #665)."""
-    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
 
 
 def _already_done(
@@ -1246,7 +1242,7 @@ async def _copy_move_tasks(
                     rest = normalized[i + 1 :] + list(later or [])
                     if not done and not skipped_so_far and not rest:
                         raise  # nothing to add: the server's usual timeout or connection error
-                    if _never_sent(e):
+                    if never_sent(e):
                         # The connection couldn't be opened, so the start never reached DSM:
                         # this item wasn't started either (#665). Writes are never resent.
                         error_response(
@@ -1666,7 +1662,7 @@ async def delete_files(
             except httpx.TransportError as e:
                 if not deleted and not normalized[i + 1 :]:
                     raise  # nothing to add: the server's usual timeout or connection error
-                if _never_sent(e):
+                if never_sent(e):
                     # The connection couldn't be opened, so the start never reached DSM: this
                     # path wasn't started either (#665).
                     error_response(
