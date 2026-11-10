@@ -104,9 +104,10 @@ def test_every_baked_dsm_version_has_an_update() -> None:
 def test_vdsm_image_is_pinned() -> None:
     from tests.vdsm.config import VDSM_IMAGE
 
-    # By digest from the GHCR mirror: Docker Hub stopped serving it on 2026-11-10.
+    # By digest from the GHCR mirror, or upstream's GHCR as its fallback: Docker Hub stopped
+    # serving it on 2026-11-10.
     repo, at, digest = VDSM_IMAGE.partition("@")
-    assert repo == "ghcr.io/cmeans/virtual-dsm"
+    assert repo in {"ghcr.io/cmeans/virtual-dsm", "ghcr.io/vdsm/virtual-dsm"}
     assert at
     assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), digest
 

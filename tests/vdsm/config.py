@@ -124,7 +124,7 @@ BAKE_VERSION: int = 9
 # ("pull access denied"; its API answers 404 for the repository). The mirror is a copy of
 # upstream's 7.66 from ghcr.io/vdsm/virtual-dsm with digests preserved (same index digest,
 # same amd64 and arm64 images), so a pin to either names the same image; upstream's can
-# take its place if the mirror goes.
+# take its place if the mirror goes (DEVELOPMENT.md, "The container image").
 VDSM_IMAGE: str = (
     "ghcr.io/cmeans/virtual-dsm"
     "@sha256:02cea121099a65a75575c974d71a5898666cc324ab26ae8c04a04e0a42172181"  # 7.66
