@@ -3609,6 +3609,7 @@ class TestDeleteFailurePartway:
         fail_on: int,
         *,
         transport: bool = False,
+        connect: bool = False,
         status: dict | None = None,
         code: int = 407,
         status_code: int | None = None,
@@ -3628,6 +3629,8 @@ class TestDeleteFailurePartway:
                 if len(starts) == fail_on and status is None and status_code is None:
                     if transport:
                         raise httpx.ReadTimeout("")
+                    if connect:
+                        raise httpx.ConnectError("")
                     return httpx.Response(200, json={"success": False, "error": {"code": code}})
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
@@ -3753,6 +3756,40 @@ class TestDeleteFailurePartway:
             f"Check with list_files, or file_task with no handle, before deleting again. "
             f"{_SHORT_RETRY_NOTE}"
         )
+
+    @respx.mock
+    async def test_a_start_that_never_reached_dsm_partway(self, mock_client: DsmClient) -> None:
+        """#665: a connection that couldn't be opened sent nothing: the path wasn't started."""
+        self._route(2, connect=True)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b", "/video/c"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["code"] == "unavailable"
+        assert error["message"] == (
+            "Delete files failed: DSM couldn't be reached (ConnectError). Already deleted "
+            "before this failure: /video/a. Not started: /video/b, /video/c."
+        )
+        assert error["retryable"] is False
+        assert (error["param"], error["value"]) == ("paths", "/video/b")
+        assert error["suggestion"] == (
+            "Retry what wasn't started once DSM can be reached, and leave out the paths "
+            "already deleted (the same call would be refused)."
+        )
+
+    @respx.mock
+    async def test_a_first_start_that_never_reached_dsm_can_be_retried(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#665: nothing deleted and nothing sent: the same call again is safe."""
+        self._route(1, connect=True)
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/video/a", "/video/b"], timeout=5)
+        error = json.loads(str(exc.value))["error"]
+        assert error["message"] == (
+            "Delete files failed: DSM couldn't be reached (ConnectError). Not started: "
+            "/video/a, /video/b."
+        )
+        assert error["retryable"] is True
 
     @respx.mock
     @pytest.mark.parametrize("fail_on", [1, 2], ids=["first", "later"])
@@ -4019,8 +4056,8 @@ def _unanswered_start(calls: list[dict[str, str]], at: str, error: Exception | N
 @respx.mock
 @pytest.mark.parametrize(
     ("error", "code"),
-    [(httpx.ReadTimeout(""), "timeout"), (httpx.ConnectError(""), "unavailable")],
-    ids=["timeout", "connection"],
+    [(httpx.ReadTimeout(""), "timeout"), (httpx.RemoteProtocolError(""), "unavailable")],
+    ids=["timeout", "connection lost"],
 )
 async def test_an_unanswered_start_partway_says_what_happened(
     mock_client: DsmClient, no_poll_wait: None, error: Exception, code: str
@@ -4048,6 +4085,59 @@ async def test_an_unanswered_start_partway_says_what_happened(
         "its move may have started. Already moved before this failure: /s/a. Not started: /s/c."
     )
     assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/a", "/s/b"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [(httpx.ConnectError(""), "unavailable"), (httpx.ConnectTimeout(""), "timeout")],
+    ids=["connect error", "connect timeout"],
+)
+@pytest.mark.parametrize("operation", ["Copy", "Move"])
+async def test_a_start_that_never_reached_dsm_says_it_wasnt_started(
+    mock_client: DsmClient, no_poll_wait: None, error: Exception, code: str, operation: str
+) -> None:
+    """#665: a connection that couldn't be opened never sent the start, so nothing started."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_unanswered_start(calls, "/s/b", error)
+    )
+    tool = copy_files if operation == "Copy" else move_files
+    with pytest.raises(ToolError) as refused:
+        await tool(mock_client, paths=["/s/a", "/s/b", "/s/c"], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    past = "copied" if operation == "Copy" else "moved"
+    assert body["code"] == code
+    assert body["retryable"] is False
+    assert (body["param"], body["value"]) == ("paths", "/s/b")
+    assert body["message"].startswith(
+        f"{operation} files failed: DSM couldn't be reached ({type(error).__name__}"
+    )
+    assert body["message"].endswith(
+        f"Already {past} before this failure: /s/a. Not started: /s/b, /s/c."
+    )
+    assert "may have started" not in body["message"]
+    assert body["suggestion"] == (
+        "Retry what wasn't started once DSM can be reached, and leave out what's already done."
+    )
+    assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/a", "/s/b"]
+
+
+@respx.mock
+async def test_a_restore_start_that_never_reached_dsm_says_it_wasnt_started(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """#665: restore goes through the same start as a move."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_unanswered_start(calls, "/s/#recycle/b", httpx.ConnectError(""))
+    )
+    with pytest.raises(ToolError) as refused:
+        await restore_from_recycle_bin(mock_client, share="/s", paths=["a", "b", "c"])
+    message = json.loads(str(refused.value))["error"]["message"]
+    assert message.startswith("Restore files failed: DSM couldn't be reached (ConnectError")
+    assert "may have started" not in message
+    assert "Not started: /s/#recycle/b" in message
 
 
 @respx.mock
@@ -7500,4 +7590,5 @@ class TestSourcesDsmWontShow:
             "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
             "be in the recycle bin. Not started: "
         ) in message, message
-        assert message.endswith("Not started: /w/src/b. Not started: c."), message
+        # The start that never reached DSM (#665) is listed first among what wasn't started.
+        assert message.endswith("Not started: /w/src/f, /w/src/b. Not started: c."), message
