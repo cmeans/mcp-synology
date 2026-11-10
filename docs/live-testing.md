@@ -35,6 +35,8 @@ real output. "Found" names the release candidate under test (not a published rel
 | 0.11.0rc3 | Asked to delete the album whose ID is 9876543, the tester sent the ID as text, which matched no ID and deleted the album *named* 9876543; IDs, names and paths now go in separate parameters | #615 |
 | 0.11.0rc3 | Replies didn't say an overwrite replaced a file, and `get_file_info` on missing paths said only "DSM error 408" | #623 |
 | 0.11.0rc3, rc4 | `file_task`'s stop got no reply in claude.ai: DSM 7.1 answered the stop long after it took effect, past claude.ai's 60 s limit | #632 |
+| 0.11.0rc5 | After a stop DSM hadn't confirmed, the next `file_task` status call answered as for any running task and offered another stop | #660 |
+| 0.11.0rc5 | The storage overview didn't mention a disk DSM flags for low performance in its RAID | #661 |
 
 ## Clients tested, and how they differ
 
