@@ -2201,6 +2201,78 @@ class TestFileTask:
         record = records.get(h)
         assert record is not None and record.stop is None
 
+    @respx.mock
+    async def test_a_slow_stop_of_a_lost_task_renews_the_note(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r6 on #660: the slow-stop path for a task DSM had no record of kept an older
+        note, whose time a later running status quoted as the latest stop."""
+        from mcp_synology.modules.filestation import tasks
+
+        monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _err(599), "stop": httpx.ReadTimeout("slow")})
+        )
+        now = [1000.0]
+        records = TaskRecords(clock=lambda: now[0])
+        h = Handle("copy", "FileStation_C1")
+        _note(records, h, 1_700_000_000.0, "8 of 342 items, 2%", (8, None))
+        now[0] += tasks.STOP_CONFIRM_LIMIT + 120
+        text = await tasks.file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert "A stop was sent, but DSM can't confirm it." in text, text
+        record = records.get(h)
+        assert record is not None and record.stop is not None
+        assert record.stop.sent_clock == now[0] and not record.stop.settled
+        route.side_effect = lambda request: _ok(RUNNING)
+        text = await tasks.file_task(mock_client, records=records, handle=str(h))
+        assert "DSM hasn't confirmed it yet" in text, text
+
+    @respx.mock
+    async def test_a_moved_reply_after_a_note_with_no_progress_shows_no_then(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r6 on #660: a stop sent during a 599 is noted with no progress; once a later
+        read's counts move, the reply printed "(then: None)"."""
+        from mcp_synology.modules.filestation import tasks
+
+        monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _err(599), "stop": _ok({})})
+        )
+        records = TaskRecords()
+        h = Handle("copy", "FileStation_C1")
+        records.add(tasks.TaskRecord(handle=h, paths=["/s/a"], dest="/s/d"))
+        await tasks.file_task(mock_client, records=records, handle=str(h), action="stop")
+        route.side_effect = lambda request: _ok(RUNNING)
+        await tasks.file_task(mock_client, records=records, handle=str(h))  # the baseline
+        route.side_effect = lambda request: _ok({**RUNNING, "processed_num": 20})
+        text = await tasks.file_task(mock_client, records=records, handle=str(h))
+        assert "but the progress has moved since, so it doesn't look like it took effect" in text
+        assert "then:" not in text and "None" not in text, text
+
+    @respx.mock
+    async def test_stops_on_made_up_handles_add_no_records(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r6 on #660: CopyMove's stop answers success for any task ID, so noting a stop
+        sent during a 599 for an unknown handle let made-up handles push real records out of
+        the bounded store."""
+        from mcp_synology.modules.filestation import tasks
+
+        monkeypatch.setattr(tasks, "_LOST_TASK_WAIT", 0)
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"status": _err(599), "stop": _ok({})})
+        )
+        records = TaskRecords(max_entries=2)
+        real = Handle("copy", "FileStation_REAL")
+        records.add(tasks.TaskRecord(handle=real, paths=["/s/a"], dest="/s/d"))
+        for i in range(3):
+            await tasks.file_task(
+                mock_client, records=records, handle=f"copy:FileStation_F{i}", action="stop"
+            )
+            assert records.get(Handle("copy", f"FileStation_F{i}")) is None
+        assert records.get(real) is not None
+
     @pytest.mark.parametrize(
         "after",
         [_ok(RUNNING), httpx.ReadTimeout("slow too")],

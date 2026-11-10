@@ -1512,8 +1512,10 @@ async def file_task(
         else:
             # Sent while DSM said it had no such task: its "success" says nothing (CopyMove
             # answers that for any task ID), so this stop is the one a later status call should
-            # quote, not an older note's (QA round 1 on #660).
-            if before is None:
+            # quote, not an older note's (QA round 1 on #660). Only for a task with a record: a
+            # success for a made-up handle would otherwise add records, pushing real ones out of
+            # the bounded store (pre-QA r6 on #660).
+            if before is None and record is not None:
                 note_unconfirmed(sent, None)
         return None
 
@@ -1569,6 +1571,9 @@ async def file_task(
         if now is None and not unknown:
             # DSM keeps saying it has no such task.
             if before is None:
+                # This stop is the latest one sent, as in send_stop (pre-QA r6 on #660).
+                if record is not None:
+                    note_unconfirmed(sent, None)
                 return gone(stop_sent=True) + earlier_skip()
             records.clear_stop(parsed, "the task was gone right after a slow stop")
             return (
@@ -1692,7 +1697,8 @@ async def file_task(
         if verdict != "pending":
             later = _elapsed_text(records.stop_age(record))
             if verdict == "moved":
-                why = f"the progress has moved since (then: {then})"
+                # A note from a stop with no read before it has no progress to show.
+                why = "the progress has moved since" + (f" (then: {then})" if then else "")
             elif compared:
                 # Frozen counts past the limit: the 300 s is a chosen bound, not a measured
                 # one, so this says what's known rather than that the stop failed.
