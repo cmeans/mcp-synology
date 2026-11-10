@@ -177,6 +177,9 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
     "budget_out": (lambda t, i, s: setattr(s, "statuses", [RUNNING]), "handed_off"),
     "cancel_mid_poll": (lambda t, i, s: setattr(s, "statuses", [RUNNING, CANCEL]), "canceled"),
     "already_running": (lambda t, i, s: setattr(s, "running", _running(t, i)), "handed_off"),
+    # Another call's task, started during the earlier items' wait, lands the item's name in its
+    # destination with overwrite (#587): refused, mid-batch only. Copy, move and restore only.
+    "landing_refused": (lambda t, i, s: None, "failed"),
     # DSM skipped it (the name is already there, overwrite=false): copy, move and restore only.
     "skipped": (
         lambda t, i, s: setattr(
@@ -243,9 +246,11 @@ def _cells() -> list[Any]:
     cells = []
     for tool in TOOLS:
         for scenario in SCENARIOS:
-            if scenario == "skipped" and tool.kind == "delete":
+            if scenario in ("skipped", "landing_refused") and tool.kind == "delete":
                 continue
             for position in POSITIONS:
+                if scenario == "landing_refused" and position == "first":
+                    continue  # refused before anything starts: test_operations' #587 tests
                 cells.append(
                     pytest.param(tool, scenario, position, id=f"{tool.name}-{scenario}-{position}")
                 )
@@ -264,6 +269,24 @@ async def test_matrix(
 ) -> None:
     at = POSITIONS[position]
     dsm = FakeDsm(_scripts(tool, scenario, at))
+    if scenario == "landing_refused":
+        name = tool.sources[at].rsplit("/", 1)[-1]
+        dsm.later_tasks.append(
+            (
+                at,
+                {
+                    "finished": False,
+                    "taskid": "FileStation_Other",
+                    "api": "SYNO.FileStation.CopyMove",
+                    "params": {
+                        "path": [f"/s/other/{name}"],
+                        "dest_folder_path": tool.dests[at],
+                        "overwrite": True,
+                        "remove_src": False,
+                    },
+                },
+            )
+        )
     dsm.mount(respx_mock)
     captured: list[BatchOutcome] = []
     real = operations.run_batch
@@ -419,16 +442,33 @@ def test_only_the_runner_starts_polls_stops_and_records() -> None:
                 and rel not in rules["TaskRecord"]
             ):
                 found.append(f"{rel}:{call.lineno} records.add(")
-            # A Delete or CopyMove start sent by name: only the runner starts these.
-            args = call.args
+            # A record added under any name: `<anything>.add(TaskRecord(...))`.
             if (
-                len(args) >= 2
-                and isinstance(args[0], ast.Constant)
-                and args[0].value in _BATCH_APIS
-                and isinstance(args[1], ast.Constant)
-                and args[1].value == "start"
+                isinstance(func, ast.Attribute)
+                and func.attr == "add"
+                and any(isinstance(a, ast.Call) and _name(a) == "TaskRecord" for a in call.args)
+                and rel not in rules["TaskRecord"]
             ):
-                found.append(f"{rel}:{call.lineno} {args[0].value} start")
+                found.append(f"{rel}:{call.lineno} .add(TaskRecord(")
+            # A Delete or CopyMove start sent by name, positionally or by keyword: only the runner
+            # starts these.
+            given = dict(zip(("api", "method"), call.args, strict=False))
+            given.update({k.arg: k.value for k in call.keywords if k.arg in ("api", "method")})
+            api, method = given.get("api"), given.get("method")
+            if (
+                isinstance(api, ast.Constant)
+                and api.value in _BATCH_APIS
+                and isinstance(method, ast.Constant)
+                and method.value == "start"
+            ):
+                found.append(f"{rel}:{call.lineno} {api.value} start")
+        # An import under another name would hide a call from the rules above.
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    base = alias.name.rsplit(".", 1)[-1]
+                    if base in rules and alias.asname not in (None, base):
+                        found.append(f"{rel}:{node.lineno} {base} imported as {alias.asname}")
     assert found == []
 
 

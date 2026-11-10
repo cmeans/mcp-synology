@@ -95,6 +95,8 @@ class FakeDsm:
         self._tasks: dict[str, str] = {}  # taskid → path
         self._reads: dict[str, int] = {}
         self._next = 0
+        # Tasks of other calls that DSM lists once this many starts were sent: (starts, task).
+        self.later_tasks: list[tuple[int, dict[str, Any]]] = []
 
     def mount(self, router: respx.Router | Any) -> None:
         router.route(url__startswith=f"{BASE_URL}/webapi/").mock(side_effect=self._answer)
@@ -156,10 +158,12 @@ class FakeDsm:
         tasks = []
         for path, script in self.scripts.items():
             if script.running is not None:
-                task = {"finished": False, "taskid": f"Running_{abs(hash(path)) % 10_000}"}
+                task = {"finished": False, "taskid": f"Running_{list(self.scripts).index(path)}"}
                 task.update(script.running)
                 task.setdefault("params", {}).setdefault("path", [path])
                 tasks.append(task)
+        started = len(self.starts())
+        tasks.extend(dict(task) for after, task in self.later_tasks if started >= after)
         return tasks
 
     def _start(self, api: str, params: dict[str, str]) -> httpx.Response:
