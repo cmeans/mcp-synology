@@ -188,7 +188,15 @@ async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections
         # One note, not one per disk: the API is missing for all of them.
         optional.notes.append("Low-performance-in-RAID flags: not available on this NAS")
         return slow
-    for disk in disks:
+    for read, disk in enumerate(disks):
+        if optional.stalled:
+            # One note for every disk left, not one each (pre-QA r4 on #661).
+            which = " of the other disks" if read else ""
+            optional.notes.append(
+                f"Low-performance-in-RAID flags{which}: not read (DSM didn't answer an "
+                "earlier request)"
+            )
+            break
         device = str(disk.get("device") or f"/dev/{disk.get('id')}")
         health = await optional.get(
             client,

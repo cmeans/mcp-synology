@@ -146,6 +146,12 @@ class Sections:
         except SynologyError as e:
             if e.code in refusals:
                 refuse_non_admin(self.operation)
+            # A proxy's 502/503/504 or its own page (not DSM's reply) is how a proxy reports
+            # the same stall (#282): nothing more is sent, as for a transport error.
+            if (isinstance(e, DsmHttpError) and e.status in (502, 503, 504)) or isinstance(
+                e, DsmReplyError
+            ):
+                self.stalled = True
             if e.code == NOT_SUPPORTED:
                 self.notes.append(f"{label}: not available on this NAS")
             elif e.code == METHOD_MISSING:

@@ -187,7 +187,7 @@ def test_low_performance(health: Any, expected: str | None) -> None:
     assert low_performance(health) == expected
 
 
-@pytest.mark.parametrize("reply", [502, err(117)], ids=["http-502", "dsm-117"])
+@pytest.mark.parametrize("reply", [500, err(117)], ids=["http-500", "dsm-117"])
 @pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
 async def test_a_disk_whose_flag_cant_be_read_is_a_note(tool: Any, reply: Any) -> None:
     """Pre-QA on #661: one disk's get_health_info failing leaves a note naming the flag, not
@@ -279,19 +279,78 @@ async def test_after_one_unanswered_request_nothing_more_is_sent(tool: Any) -> N
     assert sent_after == []
     assert text.count("couldn't be read (no answer: ReadTimeout)") == 1
     assert "not read (DSM didn't answer an earlier request)" in text
+    assert text.count("Low-performance-in-RAID flags") == 1
 
 
-async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer() -> None:
+@pytest.mark.parametrize(
+    "exc",
+    [httpx.ConnectError("refused"), httpx.ConnectTimeout("t"), httpx.PoolTimeout("t")],
+    ids=["connect", "connect-timeout", "pool"],
+)
+async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer(
+    exc: Exception,
+) -> None:
     def setup(replay: Replay, _: Any) -> None:
         original = replay._reply
 
         def reply(query: dict[str, str]) -> Any:
             if query.get("method") == "get_health_info":
-                raise httpx.ConnectError("refused")
+                raise exc
             return original(query)
 
         replay._reply = reply  # type: ignore[method-assign]
 
+    name = type(exc).__name__
     text, _ = await run(list_disks, setup=setup)
-    assert "Drive 1 (sda) low-performance-in-RAID flag: couldn't be read (ConnectError)" in text
-    assert "no answer: ConnectError" not in text
+    assert f"Drive 1 (sda) low-performance-in-RAID flag: couldn't be read ({name})" in text
+    assert f"no answer: {name}" not in text
+
+
+@pytest.mark.parametrize("reply", [502, 503, 504], ids=["502", "503", "504"])
+async def test_a_proxy_error_stalls_too(reply: int) -> None:
+    """Pre-QA r4 on #661: a proxy's 5xx is how a proxy reports a stall (#282); each later
+    section waited out the proxy's own timeout."""
+    sent_after: list[str] = []
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+        seen = {"first": False}
+
+        def answer(query: dict[str, str]) -> Any:
+            if query.get("method") == "load_info":
+                return original(query)
+            if seen["first"]:
+                sent_after.append(query.get("method", ""))
+            seen["first"] = True
+            return reply
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(get_storage_overview, setup=setup)
+    assert sent_after == []
+    assert f"couldn't be read (HTTP {reply})" in text
+
+
+@pytest.mark.parametrize("stall", ["usb", "esata"])
+async def test_external_storage_sends_one_unanswered_request(stall: str) -> None:
+    """Pre-QA r4 on #661: the eSATA probe had its own Sections, so a stall on USB still sent
+    eSATA, and a stall on the probe resent eSATA without `additional`."""
+    from mcp_synology.modules.storage.external import list_external_storage
+
+    unanswered: list[str] = []
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def answer(query: dict[str, str]) -> Any:
+            api = query.get("api", "")
+            if (stall == "usb" and "USB" in api) or "eSATA" in api or unanswered:
+                unanswered.append(api)
+                raise httpx.ReadTimeout("busy")
+            return original(query)
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(list_external_storage, setup=setup)
+    assert len(unanswered) == 1, unanswered
+    assert text.count("no answer: ReadTimeout") == 1
