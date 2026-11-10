@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from mcp_synology.modules.storage.disks import get_disk, list_disks, smart_table, trend_lines
+from mcp_synology.modules.storage.overview import low_performance
 from tests.modules.storage.dsm import VDSM, Replay, flat, load_info_with, ok, run, run_error
 
 
@@ -21,6 +22,30 @@ async def test_real_nas_list() -> None:
     assert flat("Bad sectors: —") in flat(text)  # the SSD doesn't report it
     assert flat("Type: SSD SATA") in flat(text)
     assert "i18nNamingInfo" not in text
+
+
+async def test_real_nas_low_performance_in_raid() -> None:
+    """#659: DSM flags sdb as lagging its RAID only in sdb's own get_health_info. list_disks
+    reads each disk's and shows the flag on that disk's status, and only there."""
+    text, replay = await run(list_disks)
+    assert replay.unmatched == []
+    flagged = [line for line in text.splitlines() if "low performance in RAID" in line]
+    assert [line.split(":", 1)[1].strip() for line in flagged] == [
+        "normal (low performance in RAID: now)"
+    ]
+    sdb = text.split("Drive 2 (sdb)", 1)[1].split("\n\nDrive ", 1)[0]
+    assert flat("Status: normal (low performance in RAID: now)") in flat(sdb)
+    devices = [c["device"] for c in replay.calls("SYNO.Storage.CGI.Smart", "get_health_info")]
+    assert devices == [f"/dev/sd{x}" for x in "abcdef"]
+
+
+async def test_real_nas_get_disk_low_performance_in_raid() -> None:
+    # The capture has only get_health_info for sdb and sdc (#659), so their other sections
+    # are unmatched here and read as notes; the status line is what's checked.
+    text, _ = await run(get_disk, disk="sdb")
+    assert flat("Status: normal (low performance in RAID: now)") in flat(text)
+    other, _ = await run(get_disk, disk="sdc")
+    assert "low performance" not in other
 
 
 @pytest.mark.parametrize("fixture", VDSM)
@@ -131,3 +156,20 @@ def test_smart_table_missing_cell_is_a_dash() -> None:
     """Pre-QA sibling of QA R1 #3: a S.M.A.R.T. attribute without ``raw`` showed None."""
     table = smart_table({"smartInfo": [{"id": 5, "name": "Reallocated", "current": 100}]})
     assert "None" not in table and "—" in table
+
+
+@pytest.mark.parametrize(
+    ("health", "expected"),
+    [
+        ({"healthInfo": {"overview": {"low_performance_in_raid": "now"}}}, "now"),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": "normal"}}}, None),
+        ({"healthInfo": {"overview": {"low_performance_in_raid": ""}}}, None),
+        ({"healthInfo": {"overview": {}}}, None),
+        ({"healthInfo": {}}, None),
+        ({"healthInfo": None}, None),
+        (None, None),
+        ([], None),
+    ],
+)
+def test_low_performance(health: Any, expected: str | None) -> None:
+    assert low_performance(health) == expected

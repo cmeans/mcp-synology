@@ -8,6 +8,7 @@ from mcp_synology.core.formatting import format_key_value, format_timestamp, nes
 from mcp_synology.modules.storage.helpers import (
     STORAGE_API,
     Sections,
+    as_dict,
     dicts,
     disk_label,
     epoch_note,
@@ -162,6 +163,39 @@ def task_list(tasks: Any, kind: str) -> list[dict[str, Any]]:
     return dicts(section.get("tasks")) if isinstance(section, dict) else []
 
 
+def low_performance(health: Any) -> str | None:
+    """DSM's "low performance in RAID" flag from a disk's get_health_info, when it's raised
+    (#659: "now" on a real DS1618+ while the disk lagged its pool; "normal" otherwise)."""
+    value = as_dict(as_dict(as_dict(health).get("healthInfo")).get("overview")).get(
+        "low_performance_in_raid"
+    )
+    if value in (None, "", "normal"):
+        return None
+    return str(value)
+
+
+async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections) -> dict[str, str]:
+    """Disk id -> DSM's low-performance-in-RAID value, for each disk that has it raised.
+
+    DSM flags a disk that lags its RAID only in that disk's own get_health_info (#659), so
+    it's one call per disk. vdsm has no disks, so nothing is read there.
+    """
+    slow: dict[str, str] = {}
+    for disk in items(info, "disks"):
+        device = str(disk.get("device") or f"/dev/{disk.get('id')}")
+        health = await optional.get(
+            client,
+            f"{disk_label(disk)} health",
+            "SYNO.Storage.CGI.Smart",
+            "get_health_info",
+            {"device": device},
+        )
+        flag = low_performance(health)
+        if flag:
+            slow[str(disk.get("id"))] = flag
+    return slow
+
+
 def attention_items(info: dict[str, Any], bad: dict[str, Any] | None) -> list[str]:
     found: list[str] = []
     for pool in items(info, "storagePools"):
@@ -296,6 +330,7 @@ async def get_storage_overview(client: DsmClient) -> str:
     )
     build = await optional.get(client, "RAID build state", "SYNO.Storage.CGI.Check", "is_building")
     health = await optional.get(client, "System health", "SYNO.Core.System.SystemHealth", "get")
+    slow = await slow_disks(client, info, optional)
 
     env = info.get("env") or {}
     pairs: list[tuple[str, str]] = []
@@ -363,6 +398,10 @@ async def get_storage_overview(client: DsmClient) -> str:
             roles.get(str(d.get("id")), "—"),
         ]
         notes = disk_notes(d, tasks)
+        if slow.get(str(d.get("id"))):
+            # On the disk's line, not under Needs attention: Storage Manager shows no warning
+            # for it (#659; maintainer, 2026-11-09).
+            notes.append(f"low performance in RAID ({slow[str(d.get('id'))]})")
         disk_lines.append("   ".join(cells) + (f"   {', '.join(notes)}" if notes else ""))
     if not disks and env.get("model_name") == "VirtualDSM":
         disk_lines = ["none (Virtual DSM has no physical disks)"]
