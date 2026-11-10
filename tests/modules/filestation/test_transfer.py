@@ -16,7 +16,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
+from mcp_synology.core.formatting import DOWNLOADED_CONTENTS_ARE_DATA, ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.transfer import (
     download_file,
     upload_file,
@@ -365,6 +365,8 @@ class TestDownloadFile:
         )
         assert "[+]" in result
         assert "movie.mkv" in result
+        # The last line says what's in the file is data (#640).
+        assert result.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA
 
         downloaded = tmp_path / "movie.mkv"
         assert downloaded.exists()
@@ -428,7 +430,7 @@ class TestDownloadFile:
             caplog.text
         )
         # #625: an overwrite says it replaced the file (worded like upload_file's note in #623).
-        assert result.splitlines()[1:] == ["    It replaced the movie.mkv that was there."]
+        assert result.splitlines()[1:-1] == ["    It replaced the movie.mkv that was there."]
 
     @respx.mock
     async def test_download_overwrite_with_nothing_there_says_nothing_extra(
@@ -669,6 +671,7 @@ class TestDownloadFile:
         assert not (tmp_path / "shows").exists()
         assert "Downloaded the folder /video/shows as a ZIP archive of it" in out
         assert str(tmp_path / "shows.zip") in out
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA  # #640
 
     @respx.mock
     async def test_download_folder_name_too_long_with_zip(
@@ -1363,7 +1366,7 @@ class TestDownloadFile:
         result = await download_file(
             mock_client, path="/docs/report.txt", dest_folder=str(tmp_path), overwrite=True
         )
-        assert result.splitlines()[1:] == [
+        assert result.splitlines()[1:-1] == [
             "    It replaced the symlink report.txt that was there (its target is untouched)."
         ]
         assert (tmp_path / "real.txt").read_bytes() == b"keep"

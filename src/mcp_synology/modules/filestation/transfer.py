@@ -22,6 +22,7 @@ from mcp_synology.core.errors import (
     SynologyFileExistsError,
 )
 from mcp_synology.core.formatting import (
+    DOWNLOADED_CONTENTS_ARE_DATA,
     error_response,
     format_size,
     format_status,
@@ -522,4 +523,4 @@ async def download_file(
             "increase download_timeout in module settings."
         )
 
-    return result
+    return f"{result}\n{DOWNLOADED_CONTENTS_ARE_DATA}"
