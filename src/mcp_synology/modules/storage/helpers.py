@@ -118,6 +118,21 @@ class Sections:
     # Set by the first request DSM didn't answer: a busy NAS would make each later section
     # wait out its own timeout, past an MCP client's 60 s, so the rest aren't sent.
     stalled: bool = False
+    # Sections skipped since: one shared note, not one each (a loop over 500 shares).
+    _skipped: list[str] = field(default_factory=list)
+    _skip_note: int = -1
+
+    def _skip(self, label: str) -> None:
+        """Note a section not sent after the stall: the first by name, the rest counted."""
+        self._skipped.append(label)
+        more = len(self._skipped) - 1
+        what = self._skipped[0] + (f" and {more} more" if more else "")
+        note = f"{what}: not read (DSM didn't answer an earlier request)"
+        if self._skip_note < 0:
+            self._skip_note = len(self.notes)
+            self.notes.append(note)
+        else:
+            self.notes[self._skip_note] = note
 
     async def get(
         self,
@@ -139,7 +154,7 @@ class Sections:
             self.notes.append(f"{label}: not available on this NAS")
             return None
         if self.stalled:
-            self.notes.append(f"{label}: not read (DSM didn't answer an earlier request)")
+            self._skip(label)
             return None
         try:
             return await client.request(api, method, version=version, params=params)
@@ -148,8 +163,9 @@ class Sections:
                 refuse_non_admin(self.operation)
             # A proxy's 502/503/504 or its own page (not DSM's reply) is how a proxy reports
             # the same stall (#282): nothing more is sent, as for a transport error.
-            if (isinstance(e, DsmHttpError) and e.status in (502, 503, 504)) or isinstance(
-                e, DsmReplyError
+            # A reply DSM did send but that can't be read safely (colliding keys) isn't one.
+            if (isinstance(e, DsmHttpError) and e.status in (502, 503, 504)) or (
+                isinstance(e, DsmReplyError) and e.retryable
             ):
                 self.stalled = True
             if e.code == NOT_SUPPORTED:

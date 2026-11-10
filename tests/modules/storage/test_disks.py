@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from mcp_synology.core.errors import DsmReplyError
 from mcp_synology.modules.storage.disks import get_disk, list_disks, smart_table, trend_lines
 from mcp_synology.modules.storage.overview import get_storage_overview, low_performance
 from tests.modules.storage.dsm import (
@@ -240,6 +241,7 @@ async def test_a_disk_whose_flag_gets_no_answer_is_a_note(tool: Any, exc: Except
         f"Drive 1 (sda) low-performance-in-RAID flag: couldn't be read "
         f"(no answer: {type(exc).__name__})"
     ) in text
+    assert "Low-performance-in-RAID flags of the other disks: not read" in text
     assert "slow" not in text and "dropped" not in text
 
 
@@ -306,8 +308,12 @@ async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer(
     assert f"no answer: {name}" not in text
 
 
-@pytest.mark.parametrize("reply", [502, 503, 504], ids=["502", "503", "504"])
-async def test_a_proxy_error_stalls_too(reply: int) -> None:
+@pytest.mark.parametrize(
+    "reply",
+    [502, 503, 504, "html"],
+    ids=["502", "503", "504", "non-dsm-page"],
+)
+async def test_a_proxy_error_stalls_too(reply: Any) -> None:
     """Pre-QA r4 on #661: a proxy's 5xx is how a proxy reports a stall (#282); each later
     section waited out the proxy's own timeout."""
     sent_after: list[str] = []
@@ -322,13 +328,54 @@ async def test_a_proxy_error_stalls_too(reply: int) -> None:
             if seen["first"]:
                 sent_after.append(query.get("method", ""))
             seen["first"] = True
+            if reply == "html":
+                raise DsmReplyError("not DSM's reply")
             return reply
 
         replay._reply = answer  # type: ignore[method-assign]
 
     text, _ = await run(get_storage_overview, setup=setup)
     assert sent_after == []
-    assert f"couldn't be read (HTTP {reply})" in text
+    shown = "no DSM reply" if reply == "html" else f"HTTP {reply}"
+    assert f"couldn't be read ({shown})" in text
+
+
+async def test_a_reply_dsm_sent_but_unreadable_doesnt_stall() -> None:
+    """Pre-QA r5 on #661: colliding escaped keys are a reply DSM did send (retryable=False);
+    later sections are still read."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def answer(query: dict[str, str]) -> Any:
+            if query.get("method") == "load_bad_disks":
+                raise DsmReplyError("colliding keys", retryable=False)
+            return original(query)
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(get_storage_overview, setup=setup)
+    assert "not read (DSM didn't answer" not in text
+    assert "low performance in RAID (now)" in text
+
+
+async def test_skipped_sections_share_one_note() -> None:
+    """Pre-QA r5 on #661: list_snapshots' per-share loop gave one note per share after a stall."""
+    from mcp_synology.modules.storage.helpers import Sections
+
+    optional = Sections("Test")
+    optional.stalled = True
+    optional.notes.append("earlier: couldn't be read (no answer: ReadTimeout)")
+
+    class _Client:
+        _api_cache = {"API": object()}
+
+    for n in range(20):
+        assert await optional.get(_Client(), f"s{n} schedule", "API", "get_schedule") is None  # type: ignore[arg-type]
+    assert optional.notes == [
+        "earlier: couldn't be read (no answer: ReadTimeout)",
+        "s0 schedule and 19 more: not read (DSM didn't answer an earlier request)",
+    ]
 
 
 @pytest.mark.parametrize("stall", ["usb", "esata"])
