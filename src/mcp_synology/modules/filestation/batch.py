@@ -92,9 +92,11 @@ class ItemOutcome:
 
     ``done``: its task finished and the adapter read it (``result``: the adapter's reading).
     ``failed``: ``error`` is the ToolError to report, or a DSM error to word (``stopped``: whether
-    DSM confirmed the stop sent after a status read's DSM error). ``may_have_started``: the start
-    got no answer (``error``, a transport error). ``handed_off``: left running with ``handoff``;
-    ``running`` is the task DSM listed when one was already running, so none was started.
+    DSM confirmed the stop sent after a status read's DSM error; not read yet: the reply says
+    nothing of the stop today, and #497, the runner's next step, words it).
+    ``may_have_started``: the start got no answer (``error``, a transport error).
+    ``handed_off``: left running with ``handoff``; ``running`` is the task DSM listed when one
+    was already running, so none was started.
     """
 
     item: Item

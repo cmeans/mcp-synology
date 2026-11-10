@@ -8,8 +8,9 @@ Two parts:
   runner's invariants (below) and compares the ones broken with ``KNOWN_GAPS``, the cells today's
   behavior is known to get wrong, each with the issue that fixes it. A fix that closes a gap fails
   here until its cell leaves the table; a change that opens one fails too.
-- **The structural test**: no module but ``batch.py`` starts or polls a Delete or CopyMove task,
-  and none but it and ``tasks.py`` stops one or writes a ``TaskRecord``.
+- **The structural test**: no module but ``batch.py`` calls ``poll_task``, and none but it and
+  ``tasks.py`` stops a task or writes a ``TaskRecord``, or sends a task's start, status read or
+  stop other than Search's and DirSize's (named by a literal API).
 """
 
 from __future__ import annotations
@@ -348,11 +349,15 @@ async def test_matrix(
         if records.get(handle) is None:
             broken.add("record")
     if last is not None and last.state == "handed_off":
-        # No DSM request between the hand-off and the reply.
-        final = dsm.calls[-1]
-        if final.method not in ("status", "list") or (
-            final.method == "status" and final.api != tool.api
-        ):
+        # No DSM request between the hand-off and the reply: the call that decided it (the
+        # task's last status read, or the task list that showed it already running) is the last.
+        deciding = [
+            n
+            for n, c in enumerate(dsm.calls)
+            if (c.api == tool.api and c.method == "status")
+            or (c.api == "SYNO.FileStation.BackgroundTask" and c.method == "list")
+        ]
+        if not deciding or deciding[-1] != len(dsm.calls) - 1:
             broken.add("request_after_handoff")
         # A stall or a lost task says so; only a task still running at the wait's end reads
         # as running on.
@@ -450,18 +455,34 @@ def test_only_the_runner_starts_polls_stops_and_records() -> None:
                 and rel not in rules["TaskRecord"]
             ):
                 found.append(f"{rel}:{call.lineno} .add(TaskRecord(")
-            # A Delete or CopyMove start sent by name, positionally or by keyword: only the runner
-            # starts these.
+            # A task's start, status read or stop, positionally or by keyword: outside the runner
+            # and tasks.py, only Search's and DirSize's, named by a literal API. An API in a
+            # variable, an attribute or a constant could be Delete's or CopyMove's.
             given = dict(zip(("api", "method"), call.args, strict=False))
             given.update({k.arg: k.value for k in call.keywords if k.arg in ("api", "method")})
             api, method = given.get("api"), given.get("method")
             if (
-                isinstance(api, ast.Constant)
-                and api.value in _BATCH_APIS
-                and isinstance(method, ast.Constant)
-                and method.value == "start"
+                isinstance(method, ast.Constant)
+                and method.value in ("start", "status", "stop")
+                and rel not in rules["_stop_background_task"]
+                and not (
+                    isinstance(api, ast.Constant)
+                    and isinstance(api.value, str)
+                    and api.value not in _BATCH_APIS
+                )
             ):
-                found.append(f"{rel}:{call.lineno} {api.value} start")
+                found.append(
+                    f"{rel}:{call.lineno} {ast.unparse(api) if api else '?'} {method.value}"
+                )
+            # getattr(module, "poll_task") would hide a call too.
+            if (
+                name == "getattr"
+                and len(call.args) >= 2
+                and isinstance(call.args[1], ast.Constant)
+                and call.args[1].value in rules
+                and rel not in rules[call.args[1].value]
+            ):
+                found.append(f"{rel}:{call.lineno} getattr {call.args[1].value}")
         # An import under another name would hide a call from the rules above.
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -469,7 +490,7 @@ def test_only_the_runner_starts_polls_stops_and_records() -> None:
                     base = alias.name.rsplit(".", 1)[-1]
                     if base in rules and alias.asname not in (None, base):
                         found.append(f"{rel}:{node.lineno} {base} imported as {alias.asname}")
-    assert found == []
+    assert found == [], "\n".join(found)
 
 
 def test_the_runner_sends_the_start() -> None:
