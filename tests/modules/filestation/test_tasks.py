@@ -1997,6 +1997,62 @@ class TestFileTask:
         assert records.stop_lapsed(record)
 
     @respx.mock
+    async def test_a_slow_stop_whose_task_is_gone_clears_an_earlier_note(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r5 on #660: gone right after a read showed it running is the stop working."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._slow_stop(_err(599)))
+        records = TaskRecords()
+        h = Handle("copy", "FileStation_C1")
+        _note(records, h, 1_700_000_000.0, "8 of 342 items, 2%", (8, None))
+        text = await file_task(mock_client, records=records, handle=str(h), action="stop")
+        assert text.startswith("Stopped copy"), text
+        record = records.get(h)
+        assert record is not None and record.stop is None
+
+    @pytest.mark.parametrize(
+        ("status", "hint"),
+        [
+            (RUNNING, True),  # counts unchanged: the server says so
+            ({"finished": False, "progress": -1, "total": -1}, False),  # counts gone
+        ],
+        ids=["unchanged", "vanished"],
+    )
+    @respx.mock
+    async def test_the_unmoved_hint_only_when_the_server_compared(
+        self, mock_client: DsmClient, status: dict[str, Any], hint: bool
+    ) -> None:
+        """Pre-QA r5 on #660: the pending reply states what the server checked, and says
+        nothing about movement when the status has no counts."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(status))
+        records = TaskRecords()
+        h = Handle("copy", "FileStation_C1")
+        _note(records, h, 1_700_000_000.0, "8 of 342 items, 2%", (8, None))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert ("The progress hasn't moved since, so it most likely has." in text) is hint, text
+        assert "if the progress hasn't moved" not in text
+
+    @respx.mock
+    async def test_frozen_counts_past_the_limit_say_so(self, mock_client: DsmClient) -> None:
+        """Pre-QA r5 on #660: past the limit with the counts frozen, the reply says what's
+        known (unmoved, yet still shown running) before offering another stop."""
+        from mcp_synology.modules.filestation.tasks import STOP_CONFIRM_LIMIT, file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=lambda request: _ok(RUNNING))
+        now = [1000.0]
+        records = TaskRecords(clock=lambda: now[0])
+        h = Handle("copy", "FileStation_C1")
+        _note(records, h, 1_700_000_000.0, "8 of 342 items, 2%", (8, None))
+        now[0] += STOP_CONFIRM_LIMIT + 60
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert "the progress hasn't moved, yet DSM still shows it running 6 min later" in text
+        assert 'call file_task with action="stop" again' in text
+
+    @respx.mock
     async def test_a_refused_stop_clears_an_earlier_note(self, mock_client: DsmClient) -> None:
         """Pre-QA r4 on #660: DSM refused a second stop of a running task and the reply said
         "Try the stop again", while the next status call said "don't send another stop yet"."""

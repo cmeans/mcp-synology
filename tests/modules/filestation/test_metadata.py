@@ -788,6 +788,10 @@ class TestGetDirSizeUnansweredStatus:
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == code
         assert err["message"].startswith(f"Get directory size failed: DSM {what} a status request")
+        # Pre-QA r5 on #660: a longer timeout doesn't help a NAS that can't be reached.
+        reached = what != "couldn't be reached for"
+        assert ("connection.timeout" in err["suggestion"]) is reached
+        assert ("reachable" in err["suggestion"]) is not reached
 
 
 class TestGetDirSizeCancellation:

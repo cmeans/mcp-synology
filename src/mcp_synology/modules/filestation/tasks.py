@@ -199,10 +199,11 @@ class TaskRecords:
         record.stop = note
         logger.debug("Noted an unconfirmed stop of %s (progress then: %s)", handle, note.progress)
 
-    def clear_stop(self, handle: Handle) -> None:
+    def clear_stop(self, handle: Handle, reason: str) -> None:
         """DSM confirmed a stop, or refused one: an earlier unconfirmed note no longer holds."""
         record = self.get(handle)
-        if record is not None:
+        if record is not None and record.stop is not None:
+            logger.debug("Cleared the stop note of %s: %s", handle, reason)
             record.stop = None
 
     def stop_age(self, record: TaskRecord) -> float:
@@ -1526,7 +1527,7 @@ async def file_task(
             # DSM keeps saying it has no such task.
             if before is None:
                 return gone(stop_sent=True) + earlier_skip()
-            records.clear_stop(parsed)  # gone right after a read showed it running: stopped
+            records.clear_stop(parsed, "the task was gone right after a slow stop")
             return (
                 f"Stopped {parsed.kind} of {what}; it may be partly done. DSM was slow to answer "
                 f"the stop, but the task is gone. {_LIST_HINT}{earlier_skip()}"
@@ -1564,7 +1565,7 @@ async def file_task(
             return ended_first() + final
         # DSM just refused a stop of a running task: an earlier note's "don't send another"
         # would contradict this reply (pre-QA r4 on #660).
-        records.clear_stop(parsed)
+        records.clear_stop(parsed, f"DSM refused a stop (error {refused})")
         return (
             f"DSM didn't accept the stop (error {refused}), and the task is still running "
             f"({progress_text(now)}). Try the stop again; if DSM keeps refusing it, stop it in "
@@ -1599,7 +1600,7 @@ async def file_task(
             return refused
         if refused is not None:
             return await after_refusal(refused)
-        records.clear_stop(parsed)  # DSM confirmed this stop: an earlier note no longer holds
+        records.clear_stop(parsed, "DSM confirmed a stop")
         what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
         stopped = f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
         return stopped + earlier_skip()
@@ -1636,12 +1637,19 @@ async def file_task(
         sent = f"A stop was sent at {format_timestamp(record.stop.sent)}"
         then = record.stop.progress
         verdict = records.stop_verdict(record, status)
+        logger.debug("Stop note of %s: %s", parsed, verdict)
+        counts_now = progress_mark(status)
+        compared = record.stop.mark is not None and counts_now is not None
         if verdict != "pending":
-            why = (
-                f"the progress has moved since (then: {then})"
-                if verdict == "moved"
-                else f"it's still running {_elapsed_text(records.stop_age(record))} later"
-            )
+            later = _elapsed_text(records.stop_age(record))
+            if verdict == "moved":
+                why = f"the progress has moved since (then: {then})"
+            elif compared:
+                # Frozen counts past the limit: the 300 s is a chosen bound, not a measured
+                # one, so this says what's known rather than that the stop failed.
+                why = f"the progress hasn't moved, yet DSM still shows it running {later} later"
+            else:
+                why = f"it's still running {later} later"
             return (
                 f"Still {what} ({progress}). Handle: `{parsed}`\n"
                 f"{sent}, but {why}, so it doesn't look like it took effect. If the user "
@@ -1649,16 +1657,13 @@ async def file_task(
                 f"then be partly done).{earlier_skip()}"
             )
         then_text = f" (progress then: {then})" if then is not None else ""
-        # With no counts to compare, "hasn't moved" can't be judged, so it isn't offered.
-        hint = (
-            ": if the progress hasn't moved, it most likely has"
-            if record.stop.mark is not None and progress_mark(status) is not None
-            else ""
-        )
+        # The server compared the counts (pending means unchanged), so it says so; with no
+        # counts to compare, it can't.
+        hint = " The progress hasn't moved since, so it most likely has." if compared else ""
         return (
             f"Still shows as {what} ({progress}). Handle: `{parsed}`\n"
             f"{sent}{then_text} and DSM hasn't confirmed it yet. DSM can be slow to confirm a "
-            f"stop that already took effect{hint}. Check again in a minute; don't send another "
+            f"stop that already took effect.{hint} Check again in a minute; don't send another "
             f"stop yet.{earlier_skip()}"
         )
     return (
