@@ -115,6 +115,9 @@ class Sections:
 
     operation: str
     notes: list[str] = field(default_factory=list)
+    # Set by the first request DSM didn't answer: a busy NAS would make each later section
+    # wait out its own timeout, past an MCP client's 60 s, so the rest aren't sent.
+    stalled: bool = False
 
     async def get(
         self,
@@ -135,6 +138,9 @@ class Sections:
         if api not in client._api_cache:
             self.notes.append(f"{label}: not available on this NAS")
             return None
+        if self.stalled:
+            self.notes.append(f"{label}: not read (DSM didn't answer an earlier request)")
+            return None
         try:
             return await client.request(api, method, version=version, params=params)
         except SynologyError as e:
@@ -149,11 +155,14 @@ class Sections:
                 self.notes.append(f"{label}: couldn't be read ({failure(e)})")
             return None
         except httpx.TransportError as e:
-            # No answer from DSM (a timeout, a dropped connection): one optional section,
-            # so a note, not a failed tool (pre-QA on #661: one call per disk made this
-            # likelier). The error's type only, never its text.
+            # No answer (a timeout, a dropped connection) or no connection: one optional
+            # section, so a note, not a failed tool; and nothing more is sent (``stalled``).
+            # The error's type only, never its text.
             logger.debug("%s %s/%s got no answer: %r", self.operation, api, method, e)
-            self.notes.append(f"{label}: couldn't be read (no answer: {type(e).__name__})")
+            self.stalled = True
+            sent = not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout)
+            why = f"no answer: {type(e).__name__}" if sent else type(e).__name__
+            self.notes.append(f"{label}: couldn't be read ({why})")
             return None
 
 

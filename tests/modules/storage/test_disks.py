@@ -252,3 +252,46 @@ async def test_no_disks_no_flag_note(fixture: str) -> None:
 
     text, _ = await run(get_storage_overview, fixture, setup=setup)
     assert "Low-performance-in-RAID" not in text
+
+
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_after_one_unanswered_request_nothing_more_is_sent(tool: Any) -> None:
+    """Pre-QA r3 on #661: on a NAS that stops answering, each section waited out its own
+    timeout (12 x 30 s for the overview, past claude.ai's 60 s). After the first, the rest
+    aren't sent."""
+    sent_after: list[str] = []
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+        stalled = {"on": False}
+
+        def reply(query: dict[str, str]) -> Any:
+            if query.get("method") == "load_info":
+                return original(query)
+            if stalled["on"]:
+                sent_after.append(query.get("method", ""))
+            stalled["on"] = True
+            raise httpx.ReadTimeout("busy")
+
+        replay._reply = reply  # type: ignore[method-assign]
+
+    text, _ = await run(tool, setup=setup)
+    assert sent_after == []
+    assert text.count("couldn't be read (no answer: ReadTimeout)") == 1
+    assert "not read (DSM didn't answer an earlier request)" in text
+
+
+async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer() -> None:
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def reply(query: dict[str, str]) -> Any:
+            if query.get("method") == "get_health_info":
+                raise httpx.ConnectError("refused")
+            return original(query)
+
+        replay._reply = reply  # type: ignore[method-assign]
+
+    text, _ = await run(list_disks, setup=setup)
+    assert "Drive 1 (sda) low-performance-in-RAID flag: couldn't be read (ConnectError)" in text
+    assert "no answer: ConnectError" not in text
