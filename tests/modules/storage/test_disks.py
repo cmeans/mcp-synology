@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from mcp_synology.modules.storage.disks import get_disk, list_disks, smart_table, trend_lines
@@ -213,3 +214,41 @@ async def test_without_the_smart_api_one_note(tool: Any) -> None:
     assert text.count("Low-performance-in-RAID flags: not available on this NAS") == 1
     assert "low-performance-in-RAID flag:" not in text
     assert replay.calls("SYNO.Storage.CGI.Smart", "get_health_info") == []
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [httpx.ReadTimeout("slow"), httpx.RemoteProtocolError("dropped")],
+    ids=["timeout", "drop"],
+)
+@pytest.mark.parametrize("tool", [list_disks, get_storage_overview], ids=["list", "overview"])
+async def test_a_disk_whose_flag_gets_no_answer_is_a_note(tool: Any, exc: Exception) -> None:
+    """Pre-QA r2 on #661: a transport error on one disk's flag failed the whole tool."""
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def reply(query: dict[str, str]) -> Any:
+            if query.get("method") == "get_health_info" and query.get("device") == "/dev/sda":
+                raise exc
+            return original(query)
+
+        replay._reply = reply  # type: ignore[method-assign]
+
+    text, _ = await run(tool, setup=setup)
+    assert (
+        f"Drive 1 (sda) low-performance-in-RAID flag: couldn't be read "
+        f"(no answer: {type(exc).__name__})"
+    ) in text
+    assert "slow" not in text and "dropped" not in text
+
+
+@pytest.mark.parametrize("fixture", VDSM)
+async def test_no_disks_no_flag_note(fixture: str) -> None:
+    """Without disks there's nothing to flag: no note even when the API is missing."""
+
+    def setup(replay: Replay, client: Any) -> None:
+        client._api_cache.pop("SYNO.Storage.CGI.Smart", None)
+
+    text, _ = await run(get_storage_overview, fixture, setup=setup)
+    assert "Low-performance-in-RAID" not in text

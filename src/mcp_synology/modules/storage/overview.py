@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.formatting import format_key_value, format_timestamp, nested_json
 from mcp_synology.modules.storage.helpers import (
+    SMART_API,
     STORAGE_API,
     Sections,
     as_dict,
@@ -175,9 +176,6 @@ def low_performance(health: Any) -> str | None:
     return value
 
 
-_SMART_API = "SYNO.Storage.CGI.Smart"
-
-
 async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections) -> dict[str, str]:
     """Disk id -> DSM's low-performance-in-RAID value, for each disk that has it raised.
 
@@ -186,7 +184,7 @@ async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections
     """
     slow: dict[str, str] = {}
     disks = items(info, "disks")
-    if disks and _SMART_API not in client._api_cache:
+    if disks and SMART_API not in client._api_cache:
         # One note, not one per disk: the API is missing for all of them.
         optional.notes.append("Low-performance-in-RAID flags: not available on this NAS")
         return slow
@@ -196,7 +194,7 @@ async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections
             client,
             # Only this flag is read here, so the note names it, not the disk's whole health.
             f"{disk_label(disk)} low-performance-in-RAID flag",
-            _SMART_API,
+            SMART_API,
             "get_health_info",
             {"device": device},
         )

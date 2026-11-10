@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -104,6 +106,9 @@ async def call(
         synology_error_response(operation, e)
 
 
+SMART_API = "SYNO.Storage.CGI.Smart"
+
+
 @dataclass
 class Sections:
     """Results of optional calls, with a note for each one that gave nothing."""
@@ -142,6 +147,13 @@ class Sections:
             else:
                 logger.debug("%s %s/%s failed: %s", self.operation, api, method, e)
                 self.notes.append(f"{label}: couldn't be read ({failure(e)})")
+            return None
+        except httpx.TransportError as e:
+            # No answer from DSM (a timeout, a dropped connection): one optional section,
+            # so a note, not a failed tool (pre-QA on #661: one call per disk made this
+            # likelier). The error's type only, never its text.
+            logger.debug("%s %s/%s got no answer: %r", self.operation, api, method, e)
+            self.notes.append(f"{label}: couldn't be read (no answer: {type(e).__name__})")
             return None
 
 

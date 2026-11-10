@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import error_response, format_key_value, format_table
 from mcp_synology.modules.storage.helpers import (
+    SMART_API,
     STORAGE_API,
     Sections,
     as_dict,
@@ -65,7 +66,7 @@ _KNOWN = {
     "summary_status_category",
 }
 
-_SMART = "SYNO.Storage.CGI.Smart"
+_SMART = SMART_API
 _DISK = "SYNO.Core.Storage.Disk"
 
 # get_health_info's monthly series: unc = bad sectors, idnf = ID-not-found errors.
