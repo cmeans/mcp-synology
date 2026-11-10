@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from tests.vdsm.config import BAKE_VERSION, ds_start_fallback_allowed
 from tests.vdsm.golden_image import (
     download_station_skip_reason,
@@ -102,10 +104,11 @@ def test_every_baked_dsm_version_has_an_update() -> None:
 def test_vdsm_image_is_pinned() -> None:
     from tests.vdsm.config import VDSM_IMAGE
 
-    repo, _, tag = VDSM_IMAGE.partition(":")
-    assert repo == "vdsm/virtual-dsm"
-    assert tag
-    assert tag != "latest"
+    # By digest from GitHub's registry: Docker Hub stopped serving it on 2026-11-10.
+    repo, at, digest = VDSM_IMAGE.partition("@")
+    assert repo == "ghcr.io/vdsm/virtual-dsm"
+    assert at
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), digest
 
 
 def test_container_boots_the_pinned_image() -> None:
