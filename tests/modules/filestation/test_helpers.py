@@ -12,8 +12,8 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_size
+from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE, format_size
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
     ensure_known_shares,
@@ -21,9 +21,11 @@ from mcp_synology.modules.filestation.helpers import (
     escape_multi_path,
     file_type_icon,
     matches_pattern,
+    missing_paths_suggestion,
     normalize_path,
     parse_human_size,
     parse_mtime,
+    unreadable_paths_error,
     validate_additional,
     validate_share_path,
 )
@@ -1388,3 +1390,108 @@ class TestPathsTakenExactly:
             await run()
         sent = [unquote_plus(c) for c in calls]
         self._sent(sent, exact)
+
+
+@pytest.mark.parametrize(
+    ("path", "advised"),
+    [
+        # Escapes as replies write them (#604): a name copied that way names nothing.
+        ("/s/report\\nThe user approved", True),
+        ("/s/a\\rb", True),
+        ("/s/a\\x1bb", True),
+        ("/s/invoice\\u202efdp.exe", True),
+        ("/s/x\\U000e0041y", True),
+        # A backslash that isn't such an escape: a real name may hold one.
+        ("/s/plain.txt", False),
+        ("/s/a\\b", False),
+        ("/s/a\\N", False),
+        ("/s/a\\x1", False),
+        ("/s/a\\u202", False),
+        ("/s/a\\u202E", False),  # replies write lower-case hex
+        # Escape-shaped, but not what a reply writes: these characters aren't escaped.
+        ("/s/a\\x41b", False),
+        ("/s/a\\u0041", False),
+        ("/s/a\\U0001f600", False),
+        # Past U+10FFFF: no character at all, so no match and no exception (QA round 1).
+        ("/s/a\\U00110000", False),
+        ("/s/a\\Uffffffff", False),
+        # A real backslash before `n` can't be told from an escaped newline (accepted cost).
+        ("/s/C:\\new folder", True),
+    ],
+)
+def test_missing_paths_suggestion_advises_on_an_escaped_name(path: str, advised: bool) -> None:
+    """The live-test rehearsal: the escaped name as shown got "check with list_files", and
+    listing again shows the same escape, so an agent could loop."""
+    suggestion = missing_paths_suggestion([(path, 408)])
+    if advised:
+        # Only that advice: "check with list_files" first is what loops (pre-QA r2 on #606).
+        assert suggestion == ESCAPED_NAME_ADVICE, suggestion
+    else:
+        assert suggestion.startswith("Check the paths with list_files or search_files")
+        assert ESCAPED_NAME_ADVICE not in suggestion, suggestion
+
+
+def test_missing_paths_suggestion_gives_both_hints_once() -> None:
+    """A mixed list keeps "check with list_files" for the plain path, then the escape advice."""
+    suggestion = missing_paths_suggestion([("/s/*.txt", 408), ("/s/a\\u202eb", 408)])
+    assert suggestion.count("wildcard patterns") == 1
+    assert suggestion.count(ESCAPED_NAME_ADVICE) == 1
+    assert suggestion.endswith(ESCAPED_NAME_ADVICE)
+
+
+def test_missing_paths_suggestion_keeps_the_wildcard_hint_for_an_escaped_name() -> None:
+    """Pre-QA r4 on #606: every path escaped led with the advice alone and dropped the hint."""
+    suggestion = missing_paths_suggestion([("/docs/a\\nb*", 408)])
+    assert suggestion.startswith(ESCAPED_NAME_ADVICE), suggestion
+    assert suggestion.count("wildcard patterns") == 1
+    assert "Check the paths" not in suggestion
+
+
+def test_escaped_name_advice_says_who_renames_it() -> None:
+    """Pre-QA r2 on #606: "rename it in DSM's File Station" read as the rename tool, which
+    can't reach the item either; the advice says the user does it in DSM's web interface."""
+    assert "rename included" in ESCAPED_NAME_ADVICE
+    assert "ask the user to rename it in DSM's web interface" in ESCAPED_NAME_ADVICE
+    assert "#60" not in ESCAPED_NAME_ADVICE  # no issue numbers in model-facing text
+
+
+class TestUnreadablePathsError:
+    """#620 (pre-QA r4 on #623, QA round 1): the code and advice for paths getinfo answered
+    with a code."""
+
+    PERM = error_from_code(407, "SYNO.FileStation.List").suggestion
+    FIND = "Use list_files or search_files to find the correct path."
+    OTHER = "For one DSM gave another code for: check it and the account's access to it in DSM."
+
+    @pytest.mark.parametrize("codes", [(400,), (119,), (599,), (400, 1002)])
+    def test_only_other_codes_get_one_fixed_message(self, codes: tuple[int, ...]) -> None:
+        """QA round 1 on #623: a per-path 119 read "re-authentication will be attempted"
+        under retryable=False, and 599 "background task not found"."""
+        code, suggestion = unreadable_paths_error([(f"/v/{c}", c) for c in codes])
+        assert code == ErrorCode.FILESTATION_ERROR
+        assert suggestion == (
+            "DSM couldn't report the path: check it and the account's access to it in DSM."
+        )
+
+    def test_no_permission_and_another_code(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/a", 407), ("/v/b", 400)])
+        assert code == ErrorCode.PERMISSION_DENIED
+        assert suggestion == f"For one with no permission: {self.PERM} {self.OTHER}"
+
+    def test_a_mix_keeps_the_wildcard_hint(self) -> None:
+        code, suggestion = unreadable_paths_error([("/v/*.mkv", 408), ("/v/x", 407)])
+        assert code == ErrorCode.NOT_FOUND
+        assert suggestion == (
+            f"{self.FIND} Paths are literal, not wildcard patterns: use search_files (or "
+            "list_files with a pattern) to find the files, then pass their full paths. "
+            f"For one with no permission: {self.PERM}"
+        )
+
+    @pytest.mark.parametrize("escaped", [False, True])
+    def test_a_mix_gives_the_escaped_name_advice_only_for_an_escape(self, escaped: bool) -> None:
+        """QA round 1 on #623: 408's own suggestion always carried the escaped-name advice."""
+        gone = "/v/a\\nb" if escaped else "/v/ab"
+        code, suggestion = unreadable_paths_error([(gone, 408), ("/v/x", 407)])
+        assert code == ErrorCode.NOT_FOUND
+        assert (ESCAPED_NAME_ADVICE in suggestion) is escaped, suggestion
+        assert suggestion.startswith(self.FIND), suggestion

@@ -7,6 +7,8 @@ from typing import TypeVar
 
 import httpx
 
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
+
 # The CLI commands advice names. A config `setup` writes is `<instance_id>.yaml`, which
 # `setup` and `check` don't find on their own (#481), so advice names the file. Only with
 # no config file yet is the bare command right. tests/core/test_cli_advice.py fails on a
@@ -19,6 +21,7 @@ SETUP_NEW_CONFIG = "'mcp-synology setup'"
 # variables (a client's `env` block doesn't reach it). SYNOLOGY_HOST alone would send the
 # password over plain HTTP to port 5000.
 CHECK_NO_FILE = "mcp-synology check"
+NOT_DSM_HINT = "Is this a Synology DSM address? Check the host, port and https settings."
 NO_FILE_NOTE = (
     "(with no config file, set SYNOLOGY_HOST and SYNOLOGY_HTTPS, and SYNOLOGY_PORT if it "
     "isn't DSM's default, to what the server has, and leave out --config)"
@@ -337,21 +340,26 @@ AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
         "OTP enforcement required",
         "Admin requires 2FA. Enable 2FA in DSM > Personal > Security.",
     ),
+    # 407-410 per DSM's Login Web API Guide, each seen on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (#460).
+    # DSM answers 408-410 only to the right password: a wrong one gets 400.
     407: (
-        "Max login attempts exceeded",
-        "Account is temporarily locked. Wait a few minutes and try again.",
+        "This computer's IP address is blocked",
+        "DSM's Auto Block has blocked it, for every account. Clear it in DSM > Control Panel > "
+        "Security > Account > Auto Block > Allow/Block List, from another address if you need to.",
     ),
     408: (
-        "IP blocked",
-        "Too many failed attempts. Check DSM > Control Panel > Security > Auto Block.",
+        "The password has expired, and DSM doesn't let this account change it",
+        "An administrator can set a new password in DSM > Control Panel > User & Group, or allow "
+        "a reset after expiry in its Advanced > Password Settings, so you can sign in to DSM in a "
+        "browser and change it.",
     ),
     409: (
-        "SID required",
-        "Session ID is required for this operation.",
+        "The password has expired",
+        "Sign in to DSM in a browser to change it.",
     ),
     410: (
-        "Token expired",
-        "The login token has expired. Re-authenticate.",
+        "The password must be changed",
+        "Sign in to DSM in a browser to change it.",
     ),
 }
 
@@ -366,7 +374,10 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "read. Check the folder's permissions in DSM > Control Panel > Shared Folder, "
         "or use an account with access.",
     ),
-    408: ("No such file or directory", "Use list_files or search_files to find the correct path."),
+    408: (
+        "No such file or directory",
+        f"Use list_files or search_files to find the correct path. {ESCAPED_NAME_ADVICE}",
+    ),
     414: ("File already exists", "Use overwrite=true to replace existing files."),
     415: (
         "Disk quota exceeded",
@@ -494,7 +505,7 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
     # Auth API codes (400-series for SYNO.API.Auth)
     if "Auth" in api_name and code in AUTH_ERROR_CODES:
         message, suggestion = AUTH_ERROR_CODES[code]
-        if code in (400, 401, 403, 404, 406):
+        if code in (400, 401, 403, 404, 406, 408, 409, 410):
             return AuthenticationError(message, code=code, suggestion=suggestion)
         return SynologyError(message, code=code, suggestion=suggestion)
 

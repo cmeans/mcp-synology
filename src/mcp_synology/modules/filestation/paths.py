@@ -6,7 +6,9 @@ same input behaves the same way in every tool. The rules run once, on the raw in
 1. **Parts** (every role): only whitespace before a leading ``/`` is padding; the rest is
    taken exactly (#488: DSM keeps whitespace in a name). A NUL is refused (DSM cuts the
    path there, so ``<dir>/a<NUL>x`` acts on ``a``; probe on #472), and so are an empty part
-   (``//``: DSM answers 408) and a ``.`` or ``..`` part (#449; padded with whitespace too).
+   (``//``: DSM answers 408), a ``.`` or ``..`` part (#449; padded with whitespace too), and
+   a character a reply shows escaped (#604, `formatting.forges`: control characters but a
+   tab, line and paragraph separators, bidi controls, tag characters).
 2. **Share**: the first part is a known shared folder, sent with DSM's spelling (#160,
    #353; `ensure_known_shares`).
 3. **Role** (one table, `PATH_PARAMS`): what the argument may name.
@@ -19,12 +21,17 @@ from __future__ import annotations
 
 import enum
 import unicodedata
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn
 
 import regex
 
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
+    error_response,
+    forges,
+    holds_escape,
+)
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
     NAME_BYTES,
@@ -127,7 +134,8 @@ _WRITE_OPS: dict[str, Literal["Delete", "Move", "Rename"]] = {
 
 
 def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> str:
-    """Refuse a NUL, an empty part, or a ``.``/``..`` part in ``raw``; return it normalized.
+    """Refuse a NUL, a character a reply shows escaped (#604), an empty part, or a
+    ``.``/``..`` part in ``raw``; return it normalized.
 
     Run on the path as given, before the share check rewrites it.
     """
@@ -140,6 +148,21 @@ def check_parts(raw: str, param: str, suggestion: str = DEFAULT_SUGGESTION) -> s
             param=param,
             value=raw,
             suggestion=suggestion,
+        )
+    if forges(raw):
+        # Replies show such a name escaped, so the name as shown is never the item's (#604).
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Invalid path {raw!r}: a control character, line or paragraph separator, bidi "
+            "control or tag character isn't allowed. Replies show them escaped, so a name that "
+            "holds one can't be given here.",
+            retryable=False,
+            param=param,
+            value=raw,
+            suggestion="For an item on the NAS, rename it there (in DSM) and use its new name, "
+            "or pass its ID where the tool takes one (Photos; File Station's tools and Download "
+            "Station's destinations take paths only); for one this would create, give its name "
+            f"plainly. {suggestion}",
         )
     normalized = normalize_path(raw)
     parts = normalized.split("/")[1:]
@@ -222,9 +245,10 @@ def refuse_planted_bin(
 _SAME_NAME_PAIRS_SHOWN = 10
 _SAME_NAME_ADVICE = (
     "Send them to different folders, or rename one first. To merge two folders without replacing "
-    "anything, use overwrite=false: items already there are skipped and listed. Separate calls "
-    "with overwrite=true don't avoid this: a later call replaces what an earlier one put there, "
-    "possibly with no copy in the recycle bin, so do that only if the user asked for it."
+    "anything, use overwrite=false: items whose name is already there are skipped and listed. "
+    "Separate calls with overwrite=true don't avoid this: one is refused while the other's task "
+    "is landing, but a later call replaces what a finished one put there, possibly with no copy "
+    "in the recycle bin, so do that only if the user asked for it."
 )
 _DIFFERENT_FILES = (
     " Same-named sources may not be the same file: show both to the user and let them choose."
@@ -419,11 +443,25 @@ def refuse_write_target(
                 if words.shared
                 else ""
             )
-            message = f"{head} {words.whose}. Deleting it would permanently remove {lost}."
-            suggestion = (
-                f"To delete items from the bin for good, list them with {words.lister} and "
-                f"delete each by its own path ({own_path}), after the user agrees{empty}."
-            )
+            if at == 2 and parts[0].casefold() == "homes":
+                # Through /homes, a user's home bin is a folder in the homes share: what's
+                # deleted there goes into /homes's own bin when that's on (#610).
+                kept = f"/homes/#recycle/{parts[1]}/#recycle"
+                message = (
+                    f"{head} {words.whose}. Deleting it would remove {lost}: into /homes's "
+                    "own recycle bin if that's on, otherwise permanently."
+                )
+                suggestion = (
+                    f"To delete items from the bin, list them with {words.lister} and delete "
+                    f"each by its own path ({own_path}), after the user agrees. With /homes's "
+                    f"own bin on, they go to {kept}; deleting them there removes them for good."
+                )
+            else:
+                message = f"{head} {words.whose}. Deleting it would permanently remove {lost}."
+                suggestion = (
+                    f"To delete items from the bin for good, list them with {words.lister} and "
+                    f"delete each by its own path ({own_path}), after the user agrees{empty}."
+                )
         else:
             message = f"{head} {words.whose}. {acting} it would take {words.items} out of the bin."
             if at == 2:
@@ -481,7 +519,7 @@ def refuse_write_target(
     _refuse(f"{head} a whole shared folder. {detail} Nothing was {past}.", param, raw, suggestion)
 
 
-def _refuse(message: str, param: str, value: str, suggestion: str) -> None:
+def _refuse(message: str, param: str, value: str, suggestion: str) -> NoReturn:
     error_response(
         ErrorCode.INVALID_PARAMETER,
         message,
@@ -632,7 +670,8 @@ async def _refuse_bad_created_parents(
     ``force_parent``) under a name `name_problem` refuses: padded (DSM makes
     ``/video/Uploads `` beside ``Uploads`` and reports success; vdsm DSM 7.1 and 7.4.1),
     with a control or invisible character, or ``#recycle`` where it would be a bin (pre-QA
-    on #510). Only such parts are looked up, so an ordinary path costs no request; the
+    on #510), or one holding an escape as replies write it, most likely copied from a listing
+    (#606). Only such parts are looked up, so an ordinary path costs no request; the
     parent is built as the walk goes, not re-joined for every part (pre-QA r4)."""
     parts = normalized.split("/")[1:]
     parent = "/" + parts[0] if parts else "/"
@@ -641,6 +680,24 @@ async def _refuse_bad_created_parents(
         prefix = f"{parent}/{parts[i]}"
         parent = prefix
         if problem is None:
+            # A part copied from a listing that showed a name escaped (#606): created, it would
+            # be a look-alike with a literal backslash, listed just like the real folder. Only a
+            # definite 408: an unreadable answer leaves it to DSM.
+            if holds_escape(parts[i]) and await path_exists(client, prefix) is False:
+                _refuse(
+                    f"Invalid path {raw!r}: the folder {shown(prefix)} doesn't exist, and would "
+                    "be created, but its name holds an escape as replies write one, so it's "
+                    "most likely copied from a listing and would make a look-alike of another "
+                    "folder. Nothing was created.",
+                    param,
+                    raw,
+                    # `C:\\new` can't be told from an escaped newline: give that name a way in
+                    # (create_folder doesn't check its last part this way; QA round 2). A
+                    # caller's own advice (a config setting's) comes first, as below.
+                    suggestion
+                    or f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, "
+                    "create it on its own with create_folder first, then retry.",
+                )
             continue
         # Only a definite 408: an unreadable answer leaves it to DSM.
         if await path_exists(client, prefix) is False:
@@ -795,7 +852,7 @@ def resolve_bin_items(share: str, items: list[str], param: str = "paths") -> lis
 
     resolved: list[ResolvedPath] = []
     for item in items:
-        if "\x00" in item or any(_is_dot(part) for part in item.split("/") if part):
+        if "\x00" in item or forges(item) or any(_is_dot(part) for part in item.split("/") if part):
             check_parts(item, param, suggestion)
         p = strip_padding(item)
         head, _, rest = p.lstrip("/").partition("/")

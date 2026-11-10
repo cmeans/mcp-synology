@@ -14,6 +14,7 @@ import logging
 import os
 import secrets
 import shutil
+import weakref
 from collections.abc import Awaitable, Callable, Coroutine
 from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, BinaryIO, Self
@@ -37,6 +38,7 @@ from mcp_synology.core.errors import (
     error_detail,
     error_from_code,
 )
+from mcp_synology.core.formatting import CollidingKeysError, escape_nas_text, needs_escaping
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.core.state import ApiInfoEntry
 
@@ -67,6 +69,15 @@ ProgressCallback = Callable[[int, int | None], Coroutine[Any, Any, None]]
 
 _MAY_HAVE_APPLIED = "DSM may still have applied the request; check before retrying."
 
+# What DSM sends a file as (#292, #642): File Station application/octet-stream for every file
+# and a folder's ZIP, Photos application/force-download or the image's own type (verified on
+# DSM 7.1 and 7.2.2). application/zip, video/* and audio/* aren't captured from DSM: they're
+# a precaution, types a proxy might send a file as. A body of any other type that's small
+# enough to be DSM's error envelope is checked for one before it's kept.
+_DOWNLOAD_TYPES = ("application/octet-stream", "application/force-download", "application/zip")
+_DOWNLOAD_TYPE_PREFIXES = ("image/", "video/", "audio/")
+_ENVELOPE_SNIFF_LIMIT = 4096
+
 _NOT_A_REPLY = (
     "A reverse proxy or captive portal in front of the NAS may be answering instead of "
     "DSM (a login page, say). Try again shortly; if it keeps happening, check what's in "
@@ -81,7 +92,7 @@ def _read_json(resp: httpx.Response, label: str, *, may_have_applied: bool = Fal
     model as "Expecting value: line 1 column 1 (char 0)". The error names ``label`` and
     the Content-Type, never the body.
     """
-    body = _loads(resp.content, label)
+    body = _loads_or_refuse(resp.content, label)
     if isinstance(body, dict):
         return body
     ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower() or "none"
@@ -97,23 +108,52 @@ def _loads(content: bytes, label: str) -> Any:
 
     DSM copies binary EXIF fields into its JSON as raw bytes, which aren't UTF-8 (Photos
     get_exif, "Picture Info", DSM 7.1.1), so a strict decode would lose the whole reply.
-    Those bytes are read as U+FFFD (replacement characters) instead.
+    Those bytes are read as U+FFFD (replacement characters) instead. Every string is then
+    escaped where it could forge a line or reorder text in a reply (``escape_nas_text``, #604):
+    a control character, line or paragraph separator, bidi control or tag character. Characters
+    that draw nothing otherwise (a zero-width space, a variation selector) are left as they
+    are, as names use them.
     """
     try:
-        return json.loads(content)
+        # As parsing the bytes read it (UTF-8, -16 or -32, a BOM, surrogates passed through), so
+        # no reply that parsed before is refused or read differently now.
+        text = content.decode(json.detect_encoding(content), "surrogatepass")
+        text = text.removeprefix("\ufeff")
+        value = json.loads(text)
+        return escape_nas_text(value) if needs_escaping(text) else value
     except UnicodeDecodeError:
         logger.debug("%s: the reply has bytes that aren't UTF-8; reading them as U+FFFD", label)
         try:
-            return json.loads(content.decode("utf-8", errors="replace"))
-        except ValueError:
+            text = content.decode("utf-8-sig", errors="replace")
+            return escape_nas_text(json.loads(text))
+        except CollidingKeysError:
+            raise
+        except (ValueError, RecursionError):
             return None
-    except ValueError:
+    except CollidingKeysError:
+        raise
+    except (ValueError, RecursionError):  # nesting deeper than json.loads takes: not a reply
         return None
+
+
+def _loads_or_refuse(content: bytes, label: str) -> Any:
+    """``_loads``, with a reply whose keys collide once escaped refused as such (#604)."""
+    try:
+        return _loads(content, label)
+    except CollidingKeysError:
+        logger.warning("%s: two keys of the reply read the same once escaped", label)
+        raise DsmReplyError(
+            f"{label}: DSM's reply has two names that read the same once escaped: one holds a "
+            "control character, line or paragraph separator, bidi control or tag character, the "
+            "other a backslash where that is shown.",
+            retryable=False,
+            suggestion="Rename one of the two items on the NAS (in DSM). Trying again won't help.",
+        ) from None
 
 
 def _error_envelope(body: bytes) -> dict[str, Any] | None:
     """The ``error`` object of a DSM error envelope in ``body``, or None if it has none."""
-    parsed = _loads(body, "download error envelope")
+    parsed = _loads_or_refuse(body, "download error envelope")
     if not isinstance(parsed, dict) or not isinstance(parsed.get("error"), dict):
         return None
     code = parsed["error"].get("code", 0)
@@ -278,6 +318,9 @@ class DsmClient:
         # One re-login at a time; a request that waited on it retries with the new
         # session instead of logging in again (#359).
         self._re_auth_lock = asyncio.Lock()
+        self._destination_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         # Re-logins attempted so far, and how the last one failed: requests that were
         # already waiting when it failed get the same error instead of each logging in.
         self._login_attempts = 0
@@ -328,6 +371,15 @@ class DsmClient:
         """The session a request is about to use, and its headers: a session error on
         that request names this session to ``_re_authenticate`` (#359)."""
         return self._sid, self._session_headers()
+
+    def destination_lock(self, dest: str) -> asyncio.Lock:
+        """The lock for starting tasks into ``dest``: one per destination while anyone holds it,
+        so the map doesn't grow with every folder used (#587). Within this process only."""
+        lock = self._destination_locks.get(dest)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._destination_locks[dest] = lock
+        return lock
 
     def set_re_auth_callback(self, callback: ReAuthCallback) -> None:
         """Set callback for transparent re-authentication on session errors."""
@@ -597,8 +649,8 @@ class DsmClient:
         only. Write and pool keep the client's default, and so does connect unless
         ``read_timeout`` is shorter: then it's the connect timeout too, or an unreachable
         NAS would still take the client's default to fail (#545). File Station task stops
-        use 90 s (#245): DSM 7.1 sometimes answers a Delete ``stop`` only after ~60 s,
-        although the stop takes effect at once.
+        use ``tasks.STOP_WAIT`` (15 s, #630): DSM 7.1 sometimes answers a ``stop`` only after
+        ~60 s, although the stop takes effect at once, so the task's status decides.
         """
 
         # Resolve API path and version
@@ -690,9 +742,8 @@ class DsmClient:
                     "DSM response: %s/%s — success (keys: %s)", api, method, list(data.keys())
                 )
             else:
-                logger.debug(
-                    "DSM response: %s/%s — success (list, %d items)", api, method, len(data)
-                )
+                # Whatever it is: a reply with `data: null` or a number has no len().
+                logger.debug("DSM response: %s/%s — success (%s)", api, method, type(data).__name__)
             return data
 
         error = body.get("error", {})
@@ -1048,6 +1099,7 @@ class DsmClient:
         chunk_size: int = 65536,
         progress_callback: ProgressCallback | None = None,
         overwrite: bool = True,
+        expected_size: int | None = None,
     ) -> int:
         """Download a file from the NAS via SYNO.FileStation.Download (GET, binary).
 
@@ -1072,6 +1124,7 @@ class DsmClient:
             chunk_size=chunk_size,
             progress_callback=progress_callback,
             overwrite=overwrite,
+            expected_size=expected_size,
         )
 
     async def download_binary(
@@ -1086,6 +1139,7 @@ class DsmClient:
         chunk_size: int = 65536,
         progress_callback: ProgressCallback | None = None,
         overwrite: bool = True,
+        expected_size: int | None = None,
         _is_retry: bool = False,
     ) -> int:
         """Stream a binary DSM reply (GET) to ``dest_file``: File Station's Download,
@@ -1107,6 +1161,14 @@ class DsmClient:
         error status without one raises ``DownloadHttpError`` (a ``FileStationError``)
         for File Station and ``DsmHttpError`` for any other API (Photos answers a thumbnail
         that isn't generated yet with a 404 HTML page).
+
+        Only a 200 is a file (#642): any other status below 400 (a proxy's 3xx, a 204) raises
+        ``DsmReplyError`` before anything is written, as httpx doesn't follow redirects. Before
+        the file is published, a body that isn't the ``Content-Length`` it announced, or is
+        shorter than ``expected_size`` (the size ``getinfo`` reported; a file that grew while it
+        downloaded is kept), raises ``DsmReplyError``, and a small body of a type DSM doesn't
+        send files as is checked for DSM's error envelope, handled as the JSON one is. In
+        every case the temp file is removed and ``dest_file`` is untouched.
         """
         http = self._get_http_once()  # never reused (#222)
 
@@ -1134,6 +1196,30 @@ class DsmClient:
         )
 
         sent_sid, headers = self._session()
+
+        async def on_envelope(error: dict[str, Any]) -> int:
+            """DSM's error envelope instead of the file: a session code logs in again and
+            retries once; any other code raises its error."""
+            code = error.get("code", 0)
+            logger.debug("DSM response: %s/%s — error code %s", api, method, code)
+            if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
+                logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
+                await self._re_authenticate(code, api, sent_sid)
+                return await self.download_binary(
+                    api,
+                    method,
+                    version,
+                    params,
+                    dest_file,
+                    timeout=timeout,
+                    chunk_size=chunk_size,
+                    progress_callback=progress_callback,
+                    overwrite=overwrite,
+                    expected_size=expected_size,
+                    _is_retry=True,
+                )
+            raise error_from_code(code, api, error.get("errors"))
+
         async with http.stream(
             "GET",
             url,
@@ -1157,6 +1243,14 @@ class DsmClient:
                     resp.status_code,
                     suggestion="Check that the file path exists on the NAS.",
                 )
+            if resp.status_code != 200:
+                # A redirect (not followed) or a 204 is never the file (#642): a typeless
+                # 302 was saved as an empty file, replacing a good one with overwrite=true.
+                raise DsmReplyError(
+                    f"{api}/{method}: the answer wasn't a DSM reply (HTTP "
+                    f"{resp.status_code}); nothing was written.",
+                    suggestion=_NOT_A_REPLY,
+                )
 
             content_type = resp.headers.get("content-type", "")
             media_type = content_type.split(";")[0].strip().lower()
@@ -1175,26 +1269,7 @@ class DsmClient:
                         f"{media_type}).",
                         suggestion=_NOT_A_REPLY,
                     )
-                code = error.get("code", 0)
-                logger.debug("DSM response: %s/%s — error code %s", api, method, code)
-
-                if code in _SESSION_ERROR_CODES and not _is_retry and self._re_auth_callback:
-                    logger.info("Session error %d on %s/%s, attempting re-auth.", code, api, method)
-                    await self._re_authenticate(code, api, sent_sid)
-                    return await self.download_binary(
-                        api,
-                        method,
-                        version,
-                        params,
-                        dest_file,
-                        timeout=timeout,
-                        chunk_size=chunk_size,
-                        progress_callback=progress_callback,
-                        overwrite=overwrite,
-                        _is_retry=True,
-                    )
-
-                raise error_from_code(code, api, error.get("errors"))
+                return await on_envelope(error)
 
             # Check disk space before writing
             content_length = resp.headers.get("content-length")
@@ -1217,6 +1292,10 @@ class DsmClient:
             # name can't push it past the filesystem's name-length limit.
             tmp_file = dest_file.with_name(f".mcp-synology-{secrets.token_hex(8)}.part")
             bytes_written = 0
+            sniff = media_type not in _DOWNLOAD_TYPES and not media_type.startswith(
+                _DOWNLOAD_TYPE_PREFIXES
+            )
+            envelope: dict[str, Any] | None = None
             # Opened before the try: if the name somehow exists already, that isn't ours
             # to delete.
             fh = open(tmp_file, "xb")  # noqa: SIM115 - closed below, before publishing
@@ -1230,7 +1309,20 @@ class DsmClient:
                     # On disk before the rename, so a power loss can't leave an empty file.
                     fh.flush()
                     os.fsync(fh.fileno())
-                _publish_download(tmp_file, dest_file, overwrite=overwrite)
+                if sniff and bytes_written <= _ENVELOPE_SNIFF_LIMIT:
+                    envelope = _error_envelope(tmp_file.read_bytes())
+                if envelope is not None:
+                    tmp_file.unlink()  # DSM's error, not the file (#642)
+                else:
+                    self._check_download_size(
+                        api,
+                        method,
+                        bytes_written,
+                        resp.num_bytes_downloaded,
+                        total_size,
+                        expected_size,
+                    )
+                    _publish_download(tmp_file, dest_file, overwrite=overwrite)
             except BaseException:
                 try:
                     tmp_file.unlink()
@@ -1242,10 +1334,45 @@ class DsmClient:
                     )
                 raise
 
+            if envelope is not None:
+                return await on_envelope(envelope)
             logger.debug(
                 "DSM response: %s/%s — success (%d bytes written)", api, method, bytes_written
             )
             return bytes_written
+
+    @staticmethod
+    def _check_download_size(
+        api: str,
+        method: str,
+        written: int,
+        received: int,
+        announced: int | None,
+        expected: int | None,
+    ) -> None:
+        """Refuse a body that isn't the file (#642): not the length its own Content-Length
+        announced, or shorter than the size DSM reported for the file before the download.
+        Longer than that is kept: the file may have grown while it downloaded.
+
+        ``Content-Length`` counts the bytes as sent, so ``received`` is the raw count
+        (``num_bytes_downloaded``): a gzipped body decodes to more than its length (pre-QA on
+        #656). ``written``, the decoded size, is what's checked against ``expected``."""
+        if announced is not None and received != announced:
+            raise DsmReplyError(
+                f"{api}/{method}: the answer ended at {received:,} of the {announced:,} bytes "
+                "it announced; nothing was saved.",
+                suggestion=_NOT_A_REPLY,
+            )
+        if expected is not None and written < expected:
+            raise DsmReplyError(
+                f"{api}/{method}: the answer was {written:,} bytes for a file DSM reported as "
+                f"{expected:,} bytes; nothing was saved.",
+                suggestion=(
+                    "The file may have changed on the NAS while it downloaded, or something in "
+                    "front of the NAS answered instead of DSM. Try again; if it keeps "
+                    f"happening, run {CHECK_COMMAND} {NO_FILE_NOTE}."
+                ),
+            )
 
     async def fetch_dsm_info(self) -> dict[str, Any]:
         """Query SYNO.DSM.Info getinfo and return the data dict.

@@ -12,20 +12,24 @@ import httpx
 
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
     error_response,
     format_key_value,
     format_size,
     format_status,
     format_table,
     format_timestamp,
+    holds_escape,
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
+    missing_text,
     normalize_path,
     shown,
     task_request,
     unanswered_status_response,
+    unreadable_paths_error,
     validate_additional,
 )
 
@@ -116,22 +120,28 @@ async def get_file_info(
                 files.append(entry)
 
     if missing and not files:
-        codes = {code for _, code in missing}
-        mapped = error_from_code(codes.pop() if len(codes) == 1 else 408, "SYNO.FileStation.List")
+        # The code and advice follow what DSM said for each path (#620); a missing one gets
+        # the shared suggestion, which leads with the escaped-name advice when the paths hold
+        # escapes instead of "check with list_files" (#606).
+        err_code, suggestion = unreadable_paths_error(missing)
         error_response(
-            mapped.error_code,
+            err_code,
             "Get file info failed: "
-            + "; ".join(f"{shown(path)} (DSM error {code})" for path, code in missing),
+            + "; ".join(missing_text(path, code) for path, code in missing)
+            + ".",
             retryable=False,
             param="paths",
             value=paths,
-            suggestion=mapped.suggestion or "Check the paths with list_files or search_files.",
+            suggestion=suggestion,
         )
 
     notes = "".join(
-        "\n" + format_status(f"Not found: {shown(path)} (DSM error {code})", success=False)
-        for path, code in missing
+        "\n" + format_status(missing_text(path, code), success=False) for path, code in missing
     )
+    if any(holds_escape(path) for path, _ in missing):
+        # Some paths found: the missing ones get only a note, and listing again would show the
+        # same escape, so the note carries the advice once (pre-QA r4 on #606).
+        notes += "\n" + format_status(ESCAPED_NAME_ADVICE, success=False)
 
     if len(files) == 1:
         return _format_single_info(files[0]) + notes

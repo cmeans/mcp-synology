@@ -12,7 +12,7 @@ switched on once every tool in ``docs/specs/photos-module-spec.md`` is in.
 from typing import TYPE_CHECKING, Annotated, Any
 
 from mcp.types import ToolAnnotations
-from pydantic import Field, field_validator
+from pydantic import BeforeValidator, Field, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -228,8 +228,9 @@ MODULE_INFO = ModuleInfo(
             name="merge_people",
             description=(
                 "Merge people (face-recognition groups) in Synology Photos that are the same "
-                "person: every person in merge joins target, which keeps its id, and the merged "
-                "people are gone. If any person isn't found, nothing is merged. This can't be "
+                "person: every person in merge_ids and merge_names joins the target, which "
+                "keeps its id, and the merged people are gone. If any person isn't found, "
+                "nothing is merged. This can't be "
                 "undone, so confirm with the user first. To rename or hide one person, use "
                 "edit_person."
             ),
@@ -332,12 +333,41 @@ MODULE_INFO = ModuleInfo(
 )
 
 
+# A Photos ID: a whole number, or its digits as text (the parameter says it's an ID, so there's
+# nothing to tell apart). Anything else is refused: pydantic would read true and false as 1 and
+# 0 (`album_ids=[true]` would delete album 1), and 5.0, "5.0", "+5" or "1_000" as IDs too.
+def _photo_id(value: object) -> object:
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdigit():
+        return int(value.strip())
+    raise ValueError("an ID is a whole number, or its digits")
+
+
+PhotoId = Annotated[int, BeforeValidator(_photo_id)]
+# A name, never an ID (an album's, a person's or a tag's): a number is that name (`2024`), as
+# the smart-album condition already took it (#609). Its schema says text only: Gemini's tool
+# calling rejects a union type (`["integer", "string"]`), and so do other strict clients, so
+# no served schema declares one (#615); a number still arrives as that name.
+Name = Annotated[str, BeforeValidator(lambda v: str(v) if type(v) is int else v)]
+TagName = Name
+
+
 # Parameter descriptions used by several tools (#247).
 _SPACE = "`personal` (default) or `shared` (Shared Space). IDs belong to one space."
 _ITEM_IDS = "Item IDs from list_photos, at most 1,000 per call."
-_ALBUM = "Album ID (list_photo_collections type=album) or unique name."
-_PERSON = "Person ID (list_photo_collections type=person) or unique name."
-_FOLDER = "Folder ID (list_photo_collections type=folder) or path, such as `/Trips/2024`."
+# Albums and people: an ID or a name, each in its own parameter (#614: a tester sent an ID as
+# text, which matched the album with that name; #616: a name of digits matched the album with
+# that ID). tests/core/test_server.py TestIdParameters checks no Photos parameter takes both.
+_ALBUM_ID = "Album ID (list_photo_collections type=album)."
+_ALBUM_NAME = "Or the album's name, case ignored; not with album_id."
+_PERSON_ID = "Person ID (list_photo_collections type=person)."
+_PERSON_NAME = "Or the person's name, case ignored; not with person_id."
+# Folders: an ID or a path, each in its own parameter too (#617: the digits `2024`, meant as
+# the folder /2024, were folder ID 2024).
+_FOLDER_ID = "Folder ID (list_photo_collections type=folder)."
+_FOLDER_PATH = "Or the folder's path, such as `/Trips/2024`; not with folder_id."
+FolderPath = Annotated[str, BeforeValidator(lambda v: str(v) if type(v) is int else v)]
 _EXPIRES = (
     "`YYYY-MM-DD` (end of that day, UTC), a date-time with offset "
     "(`2026-12-31T18:00-05:00`) or `never`"
@@ -374,20 +404,25 @@ def register(ctx: "RegisterContext") -> None:
         @server.tool(**_tool("list_photos"))  # type: ignore[arg-type]
         async def tool_list_photos(
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
-            folder: Annotated[
-                str | None,
+            folder_id: Annotated[
+                PhotoId | None,
                 Field(
-                    description=(f"Only items directly in this folder, not subfolders. {_FOLDER}")
+                    description=(
+                        f"Only items directly in this folder, not subfolders. {_FOLDER_ID}"
+                    )
                 ),
             ] = None,
-            album: Annotated[
-                str | None, Field(description=(f"One album only (personal space). {_ALBUM}"))
+            folder_path: Annotated[FolderPath | None, Field(description=(_FOLDER_PATH))] = None,
+            album_id: Annotated[
+                PhotoId | None, Field(description=(f"One album only (personal space). {_ALBUM_ID}"))
             ] = None,
-            person: Annotated[
-                str | None, Field(description=(f"Only items showing this person. {_PERSON}"))
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
+            person_id: Annotated[
+                PhotoId | None, Field(description=(f"Only items showing this person. {_PERSON_ID}"))
             ] = None,
+            person_name: Annotated[Name | None, Field(description=(_PERSON_NAME))] = None,
             place: Annotated[
-                int | None,
+                PhotoId | None,
                 Field(
                     description=(
                         "One place only: a place ID from list_photo_collections type=place."
@@ -395,7 +430,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             tag: Annotated[
-                str | None, Field(description=("Only items with this tag name."))
+                TagName | None, Field(description=("Only items with this tag name."))
             ] = None,
             keyword: Annotated[
                 str | None,
@@ -427,7 +462,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             concept: Annotated[
-                int | None,
+                PhotoId | None,
                 Field(
                     description=(
                         "One concept only (a thing or scene Photos recognized): an ID from "
@@ -448,9 +483,12 @@ def register(ctx: "RegisterContext") -> None:
             return await list_photos(
                 client,
                 space=space,
-                folder=folder,
-                album=album,
-                person=person,
+                folder_id=folder_id,
+                folder_path=folder_path,
+                album_id=album_id,
+                album_name=album_name,
+                person_id=person_id,
+                person_name=person_name,
                 place=place,
                 tag=tag,
                 keyword=keyword,
@@ -477,7 +515,7 @@ def register(ctx: "RegisterContext") -> None:
                         "`album` (yours, with sharing status), `shared_with_me` (albums others "
                         "shared with you), `person` (face recognition), `tag`, `place`, `concept` "
                         "(things and scenes Photos recognized; 1.9.1+) or `folder` (subfolders of "
-                        "`parent`)."
+                        "a folder: `parent_id` or `parent_path`)."
                     )
                 ),
             ],
@@ -490,13 +528,15 @@ def register(ctx: "RegisterContext") -> None:
                     description=("Only names containing this text, any case (folders: the path).")
                 ),
             ] = None,
-            parent: Annotated[
-                str | None,
+            parent_id: Annotated[
+                PhotoId | None,
                 Field(
-                    description=(
-                        "`type=folder`: the folder ID or path to list (default the space root)."
-                    )
+                    description=("`type=folder`: the ID of the folder to list (default the root).")
                 ),
+            ] = None,
+            parent_path: Annotated[
+                FolderPath | None,
+                Field(description=("Or its path, such as `/Trips`; not with parent_id.")),
             ] = None,
             include_hidden: Annotated[
                 bool,
@@ -515,7 +555,8 @@ def register(ctx: "RegisterContext") -> None:
                 type=type,
                 space=space,
                 name=name,
-                parent=parent,
+                parent_id=parent_id,
+                parent_path=parent_path,
                 include_hidden=include_hidden,
                 offset=offset,
                 limit=limit,
@@ -525,7 +566,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("get_photo"))  # type: ignore[arg-type]
         async def tool_get_photo(
-            ids: Annotated[list[int], Field(description=("1-20 item IDs from list_photos."))],
+            ids: Annotated[list[PhotoId], Field(description=("1-20 item IDs from list_photos."))],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             exif: Annotated[
                 bool, Field(description=("Also show each item's full EXIF table."))
@@ -538,7 +579,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("download_photos"))  # type: ignore[arg-type]
         async def tool_download_photos(
-            ids: Annotated[list[int], Field(description=("1-50 item IDs from list_photos."))],
+            ids: Annotated[list[PhotoId], Field(description=("1-50 item IDs from list_photos."))],
             dest_folder: Annotated[
                 str | None,
                 Field(
@@ -594,9 +635,11 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ],
-            album: Annotated[
-                str | None, Field(description=(f"The album to change; not for creates. {_ALBUM}"))
-            ] = (None),
+            album_id: Annotated[
+                PhotoId | None,
+                Field(description=(f"The album to change; not for creates. {_ALBUM_ID}")),
+            ] = None,
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
             name: Annotated[
                 str | None,
                 Field(
@@ -604,7 +647,7 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             ids: Annotated[
-                list[int] | None,
+                list[PhotoId] | None,
                 Field(
                     description=(
                         "Personal space item IDs from list_photos, at most 1,000; exactly one "
@@ -616,10 +659,12 @@ def register(ctx: "RegisterContext") -> None:
                 dict[str, Any] | None,
                 Field(
                     description=(
-                        "At least one of `folders` (IDs or paths), `people` (IDs or names), `tags` "
-                        "(names), `places` (place IDs), `start_date` / `end_date` (`YYYY-MM-DD`), "
-                        "`type` (`all`, `photo`, `video`), `ratings` (list of 0-5), `keywords`; "
-                        "`people_match`, `tags_match`, `keywords_match`: `any` (default) or `all`. "
+                        "At least one of `folder_ids`, `folder_paths`, `person_ids`, "
+                        "`person_names`, `tags` (names), `places` (place IDs), `start_date` / "
+                        "`end_date` "
+                        "(`YYYY-MM-DD`), `type` (`all`, `photo`, `video`), `ratings` (list of "
+                        "0-5), `keywords`; `people_match` (for both person keys), `tags_match`, "
+                        "`keywords_match`: `any` (default) or `all`. "
                         'Example: `{"tags": ["beach"], "start_date": "2024-01-01"}`.'
                     )
                 ),
@@ -629,7 +674,13 @@ def register(ctx: "RegisterContext") -> None:
 
             client = await manager.get_client()
             return await photo_album(
-                client, action=action, album=album, name=name, ids=ids, condition=condition
+                client,
+                action=action,
+                album_id=album_id,
+                album_name=album_name,
+                name=name,
+                ids=ids,
+                condition=condition,
             )
 
     if "photo_share_link" in ctx.allowed_tools:
@@ -646,7 +697,8 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ],
-            album: Annotated[str, Field(description=(_ALBUM))],
+            album_id: Annotated[PhotoId | None, Field(description=(_ALBUM_ID))] = None,
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
             public: Annotated[
                 str | None,
                 Field(
@@ -690,7 +742,8 @@ def register(ctx: "RegisterContext") -> None:
             return await photo_share_link(
                 client,
                 action=action,
-                album=album,
+                album_id=album_id,
+                album_name=album_name,
                 public=public,
                 password=password,
                 expires=expires,
@@ -705,28 +758,31 @@ def register(ctx: "RegisterContext") -> None:
                 str,
                 Field(
                     description=(
-                        "`create` (`name` inside `parent`), `rename` (`folder` to `name`) or "
-                        "`set_cover` (`folder`, `item_id`)."
+                        "`create` (`name` inside the parent folder), `rename` (the folder to "
+                        "`name`) or `set_cover` (the folder, `item_id`)."
                     )
                 ),
             ],
-            folder: Annotated[
-                str | None,
-                Field(description=(f"For `rename` and `set_cover`; not the space root. {_FOLDER}")),
-            ] = None,
-            parent: Annotated[
-                str,
+            folder_id: Annotated[
+                PhotoId | None,
                 Field(
-                    description=(
-                        "`create`: the parent folder's ID or path (default `/`, the space root)."
-                    )
+                    description=(f"For `rename` and `set_cover`; not the space root. {_FOLDER_ID}")
                 ),
-            ] = "/",
+            ] = None,
+            folder_path: Annotated[FolderPath | None, Field(description=(_FOLDER_PATH))] = None,
+            parent_id: Annotated[
+                PhotoId | None,
+                Field(description=("`create`: the parent folder's ID, or parent_path.")),
+            ] = None,
+            parent_path: Annotated[
+                FolderPath | None,
+                Field(description=("Or its path, such as `/Trips` (`/`: the space root).")),
+            ] = None,
             name: Annotated[
                 str | None, Field(description=("One folder name, without `/`."))
             ] = None,
             item_id: Annotated[
-                int | None, Field(description=("`set_cover`: an item ID from list_photos."))
+                PhotoId | None, Field(description=("`set_cover`: an item ID from list_photos."))
             ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
@@ -736,8 +792,10 @@ def register(ctx: "RegisterContext") -> None:
             return await photo_folder(
                 client,
                 action=action,
-                folder=folder,
-                parent=parent,
+                folder_id=folder_id,
+                folder_path=folder_path,
+                parent_id=parent_id,
+                parent_path=parent_path,
                 name=name,
                 item_id=item_id,
                 space=space,
@@ -750,9 +808,10 @@ def register(ctx: "RegisterContext") -> None:
             action: Annotated[
                 str, Field(description=("`add` (creates tags that don't exist) or `remove`."))
             ],
-            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            ids: Annotated[list[PhotoId], Field(description=(_ITEM_IDS))],
             tags: Annotated[
-                list[str], Field(description=('Tag names, any case, such as `["beach", "2024"]`.'))
+                list[TagName],
+                Field(description=('Tag names, any case, such as `["beach", "2024"]`.')),
             ],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
@@ -765,7 +824,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("edit_photo"))  # type: ignore[arg-type]
         async def tool_edit_photo(
-            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            ids: Annotated[list[PhotoId], Field(description=(_ITEM_IDS))],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             rating: Annotated[
                 int | None, Field(description=("0-5; `0` clears the rating."))
@@ -829,14 +888,16 @@ def register(ctx: "RegisterContext") -> None:
                     description=("`rename` (`name`), `hide`, `unhide` or `set_cover` (`item_id`).")
                 ),
             ],
-            person: Annotated[
-                str, Field(description=(f"{_PERSON} Hidden ones need include_hidden=true there."))
-            ],
+            person_id: Annotated[
+                PhotoId | None,
+                Field(description=(f"{_PERSON_ID} Hidden ones need include_hidden=true there.")),
+            ] = None,
+            person_name: Annotated[Name | None, Field(description=(_PERSON_NAME))] = None,
             name: Annotated[
                 str | None, Field(description=('The new name; `""` makes them unnamed.'))
             ] = None,
             item_id: Annotated[
-                int | None,
+                PhotoId | None,
                 Field(description=("An item ID from list_photos of a photo showing this person.")),
             ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
@@ -845,7 +906,13 @@ def register(ctx: "RegisterContext") -> None:
 
             client = await manager.get_client()
             return await edit_person(
-                client, action=action, person=person, name=name, item_id=item_id, space=space
+                client,
+                action=action,
+                person_id=person_id,
+                person_name=person_name,
+                name=name,
+                item_id=item_id,
+                space=space,
             )
 
     if "photo_request" in ctx.allowed_tools:
@@ -856,8 +923,8 @@ def register(ctx: "RegisterContext") -> None:
                 str,
                 Field(
                     description=(
-                        "`create` (`subject`, `folder`), `list`, `update` (the fields given) or "
-                        "`delete`."
+                        "`create` (`subject`, `folder_path`), `list`, `update` (the fields "
+                        "given) or `delete`."
                     )
                 ),
             ],
@@ -871,8 +938,8 @@ def register(ctx: "RegisterContext") -> None:
                 str | None, Field(description=("The subject; required for `create`."))
             ] = None,
             description: Annotated[str | None, Field(description=("An optional note."))] = None,
-            folder: Annotated[
-                str | None,
+            folder_path: Annotated[
+                FolderPath | None,
                 Field(
                     description=(
                         "The existing folder uploads go into, as a path in `space` such as "
@@ -881,7 +948,8 @@ def register(ctx: "RegisterContext") -> None:
                 ),
             ] = None,
             space: Annotated[
-                str, Field(description=("Library of `folder`: `personal` (default) or `shared`."))
+                str,
+                Field(description=("Library of `folder_path`: `personal` (default) or `shared`.")),
             ] = "personal",
             max_file_mib: Annotated[
                 int | None,
@@ -902,7 +970,7 @@ def register(ctx: "RegisterContext") -> None:
                 request=request,
                 subject=subject,
                 description=description,
-                folder=folder,
+                folder_path=folder_path,
                 space=space,
                 max_file_mib=max_file_mib,
                 expires=expires,
@@ -912,11 +980,21 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("merge_people"))  # type: ignore[arg-type]
         async def tool_merge_people(
-            target: Annotated[str, Field(description=(f"The person to keep. {_PERSON}"))],
-            merge: Annotated[
-                list[str],
-                Field(description=("The people merged into `target`, as IDs or unique names.")),
-            ],
+            target_id: Annotated[
+                PhotoId | None, Field(description=(f"The person to keep. {_PERSON_ID}"))
+            ] = None,
+            target_name: Annotated[
+                Name | None,
+                Field(description=("Or that person's name, case ignored; not with target_id.")),
+            ] = None,
+            merge_ids: Annotated[
+                list[PhotoId] | None,
+                Field(description=("IDs of the people merged into the target.")),
+            ] = None,
+            merge_names: Annotated[
+                list[Name] | None,
+                Field(description=("Names of the people merged into it, case ignored.")),
+            ] = None,
             name: Annotated[
                 str | None, Field(description=("The name after the merge; default the target's."))
             ] = None,
@@ -925,26 +1003,37 @@ def register(ctx: "RegisterContext") -> None:
             from mcp_synology.modules.photos.organize import merge_people
 
             client = await manager.get_client()
-            return await merge_people(client, target=target, merge=merge, name=name, space=space)
+            return await merge_people(
+                client,
+                target_id=target_id,
+                target_name=target_name,
+                merge_ids=merge_ids,
+                merge_names=merge_names,
+                name=name,
+                space=space,
+            )
 
     if "delete_photo_albums" in ctx.allowed_tools:
 
         @server.tool(**_tool("delete_photo_albums"))  # type: ignore[arg-type]
         async def tool_delete_photo_albums(
-            albums: Annotated[
-                list[str],
+            album_ids: Annotated[
+                list[PhotoId] | None,
+                Field(description=("Album IDs (list_photo_collections type=album).")),
+            ] = None,
+            album_names: Annotated[
+                list[Name] | None,
                 Field(
                     description=(
-                        "Album IDs (list_photo_collections type=album) or unique names; a name "
-                        "several albums share deletes nothing."
+                        "Album names, case ignored; a name several albums share deletes nothing."
                     )
                 ),
-            ],
+            ] = None,
         ) -> str:
             from mcp_synology.modules.photos.albums import delete_photo_albums
 
             client = await manager.get_client()
-            return await delete_photo_albums(client, albums=albums)
+            return await delete_photo_albums(client, album_ids=album_ids, album_names=album_names)
 
     if "upload_photos" in ctx.allowed_tools:
 
@@ -959,12 +1048,14 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ],
-            folder: Annotated[
-                str,
-                Field(
-                    description=("The existing folder's ID or path (default `/`, the space root).")
-                ),
-            ] = "/",
+            folder_id: Annotated[
+                PhotoId | None,
+                Field(description=("The existing folder's ID; this or folder_path is required.")),
+            ] = None,
+            folder_path: Annotated[
+                FolderPath | None,
+                Field(description=("Or its path, such as `/Trips` (`/`: the space root).")),
+            ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
             on_duplicate: Annotated[
                 str,
@@ -975,15 +1066,16 @@ def register(ctx: "RegisterContext") -> None:
                     )
                 ),
             ] = "rename",
-            album: Annotated[
-                str | None,
+            album_id: Annotated[
+                PhotoId | None,
                 Field(
                     description=(
                         "An existing album to add them to (personal space; create one with "
-                        f"photo_album). {_ALBUM}"
+                        f"photo_album). {_ALBUM_ID}"
                     )
                 ),
             ] = None,
+            album_name: Annotated[Name | None, Field(description=(_ALBUM_NAME))] = None,
         ) -> str:
             from mcp_synology.modules.photos.transfer import upload_photos
 
@@ -991,10 +1083,12 @@ def register(ctx: "RegisterContext") -> None:
             return await upload_photos(
                 client,
                 local_paths=local_paths,
-                folder=folder,
+                folder_id=folder_id,
+                folder_path=folder_path,
                 space=space,
                 on_duplicate=on_duplicate,
-                album=album,
+                album_id=album_id,
+                album_name=album_name,
                 allowed_roots=local_roots,
                 budget=settings.task_timeout,
             )
@@ -1006,29 +1100,35 @@ def register(ctx: "RegisterContext") -> None:
 
         def _make(operation: str) -> Any:
             async def tool_copy_or_move(
-                destination: Annotated[
-                    str,
-                    Field(
-                        description=("The existing target folder's ID or path, in `dest_space`.")
-                    ),
-                ],
+                destination_id: Annotated[
+                    PhotoId | None,
+                    Field(description=("The existing target folder's ID, in `dest_space`.")),
+                ] = None,
+                destination_path: Annotated[
+                    FolderPath | None,
+                    Field(description=("Or its path, such as `/Trips`; not with destination_id.")),
+                ] = None,
                 ids: Annotated[
-                    list[int] | None,
+                    list[PhotoId] | None,
                     Field(
                         description=(
                             "Item IDs from list_photos, in `space`, at most 1,000. Pass `ids`, "
-                            "`folders` or both."
+                            "`folder_ids` / `folder_paths`, or both."
                         )
                     ),
                 ] = None,
-                folders: Annotated[
-                    list[str] | None,
+                folder_ids: Annotated[
+                    list[PhotoId] | None,
                     Field(
                         description=(
-                            "Folder IDs or paths, with everything in them; not the space root. "
-                            "At most 1,000."
+                            "IDs of folders, with everything in them; not the space root. At "
+                            "most 1,000 in all."
                         )
                     ),
+                ] = None,
+                folder_paths: Annotated[
+                    list[FolderPath] | None,
+                    Field(description=("Paths of folders, such as `/Trips`.")),
                 ] = None,
                 space: Annotated[
                     str,
@@ -1042,7 +1142,7 @@ def register(ctx: "RegisterContext") -> None:
                     str | None,
                     Field(
                         description=(
-                            "Space of `destination`, if not `space`: `personal` or `shared`."
+                            "Space of the destination, if not `space`: `personal` or `shared`."
                         )
                     ),
                 ] = None,
@@ -1063,8 +1163,10 @@ def register(ctx: "RegisterContext") -> None:
                     client,
                     operation=operation,
                     ids=ids,
-                    folders=folders,
-                    destination=destination,
+                    folder_ids=folder_ids,
+                    folder_paths=folder_paths,
+                    destination_id=destination_id,
+                    destination_path=destination_path,
                     space=space,
                     dest_space=dest_space,
                     on_conflict=on_conflict,
@@ -1107,7 +1209,7 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("delete_photos"))  # type: ignore[arg-type]
         async def tool_delete_photos(
-            ids: Annotated[list[int], Field(description=(_ITEM_IDS))],
+            ids: Annotated[list[PhotoId], Field(description=(_ITEM_IDS))],
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.tasks import delete_photos
@@ -1119,15 +1221,28 @@ def register(ctx: "RegisterContext") -> None:
 
         @server.tool(**_tool("delete_photo_folders"))  # type: ignore[arg-type]
         async def tool_delete_photo_folders(
-            folders: Annotated[
-                list[str],
-                Field(description=(f"Not the space root; at most 1,000. {_FOLDER}")),
-            ],
+            folder_ids: Annotated[
+                list[PhotoId] | None,
+                Field(
+                    description=(
+                        "IDs of the folders (list_photo_collections type=folder); not the space "
+                        "root; at most 1,000 in all."
+                    )
+                ),
+            ] = None,
+            folder_paths: Annotated[
+                list[FolderPath] | None,
+                Field(description=("Paths of the folders, such as `/Trips/2024`.")),
+            ] = None,
             space: Annotated[str, Field(description=(_SPACE))] = "personal",
         ) -> str:
             from mcp_synology.modules.photos.tasks import delete_photo_folders
 
             client = await manager.get_client()
             return await delete_photo_folders(
-                client, folders=folders, space=space, timeout=settings.task_timeout
+                client,
+                folder_ids=folder_ids,
+                folder_paths=folder_paths,
+                space=space,
+                timeout=settings.task_timeout,
             )

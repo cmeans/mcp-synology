@@ -15,8 +15,13 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError, error_from_code
+from mcp_synology.core.formatting import (
+    ESCAPED_NAME_ADVICE,
+    RGI_FLAG_TAGS,
+    error_response,
+    holds_escape,
+)
 from mcp_synology.core.redaction import redact_urls
 from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
 from mcp_synology.modules.filestation.standardized_variants import (
@@ -304,14 +309,9 @@ def _tag_run_end(text: str, i: int) -> int:
     return end
 
 
-# A subdivision flag's tags: only the three RGI ones (UTS #51; emoji-sequences.txt), England,
-# Scotland and Wales, each followed by the cancel tag. Any other tag run, even a well-formed
-# subdivision id, can spell words a model reads ("ASCII smuggling"; maintainer, 2026-10-31,
-# QA round 2 on #515); platforms don't draw other subdivision flags as flags anyway.
-_RGI_FLAG_TAGS = frozenset(
-    "".join(chr(0xE0000 + ord(c)) for c in code) + "\U000e007f"
-    for code in ("gbeng", "gbsct", "gbwls")
-)
+# The three RGI subdivision flags' tags (UTS #51): `formatting.RGI_FLAG_TAGS`, shared with the
+# reply escaping (#604).
+_RGI_FLAG_TAGS = RGI_FLAG_TAGS
 
 
 def _is_flag_tags(text: str, start: int, end: int) -> bool:
@@ -641,7 +641,7 @@ def shown(path: str) -> str:
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
     error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible). Successful
-    replies and listings show paths as DSM does."""
+    replies and listings show paths as DSM does, escaped by the client (#604)."""
     for part in path.split("/"):
         if not part:
             continue
@@ -886,7 +886,7 @@ async def probe_recycle_status(client: DsmClient, share_name: str) -> tuple[bool
             params={"folder_path": f"/{share_name}/#recycle", "limit": 1},
         )
     except SynologyError as e:
-        if e.code == 408:
+        if e.code == 408 and not isinstance(e, AuthenticationError):
             setting = await _share_recycle_setting(client, share_name)
             if setting is not None:
                 logger.debug(
@@ -977,7 +977,7 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
     DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
     than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
     path proves nothing either way, so that path isn't reported. A failed request raises
-    ``SynologyError`` for the caller to map.
+    ``SynologyError``, or a transport error with no answer, for the caller to map.
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     missing: list[tuple[str, int]] = []
@@ -1013,7 +1013,8 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     """Return ``{path: isdir}`` for each path whose type ``getinfo`` reports.
 
     A path DSM gives no ``isdir`` for (missing, or an unexpected shape) is left out. A
-    failed request raises ``SynologyError`` for the caller to handle.
+    failed request raises ``SynologyError``, or a transport error with no answer, for the caller
+    to handle.
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     kinds: dict[str, bool] = {}
@@ -1027,16 +1028,85 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     return kinds
 
 
-def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
-    """Suggestion for a call refused because paths don't exist (adds a wildcard hint)."""
-    suggestion = (
-        "Check the paths with list_files or search_files, then retry with paths that exist."
+_NO_PERMISSION = frozenset({105, 407})
+_CHECK_ACCESS = "check it and the account's access to it in DSM."
+_OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."
+
+
+def missing_text(path: str, code: int) -> str:
+    """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
+    model to translate DSM's code; a 407 was called "not found"), keeping the code."""
+    why = (
+        "no permission"
+        if code in _NO_PERMISSION
+        else {408: "doesn't exist"}.get(code, "can't be read")
     )
+    return f"{shown(path)}: {why} (DSM error {code})"
+
+
+def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, str]:
+    """The error code and suggestion for paths ``getinfo`` answered with a code (#620): every
+    path refused for permission is ``permission_denied``, every missing one ``not_found``;
+    a mix gets each kind's own advice (not the shared "retry with paths that exist", which a
+    path refused for permission can't follow: QA round 3 on #606). A per-path code other
+    than 408, 105 or 407 gets one fixed message under ``filestation_error``: the generic
+    mapping of such a code (a session code's "re-authentication will be attempted", 599's
+    "background task") doesn't fit a path's entry (QA round 1 on #623)."""
+    codes = [code for _, code in missing]
+    perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
+    if codes and all(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, perm
+    if all(code == 408 for code in codes):
+        return ErrorCode.NOT_FOUND, missing_paths_suggestion(missing)
+    gone = [m for m in missing if m[1] == 408]
+    parts = []
+    if gone:
+        parts.append("Use list_files or search_files to find the correct path.")
+        wildcard = _wildcard_hint(gone)
+        if wildcard:
+            parts.append(wildcard)
+        if any(holds_escape(path) for path, _ in gone):
+            parts.append(ESCAPED_NAME_ADVICE)
+    if any(code in _NO_PERMISSION for code in codes):
+        parts.append(f"For one with no permission: {perm}")
+    if any(code != 408 and code not in _NO_PERMISSION for code in codes):
+        parts.append(
+            _OTHER_CODE
+            if len(parts) == 0
+            else f"For one DSM gave another code for: {_CHECK_ACCESS}"
+        )
+    if gone:
+        return ErrorCode.NOT_FOUND, " ".join(parts)
+    if any(code in _NO_PERMISSION for code in codes):
+        return ErrorCode.PERMISSION_DENIED, " ".join(parts)
+    return ErrorCode.FILESTATION_ERROR, " ".join(parts)
+
+
+def _wildcard_hint(missing: list[tuple[str, int]]) -> str:
+    """The advice for a missing path that holds a wildcard character, or ""."""
     if any(ch in path for path, _ in missing for ch in _WILDCARD_CHARS):
-        suggestion += (
-            " Paths are literal, not wildcard patterns: use search_files (or list_files with a "
+        return (
+            "Paths are literal, not wildcard patterns: use search_files (or list_files with a "
             "pattern) to find the files, then pass their full paths."
         )
+    return ""
+
+
+def missing_paths_suggestion(missing: list[tuple[str, int]]) -> str:
+    """Suggestion for a call refused because paths don't exist (adds a wildcard hint, and one for
+    a name copied from a reply that showed it escaped)."""
+    hint = _wildcard_hint(missing)
+    wildcard = f" {hint}" if hint else ""
+    if missing and all(holds_escape(path) for path, _ in missing):
+        # Listing again would show the same escape: lead with what ends the loop (pre-QA r2).
+        return ESCAPED_NAME_ADVICE + wildcard
+    suggestion = (
+        "Check the paths with list_files or search_files, then retry with paths that exist."
+        + wildcard
+    )
+    if any(holds_escape(path) for path, _ in missing):
+        # A listing shows the same escape again, so "check with list_files" alone loops (#604).
+        suggestion += f" {ESCAPED_NAME_ADVICE}"
     return suggestion
 
 

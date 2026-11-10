@@ -8,16 +8,21 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
+    cut_escaped,
+    escaped_control,
     format_key_value,
     format_size,
     format_table,
     synology_error_response,
+    unescaped_length,
 )
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
+    Ref,
     check_space,
     invalid,
+    one_ref,
     page_footer,
     parse_date,
     space_label,
@@ -73,9 +78,12 @@ async def list_photos(
     client: DsmClient,
     *,
     space: str = "personal",
-    folder: str | None = None,
-    album: str | None = None,
-    person: str | None = None,
+    folder_id: int | None = None,
+    folder_path: str | None = None,
+    album_id: int | None = None,
+    album_name: str | None = None,
+    person_id: int | None = None,
+    person_name: str | None = None,
     place: int | None = None,
     tag: str | None = None,
     keyword: str | None = None,
@@ -93,6 +101,9 @@ async def list_photos(
     """Browse or search items (spec: list_photos)."""
     op = "List photos"
     sp = check_space(op, space)
+    folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
+    album = one_ref(op, "album", album_id, album_name, required=False)
+    person = one_ref(op, "person", person_id, person_name, required=False)
     if type not in _TYPES:
         invalid(op, f"unknown type {type!r}.", param="type", value=type, valid=list(_TYPES))
     if sort_by not in _SORTS:
@@ -123,11 +134,15 @@ async def list_photos(
         "favorite": True if want_favorite else None,
     }
     used_filters = [k for k, v in filters.items() if v is not None]
-    sources = {"folder": folder, "person": person, "tag": tag, "place": place}
+    # Each source by the parameter it came in (album_id or album_name, and so on).
+    album_param = album.param if album is not None else "album_id"
+    person_param = person.param if person is not None else "person_id"
+    folder_param = folder.param if folder is not None else "folder_id"
+    sources = {folder_param: folder, person_param: person, "tag": tag, "place": place}
     used_sources = [k for k, v in sources.items() if v is not None]
     if keyword is not None:
         others = used_sources + used_filters
-        others += [k for k, v in {"album": album, "concept": concept}.items() if v is not None]
+        others += [k for k, v in {album_param: album, "concept": concept}.items() if v is not None]
         if others:
             invalid(
                 op,
@@ -137,7 +152,7 @@ async def list_photos(
             )
     # Views that list_with_filter can't narrow: it has no album or concept key, and its
     # place IDs are address-tree nodes, not Geocoding.list's place IDs (verified, #258).
-    alone_views = {"album": album, "concept": concept, "place": place}
+    alone_views = {album_param: album, "concept": concept, "place": place}
     for alone, value in alone_views.items():
         if value is None:
             continue
@@ -147,8 +162,8 @@ async def list_photos(
             invalid(
                 op,
                 f"{alone} can't be combined with {', '.join(sorted(set(others)))}.",
-                param=alone,
-                value=value,
+                param=value.param if isinstance(value, Ref) else alone,
+                value=value.given if isinstance(value, Ref) else value,
             )
     if album is not None and sp == "shared":
         invalid(op, "albums are personal space only.", param="space", value=space)
@@ -199,9 +214,9 @@ def _filters_text(
 async def _list(
     ph: Photos,
     *,
-    folder: str | None,
-    album: str | None,
-    person: str | None,
+    folder: Ref | None,
+    album: Ref | None,
+    person: Ref | None,
     place: int | None,
     tag: str | None,
     keyword: str | None,
@@ -356,7 +371,8 @@ async def list_photo_collections(
     type: str,  # noqa: A002 - the tool's parameter name
     space: str = "personal",
     name: str | None = None,
-    parent: str | None = None,
+    parent_id: int | None = None,
+    parent_path: str | None = None,
     include_hidden: bool = False,
     offset: int = 0,
     limit: int = 100,
@@ -369,8 +385,16 @@ async def list_photo_collections(
         )
     sp = check_space(op, space)
     _check_paging(op, offset, limit, _COLLECTION_MAX_LIMIT)
+    parent = one_ref(
+        op, "folder", parent_id, parent_path, prefix="parent", other="path", required=False
+    )
     if parent is not None and type != "folder":
-        invalid(op, "parent applies to type=folder only.", param="parent", value=parent)
+        invalid(
+            op,
+            f"{parent.param} applies to type=folder only.",
+            param=parent.param,
+            value=parent.given,
+        )
     try:
         ph = Photos(client, "personal" if type in ("album", "shared_with_me") else sp, op)
         if type == "concept" and not ph.has("Browse.Concept", 2):
@@ -386,7 +410,7 @@ async def _collections(
     ph: Photos,
     kind: str,
     name: str | None,
-    parent: str | None,
+    parent: Ref | None,
     include_hidden: bool,
     offset: int,
     limit: int,
@@ -474,7 +498,7 @@ async def _collections(
             for e in entries
         ]
     else:
-        under = await ph.folder(parent or "/", param="parent")
+        under = await ph.folder(parent)
         entries = await ph.walk(
             "Browse.Folder",
             params={
@@ -718,14 +742,16 @@ _EXIF_VALUE_MAX = 80
 
 def _exif_value(value: str) -> str:
     """A value fit for the table: binary data is described, an overlong value is cut."""
-    # Line breaks and tabs in text (an Image Description, a User Comment) become spaces;
-    # other control characters, C1 included, or bytes that weren't UTF-8 mean binary.
-    # (Only \r, \n and \t: str.splitlines() also splits on \x1c-\x1e and \x85, which
-    # are binary here.)
-    value = value.replace("\r\n", " ").translate({ord("\r"): " ", ord("\n"): " ", ord("\t"): " "})
-    if any(c == "\ufffd" or c < " " or "\x7f" <= c <= "\x9f" for c in value):
-        unit = "character" if len(value) == 1 else "characters"
-        return f"(binary data, {len(value):,} {unit}; not shown)"
-    if len(value) > _EXIF_VALUE_MAX:
-        return f"{value[:_EXIF_VALUE_MAX]}… ({len(value):,} characters)"
+    # The client escapes control characters in every reply (#604): a line break in text (an
+    # Image Description, a User Comment) arrives as `\n` and stays so, a tab becomes a space,
+    # and another control character (`\x..`, C1 included) or bytes that weren't UTF-8 mean
+    # binary. Its length is counted as DSM sent it.
+    value = value.replace("\t", " ")
+    if "\ufffd" in value or escaped_control(value):
+        length = unescaped_length(value)
+        unit = "character" if length == 1 else "characters"
+        return f"(binary data, {length:,} {unit}; not shown)"
+    length = unescaped_length(value)
+    if length > _EXIF_VALUE_MAX:
+        return f"{cut_escaped(value, _EXIF_VALUE_MAX)}… ({length:,} characters)"
     return value

@@ -340,7 +340,8 @@ async def test_a_users_home_bin_is_homes_user_recycle(
 ) -> None:
     """Pre-QA on #479: the test user's /home/#recycle is /homes/<user>/#recycle to an
     administrator, so delete_files, move_files and rename refuse that path as a whole bin,
-    and deleting inside it is reported as permanent."""
+    and deleting inside it is reported as permanent: vdsm's /homes has its own bin off (with
+    it on, DSM keeps the items in /homes/#recycle/<user>/#recycle, seen on seska, #610)."""
     user: DsmClient = nas_client[0]
     admin: DsmClient = admin_client[0]
     top = f"t479h-{uuid.uuid4().hex[:8]}"

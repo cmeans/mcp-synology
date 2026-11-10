@@ -128,23 +128,24 @@ def encode(params: dict[str, Any]) -> dict[str, str]:
     return {k: json.dumps(v) for k, v in params.items() if v is not None}
 
 
-# Every tool argument that names a Photos folder (an ID or a path). Each reaches DSM only
-# through `Photos.folder`, which checks a path with `check_folder_path` (#510); a new folder
-# argument goes here, and tests/modules/photos/test_paths.py fails until it does.
+# Every tool argument that names a Photos folder by path (each with an ID twin, `folder_id` and
+# the like, which needs no path check: #617). Each reaches DSM only through `Photos.folder`,
+# which checks a path with `check_folder_path` (#510); a new folder argument goes here, and
+# tests/modules/photos/test_paths.py fails until it does.
 FOLDER_PARAMS: dict[str, frozenset[str]] = {
-    "list_photos": frozenset({"folder"}),
-    "list_photo_collections": frozenset({"parent"}),
-    "photo_folder": frozenset({"folder", "parent"}),
-    "photo_request": frozenset({"folder"}),
-    "upload_photos": frozenset({"folder"}),
-    "copy_photos": frozenset({"folders", "destination"}),
-    "move_photos": frozenset({"folders", "destination"}),
-    "delete_photo_folders": frozenset({"folders"}),
-    # A smart album's condition: its `folders` key.
+    "list_photos": frozenset({"folder_path"}),
+    "list_photo_collections": frozenset({"parent_path"}),
+    "photo_folder": frozenset({"folder_path", "parent_path"}),
+    "photo_request": frozenset({"folder_path"}),
+    "upload_photos": frozenset({"folder_path"}),
+    "copy_photos": frozenset({"folder_paths", "destination_path"}),
+    "move_photos": frozenset({"folder_paths", "destination_path"}),
+    "delete_photo_folders": frozenset({"folder_paths"}),
+    # A smart album's condition: its `folder_paths` key.
     "photo_album": frozenset({"condition"}),
 }
 
-FOLDER_ADVICE = "Pass a folder ID, or a path starting with /, such as /Trips/2024."
+FOLDER_ADVICE = "Pass a path starting with /, such as /Trips/2024."
 
 
 def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_ADVICE) -> str:
@@ -152,13 +153,113 @@ def check_folder_path(value: str, param: str = "folder", advice: str = FOLDER_AD
 
     Taken exactly, by File Station's part rules (#510): `check_parts` drops only whitespace
     before a leading ``/`` (and a trailing ``/``), and refuses a NUL (DSM cuts the path
-    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), an empty part (``//``) and a ``.`` or
-    ``..`` part (DSM answers 642 for those). Photos reaches a folder whose name starts with
-    whitespace exactly (`` foo`` beside ``foo``), so stripping looked up another folder (vdsm
-    DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space and Shared Space). ``advice`` is the
-    refusal's suggestion, for an argument that takes only a path (`photo_request`).
+    there: ``/x/foo<NUL>y`` resolved to ``/x/foo``), a character a reply shows escaped (#604),
+    an empty part (``//``) and a ``.`` or ``..`` part (DSM answers 642 for those). Photos
+    reaches a folder whose name starts with whitespace exactly (`` foo`` beside ``foo``), so
+    stripping looked up another folder (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, personal space
+    and Shared Space). ``advice`` is the refusal's suggestion, for an argument that takes only
+    a path (`photo_request`).
     """
+    if not value.strip():
+        # Not the root: a client that fills an unset argument with "" would otherwise land a
+        # write there, which the required folders exist to prevent (QA round 1 on #615). The
+        # root is written `/`.
+        what = {
+            "condition": "an entry in the condition's folder_paths",
+            "folder_paths": "an entry in folder_paths",
+        }.get(param, param)
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"{what} is empty: pass a folder path (the space's root is written `/`).",
+            retryable=False,
+            param=param,
+            value=value,
+            suggestion=advice,
+        )
     return check_parts(value, param, advice)
+
+
+@dataclass(frozen=True)
+class Ref:
+    """An album, a person or a folder a tool was given, by ID or by name (a folder's path), each
+    from its own parameter (`album_id` / `album_name`, `folder_id` / `folder_path`; #614,
+    #616, #617): which one is never inferred from the value. ``param`` is the tool argument
+    it came from, for errors."""
+
+    param: str
+    id: int | None = None
+    name: str | None = None
+
+    @property
+    def given(self) -> int | str:
+        """The value as the caller gave it, for errors."""
+        return self.id if self.id is not None else self.name or ""
+
+    @property
+    def id_param(self) -> str:
+        """Where the caller gives the ID instead of this name: ``merge_names`` → ``merge_ids``,
+        ``target_name`` → ``target_id``; a smart album condition's ``person_ids``."""
+        # Only albums and people get here (`_by_ref`): a folder path is never ambiguous.
+        if self.param.endswith("_names"):
+            return self.param.removesuffix("_names") + "_ids"
+        if self.param.endswith("_name"):
+            return self.param.removesuffix("_name") + "_id"
+        return "person_ids"
+
+
+def one_ref(
+    operation: str,
+    kind: str,
+    id_value: int | None,
+    name_value: str | None,
+    *,
+    prefix: str | None = None,
+    other: str = "name",
+    required: bool = True,
+) -> Ref | None:
+    """The one album, person or folder a tool's ``<prefix>_id`` / ``<prefix>_<other>`` pair
+    names (``other`` is ``name``, or ``path`` for a folder): both is refused, and neither when
+    ``required``. ``prefix`` defaults to ``kind``."""
+    prefix = prefix or kind
+    id_param, name_param = f"{prefix}_id", f"{prefix}_{other}"
+    if id_value is not None and name_value is not None:
+        invalid(
+            operation,
+            f"pass {id_param} or {name_param}, not both.",
+            param=id_param,
+            value=id_value,
+        )
+    if id_value is not None:
+        return Ref(id_param, id=id_value)
+    if name_value is not None:
+        return Ref(name_param, name=name_value)
+    if required:
+        invalid(operation, f"pass {id_param} or {name_param}.", param=id_param, value=None)
+    return None
+
+
+def refs(
+    operation: str,
+    ids: Sequence[int] | None,
+    names: Sequence[str] | None,
+    *,
+    prefix: str,
+    other: str = "names",
+    required: bool = True,
+) -> list[Ref]:
+    """The albums, people or folders a ``<prefix>_ids`` / ``<prefix>_<other>`` pair names, IDs
+    first (``other`` is ``names``, or ``paths`` for folders). Both lists may be given; at least
+    one entry when ``required``."""
+    found = [Ref(f"{prefix}_ids", id=i) for i in ids or ()]
+    found += [Ref(f"{prefix}_{other}", name=n) for n in names or ()]
+    if required and not found:
+        invalid(
+            operation,
+            f"pass {prefix}_ids or {prefix}_{other}.",
+            param=f"{prefix}_ids",
+            value=None,
+        )
+    return found
 
 
 @dataclass
@@ -257,36 +358,43 @@ class Photos:
 
     # -- folders ------------------------------------------------------------
 
-    async def folder(
-        self, value: str, *, param: str = "folder", missing_advice: str | None = None
-    ) -> dict[str, Any]:
-        """A folder by ID or by path inside the space (``/`` is the root).
+    async def folder(self, ref: Ref | None, *, missing_advice: str | None = None) -> dict[str, Any]:
+        """A folder by ID or by path inside the space (``/`` is the root; ``None`` too), each
+        from its own parameter (`folder_id` / `folder_path` and the like, #617): an ID is
+        that ID only, and a path (digits too) that path only.
 
         Every folder argument comes through here, so the path rules live in one place
         (#510): a path is taken exactly, by File Station's part rules (`check_folder_path`).
         ``missing_advice`` replaces the not-found suggestion, for an argument that takes only
         a path (`photo_request`).
         """
-        text = value.strip()
-        if text.isascii() and text.isdigit():
-            params: dict[str, Any] = {"id": int(text)}
+        if ref is None:
+            ref = Ref("folder_path", name="/")
+        if ref.id is not None:
+            if ref.id < 0:
+                # No folder has a negative ID; nothing to ask DSM (#609).
+                not_found(
+                    self.operation,
+                    f"no folder {ref.id} in the {space_label(self.space)}.",
+                    param=ref.param,
+                    value=ref.id,
+                    suggestion="list_photo_collections type=folder lists them.",
+                )
+            params: dict[str, Any] = {"id": ref.id}
         else:
-            path = check_folder_path(value, param)
+            path = check_folder_path(ref.name or "", ref.param)
             params = {"id": 0} if path == "/" else {"name": path}
         try:
             data = await self.call("Browse.Folder", "get", params, version=2)
         except SynologyError as e:
             if e.code == 642:
+                what = ref.id if ref.id is not None else repr(ref.name)
                 not_found(
                     self.operation,
-                    f"no folder {value!r} in the {space_label(self.space)}.",
-                    param=param,
-                    value=value,
-                    suggestion=missing_advice
-                    or (
-                        "Pass a folder ID, or a path starting with / "
-                        "(list_photo_collections type=folder lists them)."
-                    ),
+                    f"no folder {what} in the {space_label(self.space)}.",
+                    param=ref.param,
+                    value=ref.given,
+                    suggestion=missing_advice or "list_photo_collections type=folder lists them.",
                 )
             raise
         folder: dict[str, Any] = data["folder"]
@@ -311,70 +419,85 @@ class Photos:
 
     # -- names --------------------------------------------------------------
 
-    async def _by_id_or_name(
+    async def _by_ref(
         self,
-        value: str,
+        ref: Ref,
         *,
         kind: str,
-        param: str,
         get: tuple[str, int, dict[str, Any]],
         walk: tuple[str, int, dict[str, Any]],
         personal: bool = False,
         hint: str,
     ) -> dict[str, Any]:
-        """Resolve an ID (digits; tried first) or a unique case-insensitive name."""
-        text = value.strip()
-        if text.isascii() and text.isdigit():
+        """Resolve an album or person given by ID or by name, never a guess between them
+        (#614, #616): an ID is looked up as that ID only, and a name (digits too) as a unique
+        case-insensitive name only."""
+        if ref.id is not None:
             suffix, version, extra = get
             try:
                 data = await self.call(
-                    suffix, "get", {"id": [int(text)], **extra}, version=version, personal=personal
+                    suffix, "get", {"id": [ref.id], **extra}, version=version, personal=personal
                 )
             except SynologyError as e:
-                # A setup or permission problem is the answer; anything else (an
-                # unknown ID's error) falls through to the name lookup.
-                if e.code in SETUP_CODES:
+                # A setup or permission problem is the answer, and so is no DSM answer at
+                # all (a proxy's 502, a reply that isn't DSM's: code None), which isn't an
+                # unknown ID (pre-QA r3 on #611). Any other DSM code is an unknown ID.
+                if e.code in SETUP_CODES or e.code is None:
                     raise
                 data = {}
             found = data.get("list", [])
             if found:
                 return dict(found[0])
+            not_found(
+                self.operation,
+                f"no {kind} {ref.id}.",
+                param=ref.param,
+                value=ref.id,
+                suggestion=hint,
+            )
+        name = (ref.name or "").strip()  # as before the split (#616)
         suffix, version, extra = walk
         entries = await self.walk(suffix, params=extra, version=version, personal=personal)
-        matches = [e for e in entries if str(e.get("name", "")).casefold() == text.casefold()]
+        matches = [e for e in entries if str(e.get("name", "")).casefold() == name.casefold()]
         if len(matches) == 1:
             return matches[0]
         if not matches:
             not_found(
-                self.operation, f"no {kind} {value!r}.", param=param, value=value, suggestion=hint
+                self.operation,
+                f"no {kind} named {name!r}.",
+                param=ref.param,
+                value=name,
+                suggestion=hint,
             )
         listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
         invalid(
             self.operation,
-            f"{len(matches):,} {kind}s are named {value!r}: {listed}.",
-            param=param,
-            value=value,
-            suggestion=f"Pass the {kind}'s ID instead.",
+            f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
+            param=ref.param,
+            value=name,
+            suggestion=(
+                "Ask the user which one they mean, then pass its ID in the condition's person_ids."
+                if ref.param == "condition"
+                else f"Ask the user which one they mean, then pass its {ref.id_param}."
+            ),
         )
 
-    async def album(self, value: str, *, param: str = "album") -> dict[str, Any]:
-        """An album (personal space only) by ID or unique name."""
-        return await self._by_id_or_name(
-            value,
+    async def album(self, ref: Ref) -> dict[str, Any]:
+        """An album (personal space only) by ID or by unique name."""
+        return await self._by_ref(
+            ref,
             kind="album",
-            param=param,
             get=("Browse.Album", 1, {"additional": ["sharing_info"]}),
             walk=("Browse.Album", 2, {"additional": ["sharing_info"]}),
             personal=True,
             hint="list_photo_collections type=album lists your albums.",
         )
 
-    async def person(self, value: str, *, param: str = "person") -> dict[str, Any]:
-        """A person (face-recognition group) by ID or unique name."""
-        return await self._by_id_or_name(
-            value,
+    async def person(self, ref: Ref) -> dict[str, Any]:
+        """A person (face-recognition group) by ID or by unique name."""
+        return await self._by_ref(
+            ref,
             kind="person",
-            param=param,
             get=("Browse.Person", 1, {"additional": ["thumbnail"]}),
             walk=("Browse.Person", 1, {"show_more": True, "show_hidden": True}),
             hint="list_photo_collections type=person include_hidden=true lists people.",
@@ -436,12 +559,28 @@ class Photos:
         change when Photos 1.9.1 re-indexes a file.
         """
         tags = await self.walk("Browse.GeneralTag")
-        exact = {str(t.get("name", "")): int(t["id"]) for t in tags}
+        exact: dict[str, int] = {}
+        by_name: dict[str, list[int]] = {}
+        for t in tags:
+            key = str(t.get("name", ""))
+            by_name.setdefault(key, []).append(int(t["id"]))
+            exact[key] = int(t["id"])
+        # Two names that read the same once escaped (#604).
+        doubled = {key: ids for key, ids in by_name.items() if len(ids) > 1}
         folded: dict[str, list[dict[str, Any]]] = {}
         for t in tags:
             folded.setdefault(str(t.get("name", "")).casefold(), []).append(t)
         out: dict[str, int | None] = {}
         for name in names:
+            if name in doubled:
+                invalid(
+                    self.operation,
+                    f"Tags {', '.join(map(str, doubled[name][:10]))} all read {name!r}: one holds "
+                    "a character replies show escaped, another a backslash.",
+                    param=param,
+                    value=name,
+                    suggestion="Rename one of them in Photos.",
+                )
             if name in exact:
                 out[name] = exact[name]
                 continue
@@ -599,7 +738,7 @@ def check_ids(
     if not ids:
         invalid(operation, f"pass at least one id in {param}.", param=param, value=ids)
     if len(ids) > limit:
-        noun = "folders" if param == "folders" else "ids"
+        noun = "folders" if param.startswith("folder") else "ids"
         invalid(operation, f"at most {limit:,} {noun} per call.", param=param, value=len(ids))
 
 

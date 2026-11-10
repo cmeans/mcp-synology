@@ -13,6 +13,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.formatting import DOWNLOADED_CONTENTS_ARE_DATA
 from mcp_synology.modules.photos.transfer import (
     _dest_name,
     _name_key,
@@ -122,6 +123,8 @@ class TestOriginals:
             "(kept)" in out
         )
         assert "overwrite=true" not in out
+        # A kept file is one a client can open too (#640).
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA
 
     @respx.mock
     async def test_overwrite_replaces(self, tmp_path: Path) -> None:
@@ -131,7 +134,7 @@ class TestOriginals:
         install(fake)
         client = make_client()
         async with client:
-            await download_photos(
+            out = await download_photos(
                 client,
                 ids=[12],
                 dest_folder=str(tmp_path),
@@ -139,6 +142,62 @@ class TestOriginals:
                 allowed_roots=[tmp_path],
             )
         assert (tmp_path / "forest-trail.jpg").read_bytes() == b"new"
+        # #625: the line and the headline say a local file was replaced.
+        assert out.startswith(
+            f"Downloaded 1 of 1 item(s) to {tmp_path} (original, personal space, "
+            "1 replaced a file that was there)"
+        ), out
+        assert "  12  forest-trail.jpg  3 B (replaced the file that was there)" in out, out
+
+    @respx.mock
+    @pytest.mark.parametrize("target", ["missing-target", "real.jpg"])
+    async def test_overwrite_over_a_symlink_says_it_replaced_the_link(
+        self, tmp_path: Path, target: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """QA round 1 on #626: a dangling link is a name that's there (lexists, not exists).
+        Pre-QA r3: a link is replaced, not its target."""
+        (tmp_path / "real.jpg").write_bytes(b"keep")
+        (tmp_path / "forest-trail.jpg").symlink_to(tmp_path / target)
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"new"))
+        install(fake)
+        client = make_client()
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.photos.transfer"):
+            async with client:
+                out = await download_photos(
+                    client,
+                    ids=[12],
+                    dest_folder=str(tmp_path),
+                    overwrite=True,
+                    allowed_roots=[tmp_path],
+                )
+        assert (
+            "  12  forest-trail.jpg  3 B (replaced the symlink that was there; its target is "
+            "untouched)" in out
+        ), out
+        assert ", 1 replaced a file that was there)" in out, out
+        assert (tmp_path / "forest-trail.jpg").read_bytes() == b"new"
+        assert (tmp_path / "real.jpg").read_bytes() == b"keep"
+        assert f"to {tmp_path / 'forest-trail.jpg'} (replaced a file there: True)" in caplog.text
+
+    @respx.mock
+    async def test_only_the_item_that_replaced_a_file_says_so(self, tmp_path: Path) -> None:
+        (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
+        fake = FakePhotos().on(ITEM, "get", 2, _items("ready", "ready"))
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), binary(b"two!"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12, 15],
+                dest_folder=str(tmp_path),
+                overwrite=True,
+                allowed_roots=[tmp_path],
+            )
+        assert ", 1 replaced a file that was there)" in out, out
+        assert "  12  forest-trail.jpg  3 B (replaced the file that was there)" in out, out
+        assert "  15  beach-sunset_1.jpg  4 B\n" in out + "\n", out
 
     @respx.mock
     async def test_unsafe_name_from_nas_replaced(self, tmp_path: Path) -> None:
@@ -152,7 +211,7 @@ class TestOriginals:
             await download_photos(
                 client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
-        assert (tmp_path / "item-12").read_bytes() == b"x"
+        assert (tmp_path / "item-12.jpg").read_bytes() == b"x"  # its extension kept
         assert not (tmp_path.parent / "escape.jpg").exists()
 
     @respx.mock
@@ -272,11 +331,12 @@ class TestOriginals:
         assert out.startswith("Downloaded 1 of 3")
         assert "15  beach-sunset_1.jpg: not downloaded: couldn't reach DSM (ReadTimeout)" in out
         assert "not tried: 16" in out
-        assert out.endswith(
+        assert out.splitlines()[-2] == (
             "To retry, repeat this call with the same ids in the same order (overwrite=false "
             "keeps the files already written): names depend on every item in the call, and "
             "shift if an item that wasn't found is found then."
         )
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA  # one was written (#640)
         assert len(fake.of("SYNO.Foto.Download")) == 2
 
 
@@ -296,6 +356,8 @@ class TestPreviews:
         assert thumb.params == {"id": 12, "cache_key": "12_1792274689", "type": "unit", "size": "m"}
         assert (tmp_path / "forest-trail_m.jpg").read_bytes() == b"jpeg"
         assert "isn't generated yet (converting); try again shortly" in out
+        # A file was written, so the reply's last line says what's in it is data (#640).
+        assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA
 
     @respx.mock
     async def test_previews_sharing_a_stem_keep_both(self, tmp_path: Path) -> None:
@@ -323,6 +385,42 @@ class TestPreviews:
                 client, ids=[12], size="m", dest_folder=str(tmp_path), allowed_roots=[tmp_path]
             )
         assert "no m preview for this item (broken)" in out
+        assert DOWNLOADED_CONTENTS_ARE_DATA not in out  # nothing written (#640)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            httpx.Response(302, headers={"location": "https://portal.example/"}),
+            httpx.Response(204),
+            httpx.Response(200, content=b'{"success":false,"error":{"code":105}}'),
+        ],
+        ids=["302", "204", "envelope-untyped"],
+    )
+    async def test_an_answer_that_isn_t_the_preview_keeps_the_local_file(
+        self, tmp_path: Path, reply: httpx.Response
+    ) -> None:
+        """#642: a proxy's redirect, a 204 or DSM's untyped error envelope was saved as the
+        preview, replacing the file there with overwrite=true; now the item isn't downloaded
+        and the local file is as it was."""
+        fake = FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]})
+        fake.on("SYNO.Foto.Thumbnail", "get", 2, lambda _p: reply)
+        install(fake)
+        existing = tmp_path / "forest-trail_m.jpg"
+        existing.write_bytes(b"the user's preview")
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client,
+                ids=[12],
+                size="m",
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+                overwrite=True,
+            )
+        assert "forest-trail_m.jpg: not downloaded:" in out, out
+        assert existing.read_bytes() == b"the user's preview"
+        assert [p.name for p in tmp_path.iterdir()] == ["forest-trail_m.jpg"]
 
     @respx.mock
     async def test_404_page_reported(self, tmp_path: Path) -> None:
@@ -394,6 +492,17 @@ class TestRefusals:
 
 
 class TestUpload:
+    async def test_a_folder_is_required_the_root_too(self, tmp_path: Path) -> None:
+        """#615: a folder argument lost on the way (an old name a client dropped) mustn't
+        upload into the root: the root is passed as folder_path="/"."""
+        photo = tmp_path / "a.jpg"
+        photo.write_bytes(b"\xff\xd8\xff")
+        with pytest.raises(ToolError) as exc:
+            await upload_photos(make_client(), local_paths=[str(photo)], allowed_roots=[tmp_path])
+        err = _error(exc)
+        assert (err["code"], err["param"]) == ("invalid_parameter", "folder_id")
+        assert "pass folder_id or folder_path (`/` for the space's root)." in err["message"]
+
     @staticmethod
     def _files(tmp_path: Path) -> list[str]:
         paths = []
@@ -427,7 +536,7 @@ class TestUpload:
             out = await upload_photos(
                 client,
                 local_paths=self._files(tmp_path),
-                folder="/mcp-spec-capture",
+                folder_path="/mcp-spec-capture",
                 allowed_roots=[tmp_path],
             )
         assert len(sent) == 3
@@ -469,8 +578,9 @@ class TestUpload:
             out = await upload_photos(
                 client,
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
-                album="4",
+                album_id=4,
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         assert lines[0] == "Uploaded 1 of 3 file(s) to / (personal space)"
@@ -524,6 +634,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         assert lines[2] == row
@@ -551,6 +662,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "big.mp4"), str(tmp_path / "small.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         assert lines[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
@@ -578,6 +690,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         lines = out.splitlines()
         state = "failed" if status == 429 else "unknown"
@@ -603,6 +716,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert "a.jpg  failed   DSM's reply couldn't be read (KeyError)" in out
         assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
@@ -626,6 +740,7 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
         assert "b.jpg  failed   couldn't read the file (No such file or directory)" in out
@@ -655,8 +770,9 @@ class TestUpload:
                 out = await upload_photos(
                     client,
                     local_paths=[str(tmp_path / "a.jpg")],
-                    album="4",
+                    album_id=4,
                     allowed_roots=[tmp_path],
+                    folder_path="/",
                 )
         assert "renamed  id 9" in out and "(as " not in out
         assert (
@@ -695,7 +811,12 @@ class TestUpload:
         paths = [str(tmp_path / n) for n in names]
         async with client:
             out = await upload_photos(
-                client, local_paths=paths, album="4", allowed_roots=[tmp_path], budget=30
+                client,
+                local_paths=paths,
+                album_id=4,
+                allowed_roots=[tmp_path],
+                budget=30,
+                folder_path="/",
             )
         lines = out.splitlines()
         # a.jpg ends at 20 s, under the limit, so b.jpg starts; at 40 s c.jpg doesn't.
@@ -712,8 +833,8 @@ class TestUpload:
         assert lines[-3] == (
             "Started no new file after 30 s (the task timeout, at most 45 s) so the reply "
             "isn't cut off; 2 file(s) not tried. To continue, call upload_photos again with "
-            "the same folder, space, album and on_duplicate, and only these local_paths "
-            "(resending the others makes renamed copies):"
+            "the same arguments and only these local_paths (resending the others makes "
+            "renamed copies):"
         )
         assert lines[-2:] == [f"  {paths[2]}", f"  {paths[3]}"]
 
@@ -762,6 +883,7 @@ class TestUpload:
                 on_duplicate=on_duplicate,
                 allowed_roots=[tmp_path],
                 budget=budget,
+                folder_path="/",
             )
         assert out.startswith(f"Uploaded {uploaded} of 5 file(s)"), out
         assert footer in out, out
@@ -784,7 +906,11 @@ class TestUpload:
         client = make_client()
         async with client:
             out = await upload_photos(
-                client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path], budget=0
+                client,
+                local_paths=[str(tmp_path / "a.jpg")],
+                allowed_roots=[tmp_path],
+                budget=0,
+                folder_path="/",
             )
         assert out.startswith("Uploaded 1 of 1 file(s)")
         assert "Stopped after" not in out
@@ -805,8 +931,9 @@ class TestUpload:
                 client,
                 local_paths=[str(tmp_path / "a.jpg")],
                 on_duplicate="skip",
-                album="4",
+                album_id=4,
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert "skipped  id 9 (already there)" in out
         assert out.startswith("Uploaded 0 of 1 file(s) (1 skipped, already there) to ")
@@ -839,6 +966,7 @@ class TestUpload:
                 local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
                 on_duplicate="skip",
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert out.splitlines()[0] == (
             "Uploaded 1 of 3 file(s) (2 skipped, already there) to / (personal space)"
@@ -861,12 +989,13 @@ class TestUpload:
                 await upload_photos(
                     client,
                     local_paths=[str(tmp_path / "a.jpg")],
-                    album="mcp-rc-0.10 user album",
+                    album_name="mcp-rc-0.10 user album",
                     allowed_roots=[tmp_path],
+                    folder_path="/",
                 )
         error = _error(exc)
         assert error["code"] == "not_found"
-        assert error["message"] == "Upload photos failed: no album 'mcp-rc-0.10 user album'."
+        assert error["message"] == "Upload photos failed: no album named 'mcp-rc-0.10 user album'."
         assert sent == []
 
     @respx.mock
@@ -877,7 +1006,10 @@ class TestUpload:
         async with client:
             with pytest.raises(ToolError) as exc:
                 await upload_photos(
-                    client, local_paths=[str(tmp_path / "a.jpg")], allowed_roots=[tmp_path]
+                    client,
+                    local_paths=[str(tmp_path / "a.jpg")],
+                    allowed_roots=[tmp_path],
+                    folder_path="/",
                 )
         assert "160" in _error(exc)["message"]
 
@@ -912,8 +1044,9 @@ class TestUpload:
             out = await upload_photos(
                 client,
                 local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
-                album="4",
+                album_id=4,
                 allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert "a.jpg  failed   couldn't read the file (Permission denied)" in out
         assert "renamed  id 9" in out and "(as " not in out
@@ -924,14 +1057,20 @@ class TestUpload:
         inside.mkdir()
         with pytest.raises(ToolError) as exc:
             await upload_photos(
-                make_client(), local_paths=["/etc/hostname"], allowed_roots=[inside]
+                make_client(),
+                local_paths=["/etc/hostname"],
+                allowed_roots=[inside],
+                folder_path="/",
             )
         assert _error(exc)["code"] == "permission_denied"
 
     async def test_folder_path_not_a_file(self, tmp_path: Path) -> None:
         with pytest.raises(ToolError) as exc:
             await upload_photos(
-                make_client(), local_paths=[str(tmp_path)], allowed_roots=[tmp_path]
+                make_client(),
+                local_paths=[str(tmp_path)],
+                allowed_roots=[tmp_path],
+                folder_path="/",
             )
         assert _error(exc)["code"] == "not_found"
 
@@ -941,7 +1080,7 @@ class TestUpload:
             ({"local_paths": []}, "local_paths"),
             ({"local_paths": ["a"] * 51}, "local_paths"),
             ({"local_paths": ["a"], "on_duplicate": "overwrite"}, "on_duplicate"),
-            ({"local_paths": ["a"], "album": "1", "space": "shared"}, "album"),
+            ({"local_paths": ["a"], "album_id": 1, "space": "shared"}, "album_id"),
         ],
     )
     async def test_refusals(self, kwargs: dict[str, Any], param: str) -> None:
@@ -985,7 +1124,7 @@ class TestUploadRetry:
                     client,
                     local_paths=[str(tmp_path / n) for n in names],
                     allowed_roots=[tmp_path],
-                    **kwargs,
+                    **({"folder_path": "/"} | kwargs),
                 )
         return out, len(sent)
 
@@ -1161,7 +1300,7 @@ class TestUploadPersonalRootFolder:
             fake = FakePhotos().on(
                 "SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name")
             )
-            kwargs: dict[str, Any] = {"folder": "/Trips"}
+            kwargs: dict[str, Any] = {"folder_path": "/Trips"}
         else:
             fake = FakePhotos().on(
                 "SYNO.FotoTeam.Browse.Folder", "get", 2, captured("folder-get-root")
@@ -1536,3 +1675,27 @@ def test_name_key_is_a_canonical_caseless_match() -> None:
     # U+0390 and U+0399 U+0308 U+0301 are one name under Unicode's canonical caseless
     # match; NFC-then-casefold alone keyed them apart.
     assert _name_key("ΐ.jpg") == _name_key("Ϊ́.jpg")
+
+
+def test_a_name_that_cant_be_used_keeps_its_extension() -> None:
+    """Pre-QA on #605: an escaped name (a Hebrew name with a right-to-left mark) holds a
+    backslash, so it fell back to `item-41`, with no extension."""
+    from mcp_synology.core.formatting import escape_controls
+
+    name = escape_controls("\u05d3\u05d5\u05d3\u200f.jpg")
+    assert _dest_name({"id": 41, "filename": name}, "original", set()) == "item-41.jpg"
+    assert _dest_name({"id": 41, "filename": "a/b.jpg"}, "original", set()) == "item-41.jpg"
+    assert _dest_name({"id": 41, "filename": "a\\b"}, "original", set()) == "item-41"
+    assert _dest_name({"id": 41, "filename": "IMG_1.jpg"}, "original", set()) == "IMG_1.jpg"
+
+
+def test_the_extension_kept_must_itself_be_plain() -> None:
+    """QA round 5 on #605: an escaped name's suffix (`.j\\npg`) holds a backslash, a path
+    separator on Windows, and an overlong one isn't an extension."""
+    from mcp_synology.core.formatting import escape_controls
+
+    assert _dest_name({"id": 5, "filename": escape_controls("a.j\npg")}, "original", set()) == (
+        "item-5"
+    )
+    long_name = escape_controls("a\n." + "x" * 31)
+    assert _dest_name({"id": 5, "filename": long_name}, "original", set()) == "item-5"

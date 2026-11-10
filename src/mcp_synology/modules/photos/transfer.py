@@ -15,13 +15,19 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
-from mcp_synology.core.formatting import error_response, format_size, synology_error_response
+from mcp_synology.core.formatting import (
+    DOWNLOADED_CONTENTS_ARE_DATA,
+    error_response,
+    format_size,
+    synology_error_response,
+)
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.photos.helpers import (
     SETUP_CODES,
     Photos,
     check_space,
     invalid,
+    one_ref,
     space_label,
 )
 
@@ -77,7 +83,12 @@ def _dest_name(item: dict[str, Any], size: str, used: set[str]) -> str:
     two that are one file on Windows or macOS count as the same name.
     """
     item_id = item.get("id")
-    name = _safe_name(str(item.get("filename") or ""), f"item-{item_id}")
+    filename = str(item.get("filename") or "")
+    # A name that can't be used as it is (one DSM's reply escaped, #604, holds a backslash)
+    # keeps its extension, so the file still opens as what it is.
+    suffix = PurePosixPath(filename).suffix
+    plain_suffix = suffix if suffix[1:].isalnum() and len(suffix) <= 10 else ""
+    name = _safe_name(filename, f"item-{item_id}{plain_suffix}")
     if size != "original":
         name = f"{PurePosixPath(name).stem or f'item-{item_id}'}_{size}.jpg"
     if _name_key(name) in used:
@@ -152,7 +163,7 @@ async def download_photos(
         synology_error_response(op, e)
     found = {int(i["id"]): i for i in data.get("list", [])}
     lines: list[str] = []
-    done = kept = 0
+    done = kept = replaced = 0
     retry = False  # a failure that can succeed on a later call
     used: set[str] = set()
     for n, item_id in enumerate(unique):
@@ -187,6 +198,7 @@ async def download_photos(
             lines.append(f"  {item_id}  {name}: {result}")
         else:
             done += 1
+            replaced += result.endswith((f"({_REPLACED})", f"({_REPLACED_LINK})"))
             lines.append(f"  {item_id}  {name}  {result}")
     if len(unique) > 1 and retry:
         # A name depends on every item in the call, so retrying only the ones that failed
@@ -201,14 +213,19 @@ async def download_photos(
         )
     what = "original" if size == "original" else f"{size} preview"
     there = f", {kept:,} already there" if kept else ""
+    there += f", {replaced:,} replaced a file that was there" if replaced else ""
     head = (
         f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} "
         f"({what}, {space_label(sp)}{there})"
     )
-    return "\n".join([head, *lines])
+    # Only a call that wrote or kept a file has one for a client to open (#640).
+    tail = [DOWNLOADED_CONTENTS_ARE_DATA] if done or kept else []
+    return "\n".join([head, *lines, *tail])
 
 
 _ALREADY_THERE = "already there"
+_REPLACED = "replaced the file that was there"
+_REPLACED_LINK = "replaced the symlink that was there; its target is untouched"
 
 
 def _existing(dest: Path, item: dict[str, Any], size: str) -> str:
@@ -258,6 +275,11 @@ async def _download_one(
         return "not downloaded: a folder has that name", False
     if os.path.lexists(dest) and not overwrite:
         return _existing(dest, item, size), False
+    # With overwrite, the line says a local file was replaced (#625): it read like a new
+    # one. Names are unique within a call, so it's never this call's own file. Checked before
+    # the download starts; a file that appears while it streams is replaced without the note.
+    replaced = os.path.lexists(dest)
+    replaced_link = replaced and dest.is_symlink()  # the link, not its target
     if size == "original":
         api, method, version = ph.api("Download"), "download", 1
         params = {"item_id": json.dumps([int(item["id"])]), "force_download": "true"}
@@ -299,7 +321,9 @@ async def _download_one(
             return f"not downloaded: no space left on the local disk{detail}", True
         # A permission or read-only folder doesn't change by repeating the call.
         return f"not downloaded: couldn't write the file ({e.strerror or e})", False
-    return format_size(written), False
+    logger.debug("Downloaded item %s to %s (replaced a file there: %s)", item["id"], dest, replaced)
+    note = f" ({_REPLACED_LINK})" if replaced_link else f" ({_REPLACED})" if replaced else ""
+    return format_size(written) + note, False
 
 
 # -- upload_photos ------------------------------------------------------------------
@@ -368,10 +392,12 @@ async def upload_photos(
     client: DsmClient,
     *,
     local_paths: list[str],
-    folder: str = "/",
+    folder_id: int | None = None,
+    folder_path: str | None = None,
     space: str = "personal",
     on_duplicate: str = "rename",
-    album: str | None = None,
+    album_id: int | None = None,
+    album_name: str | None = None,
     allowed_roots: list[Path] | None = None,
     budget: float = 30.0,
 ) -> str:
@@ -385,6 +411,11 @@ async def upload_photos(
     budget = min(budget, UPLOAD_BUDGET_CAP)
     op = "Upload photos"
     sp = check_space(op, space)
+    album = one_ref(op, "album", album_id, album_name, required=False)
+    # Required, the root included (`folder_path="/"`), checked below after the local paths: a
+    # folder argument lost on the way (an old name a client dropped) mustn't upload into the
+    # root instead (#615).
+    folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
     if on_duplicate not in _DUPLICATE:
         invalid(
             op,
@@ -407,8 +438,8 @@ async def upload_photos(
             op,
             "albums are personal space only; upload to the personal space to add "
             "the files to an album.",
-            param="album",
-            value=album,
+            param=album.param,
+            value=album.given,
         )
     files: list[Path] = []
     for value in local_paths:
@@ -433,6 +464,13 @@ async def upload_photos(
                 suggestion="Pass files, not folders; check the path.",
             )
         files.append(path)
+    if folder is None:
+        invalid(
+            op,
+            "pass folder_id or folder_path (`/` for the space's root).",
+            param="folder_id",
+            value=None,
+        )
     try:
         ph = Photos(client, sp, op)
         target = await ph.folder(folder)
@@ -602,8 +640,8 @@ async def upload_photos(
         lines.append(
             f"Started no new file after {budget:g} s (the task timeout, at most "
             f"{UPLOAD_BUDGET_CAP:g} s) so the reply isn't cut off; {len(left):,} file(s) "
-            "not tried. To continue, call upload_photos again with the same folder, space, "
-            f"album and on_duplicate, and only these local_paths ({why}):"
+            "not tried. To continue, call upload_photos again with the same arguments and "
+            f"only these local_paths ({why}):"
         )
         lines += [f"  {value}" for value in left]
     return "\n".join(lines)

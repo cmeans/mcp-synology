@@ -106,19 +106,43 @@ each item took about 15 minutes for a while, and then 179 items cleared in 16 mi
 **What to do:** wait, and check with `file_task`. Don't stop and restart it because progress
 looks slow.
 
-### `file_task` says it's "no longer running on the NAS … DSM no longer has its result"
+### "DSM answered that it has no task …", or `file_task` says "DSM has no task for …" or "… with this handle"
 
 **Why:** DSM can forget a finished delete before any status check sees it finish (on a real NAS,
 after a 36-hour delete, it was gone within 16 minutes of the last check). It forgets a finished
 copy or move after one status read, but `file_task` keeps the result of a read it makes itself,
-so a copy or move ends this way only when something else read it first (another session for the
-same DSM user). Then `file_task` has no result left to give: the task finished or was stopped,
-and the reply can't say which. #302 tracks checking the path automatically.
+so a copy or move ends this way when something else read it first (another session for the
+same DSM user). DSM can also answer that it has no such task while one runs (error 599): that's
+been seen twice, on a delete, and a copy or move could get the same.
+Then `file_task` has no result left to give: the task finished, failed, was stopped or is still
+running, and the reply can't say which. Without a record of the task, the reply can't name it, and
+it may also be another DSM user's. #302 tracks checking the path automatically.
 
-**What to do:** list the path. For a delete, DSM removes a folder's contents before the folder,
+**What to do:** call `file_task` with no handle: it lists what's still running. Then list the
+path. For a delete, DSM removes a folder's contents before the folder,
 so a missing top-level folder means the delete finished; a folder that's still there means it
-was stopped or only partly done. For a copy or move, list the destination (and, for a move, the
-source).
+was stopped, only partly done or still going, and one large file can take many minutes. For a
+copy, list the destination; for a move or restore, the source and the destination: a folder appears there as soon as
+the task starts, so compare it with the source before relying on it.
+
+### `file_task` says a stop "hasn't confirmed it yet", "whether it stopped isn't known", or "DSM was too slow to check the details"
+
+**Why:** DSM didn't answer the stop within 15 s. DSM can be slow to answer a stop although the
+stop takes effect at once, and an MCP client may stop waiting first, so `file_task` waits 15 s,
+then reads the task's status: still running, unreadable, or finished
+(with its full result when there's time, or what the status says and a note when there isn't).
+
+**What to do:** wait a minute, then call `file_task` with the handle: it says whether the task is
+gone, still running, or finished, with its full result. Don't send the stop again before then.
+
+### `file_task` says "A stop was sent, but DSM can't confirm it" or "DSM didn't accept the stop"
+
+**Why:** DSM answered that it has no such task (error 599, or 401, File Station's code for it; that
+401 isn't an account problem), and that answer can be wrong while a task runs. So the stop goes
+anyway, and the reply says only what a new read shows.
+
+**What to do:** call `file_task` with no handle to see if it's still running. If it is, try the
+stop again. If DSM keeps refusing, stop it in DSM's File Station.
 
 ### "DSM lost the search task … so this is not a 0-result answer"
 
@@ -130,9 +154,13 @@ search didn't find nothing; it has no result (#121).
 ### Something deleted inside `#recycle` can't be restored
 
 **Why:** deleting inside a share's recycle bin (`/<share>/#recycle/…`) is permanent: DSM keeps
-no second copy (seen on DSM 7.1.1, #220).
+no second copy (seen on DSM 7.1.1, #220). One exception: an administrator deleting inside a user's home
+bin through `/homes` (`/homes/<user>/#recycle/…`). When the `homes` share's own bin is on, DSM keeps
+those items in `/homes/#recycle/<user>/#recycle`, and `delete_files` says so (#610).
 
-**What to do:** nothing can bring it back from the NAS; restore from a backup or snapshot.
+**What to do:** nothing can bring it back from the NAS; restore from a backup or snapshot. For the
+`/homes` exception, `list_recycle_bin share=homes` with a pattern (their names) finds the items, and `restore_from_recycle_bin
+share=homes` with a `dest_folder` outside the bin brings them back.
 
 ---
 

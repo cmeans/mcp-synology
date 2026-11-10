@@ -20,6 +20,7 @@ from keyring.errors import KeyringError
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
     NO_FILE_NOTE,
+    NOT_DSM_HINT,
     SETUP_COMMAND,
     SETUP_NEW_CONFIG,
     AuthenticationError,
@@ -555,6 +556,9 @@ def credential_sources(config: AppConfig, *, cli: bool = False) -> dict[str, str
 _SETUP_PICKED_UP = "the running server picks it up"
 _RECORD_HOST = "'mcp-synology check --config <full path to your config file>'"
 _TWO_FA = (403, 404, 406)
+# DSM says these only to the right password, and they don't count toward Auto Block: 18 such logins
+# at 3 attempts tripped nothing, on DSM 7.1, 7.2.2, 7.3.2 and 7.4.1 (#460).
+PASSWORD_STATE = (408, 409, 410)
 # `setup` never prints the token (maintainer, 2026-11-05), so it comes from a machine that
 # can store one. Naming `setup` alone sent a host with no keyring in a circle (#481).
 _GET_THE_TOKEN = (
@@ -616,6 +620,17 @@ def refusal_advice(
             if password == KEYRING:
                 advice += restart
         return advice
+    if code in PASSWORD_STATE:
+        password = sources.get("password")
+        if password == KEYRING:
+            advice = f"Then run {SETUP_COMMAND} to store the new password{picked}"
+        else:
+            advice = (
+                f"The password comes from {password}: change it there too{restart} "
+                f"({SETUP_COMMAND} writes only the keyring)"
+            )
+        clear = "" if cli else ". If an administrator clears this instead, restart the server"
+        return f"{first}. {advice}{clear}" if first else f"{advice}{clear}"
     if code in _TWO_FA:
         device = sources.get("device_id")
         if no_keyring_here():
@@ -668,8 +683,9 @@ class LoginRefusals:
     computer's IP address, for the user's browser and every other client too. A refused
     login retried on every tool call, or on every session error, would trip it. The
     refusal holds until the credentials change (``mcp-synology setup`` writes new ones
-    to the keyring) or the server restarts. A transport error or any other failure is
-    never remembered: it says nothing about the credentials.
+    to the keyring) or the server restarts. An expired or must-change password (408-410) doesn't
+    count toward Auto Block; it's remembered because DSM's answer won't change on its own. A
+    transport error or any other failure is never remembered: it says nothing about the credentials.
     """
 
     def __init__(self) -> None:
@@ -703,16 +719,29 @@ class LoginRefusals:
         if sources is None:
             sources = {"username": KEYRING, "password": KEYRING, "device_id": None}
         where = refusal_advice(error.code, first, sources)
+        if error.code in PASSWORD_STATE:
+            why = (
+                "because DSM gives the same answer until the password is changed or an "
+                "administrator clears this."
+            )
+            test = (
+                f"After the fix, {CHECK_COMMAND} tests the login once (a wrong password counts "
+                "toward Auto Block)."
+            )
+        else:
+            why = (
+                "because repeated failed logins can trip DSM's Auto Block, which blocks this "
+                "computer's IP address from the NAS."
+            )
+            test = (
+                f"After the fix, {CHECK_COMMAND} tests the login once (each failed check counts "
+                "toward Auto Block)."
+            )
         refusal = LoginRefusedError(
             f"DSM refused the login: {reason}. mcp-synology won't send these credentials "
-            "again until they change or the server restarts, because repeated failed "
-            "logins can trip DSM's Auto Block, which blocks this computer's IP address "
-            "from the NAS.",
+            f"again until they change or the server restarts, {why}",
             code=error.code,
-            suggestion=(
-                f"{where}. After the fix, {CHECK_COMMAND} tests the login once (each "
-                "failed check counts toward Auto Block)."
-            ),
+            suggestion=f"{where}. {test}",
         )
         # Keep a fresh copy: the raised one carries the login's frames (and its password)
         # in its traceback once raised.
@@ -842,9 +871,12 @@ class AuthManager:
                 raise
             raise self._refusals.refuse(fingerprint, e, credential_sources(self._config)) from e
 
-        sid: str | None = data.get("sid")
-        if not sid:
-            raise AuthenticationError("Login succeeded but no session ID returned.")
+        sid = data.get("sid") if isinstance(data, dict) else None
+        if not isinstance(sid, str) or not sid.strip():
+            raise AuthenticationError(
+                "The login reply has no session ID.",
+                suggestion=NOT_DSM_HINT,
+            )
 
         self._record_host()
         self._refusals.clear()

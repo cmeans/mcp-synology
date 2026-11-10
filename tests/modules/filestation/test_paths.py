@@ -10,6 +10,7 @@ Three layers:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from typing import Annotated, Any, get_args, get_origin
@@ -19,6 +20,7 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation import MODULE_INFO, register
 from mcp_synology.modules.filestation.paths import (
     BIN_ITEM_PARAMS,
@@ -159,6 +161,14 @@ class TestRefuseWriteTarget:
         if path.casefold().startswith("/home/"):
             assert "other users'" not in error["message"]
             assert "Control Panel" not in error["suggestion"]
+        if operation == "Delete" and path.casefold().startswith("/homes/"):
+            # #610: through /homes, deleted items go into /homes's own bin when that's on.
+            assert error["message"].endswith(
+                "Deleting it would remove everything in the bin: into /homes's own recycle bin "
+                "if that's on, otherwise permanently. Nothing was deleted."
+            ), error["message"]
+            assert "for good, list" not in error["suggestion"], error["suggestion"]
+            assert "they go to /homes/#recycle/alice/#recycle" in error["suggestion"]
 
     @pytest.mark.parametrize("operation", ["Delete", "Move", "Rename"])
     @pytest.mark.parametrize("path", ["/homes/alice", "/Homes/alice"])
@@ -355,7 +365,6 @@ class TestRefuseBadName:
             ("rep\u200bort", "Retype the name without the character"),
             ("\u8f9b\U000e0100\u845b\U000e0101", "Write fewer characters in their variant forms"),
             ("a" * 256, "Shorten the name to 255 bytes or fewer"),
-            ("a\x1bb", "Give the new folder's name plainly"),
         ],
     )
     async def test_a_new_folders_advice_fits_its_problem(
@@ -557,6 +566,9 @@ class _FakeClient:
         self.methods = methods or {}
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
+    def destination_lock(self, _dest: str) -> asyncio.Lock:
+        return asyncio.Lock()
+
     async def upload(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
         return {"blSkip": True}
 
@@ -614,6 +626,76 @@ class TestResolvePaths:
         error = _error(exc)
         assert (error["param"], error["value"]) == ("dest_folder", "/video/Uploads /x")
         assert "the folder '/video/Uploads ' doesn't exist" in error["message"]
+
+    @pytest.mark.parametrize(
+        ("tool", "param", "raw", "missing"),
+        [
+            ("upload_file", "dest_folder", "/video/folder\\u202efdp", "/video/folder\\u202efdp"),
+            ("create_folder", "paths", "/video/folder\\u202efdp/new", "/video/folder\\u202efdp"),
+        ],
+    )
+    async def test_a_missing_escaped_part_isnt_created_as_a_look_alike(
+        self, tool: str, param: str, raw: str, missing: str
+    ) -> None:
+        """Pre-QA r2 on #606: a folder copied from a listing that showed it escaped names
+        nothing; created, it gets a literal backslash and lists just like the real one, and
+        the upload or new folder lands in the look-alike."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                tool,
+                param,
+                [raw],
+                creates_parents=True,
+            )
+        error = _error(exc)
+        assert (error["param"], error["value"]) == (param, raw)
+        assert f"the folder {missing} doesn't exist" in error["message"], error
+        assert "Nothing was created." in error["message"]
+        assert error["suggestion"] == (
+            f"{ESCAPED_NAME_ADVICE} If the folder's name really holds that backslash, create it "
+            "on its own with create_folder first, then retry."
+        )
+
+    async def test_a_real_backslash_n_parent_is_refused_with_a_way_in(self) -> None:
+        """QA round 2 on #606: `C:\\new folder` can't be told from an escaped newline, so a
+        missing one isn't created as a parent; the refusal says how to make it (the cost)."""
+        with pytest.raises(ToolError) as exc:
+            await resolve_paths(
+                _FakeClient(),  # type: ignore[arg-type]
+                set(),
+                "upload_file",
+                "dest_folder",
+                ["/video/C:\\new folder"],
+                creates_parents=True,
+            )
+        assert "create it on its own with create_folder first" in _error(exc)["suggestion"]
+
+    async def test_the_way_in_works_create_folder_takes_it_as_its_last_part(self) -> None:
+        """The way in the refusal gives: create_folder of that folder itself is checked by the
+        new-name rules, which take a backslash (#605)."""
+        got = await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "create_folder",
+            "paths",
+            ["/video/C:\\new folder"],
+            creates_parents=True,
+        )
+        assert got == ["/video/C:\\new folder"]
+
+    async def test_an_existing_escaped_part_passes(self) -> None:
+        """A real folder whose name holds that backslash text is usable (#605)."""
+        got = await resolve_paths(
+            _FakeClient({"/video/folder\\u202efdp"}),  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/folder\\u202efdp"],
+            creates_parents=True,
+        )
+        assert got == ["/video/folder\\u202efdp"]
 
     async def test_a_padded_destination_part_that_exists_passes(self) -> None:
         client = _FakeClient({"/video/Uploads "})
@@ -680,23 +762,9 @@ class TestResolvePaths:
         [
             ("create_folder", "paths", "/video/#recycle/sub", "is '#recycle'"),
             ("create_folder", "paths", "/homes/bob/#recycle/sub", "is '#recycle'"),
-            ("create_folder", "paths", "/video/new\x1bdir/sub", "contains a control character"),
             ("upload_file", "dest_folder", "/video/#recycle", "is '#recycle'"),
-            ("upload_file", "dest_folder", "/video/a\nb/c", "contains a control character"),
             # The invisible-character rules too (pre-QA r4: untested before).
-            (
-                "upload_file",
-                "dest_folder",
-                "/video/a\u202eb/x",
-                "contains a character that changes text direction",
-            ),
             ("create_folder", "paths", "/video/\u200b/sub", "has no visible character"),
-            (
-                "create_folder",
-                "paths",
-                "/video/a\u2028b/sub",
-                "contains a line or paragraph separator",
-            ),
         ],
     )
     async def test_a_created_parent_gets_the_new_name_rules(
@@ -718,7 +786,6 @@ class TestResolvePaths:
         ("path", "advice"),
         [
             ("/video/a\u200bb/sub", "Retype the folder's name without the character"),
-            ("/video/a\x1bb/sub", "Give the folder a plain name"),
             (
                 "/video/a\u0308\u0301\u0308\u0301/sub",
                 "Retype the folder's name without the character",
@@ -1844,6 +1911,40 @@ async def test_an_unreadable_parent_answer_is_left_to_dsm() -> None:
     assert got == ["/video/Uploads "]
 
 
+async def test_an_unreadable_escaped_parent_answer_is_left_to_dsm() -> None:
+    """The escaped-part refusal (#606) is like the padded one: only a definite 408 refuses."""
+    got = await resolve_paths(
+        _FakeClient(codes={"/video/folder\\u202efdp": 407}),  # type: ignore[arg-type]
+        set(),
+        "upload_file",
+        "dest_folder",
+        ["/video/folder\\u202efdp/x"],
+        creates_parents=True,
+    )
+    assert got == ["/video/folder\\u202efdp/x"]
+
+
+async def test_a_settings_escaped_parent_gets_the_callers_advice() -> None:
+    """Pre-QA r3 on #606: a path from `default_upload_dir` gets the caller's advice (fix the
+    setting), as a padded part does, not the copied-from-a-listing advice."""
+    with pytest.raises(ToolError) as exc:
+        await resolve_paths(
+            _FakeClient(),  # type: ignore[arg-type]
+            set(),
+            "upload_file",
+            "dest_folder",
+            ["/video/C:\\new/x"],
+            error_param="default_upload_dir",
+            suggestion="Fix default_upload_dir in the filestation settings, or pass dest_folder.",
+            creates_parents=True,
+        )
+    error = _error(exc)
+    assert error["param"] == "default_upload_dir"
+    assert error["suggestion"] == (
+        "Fix default_upload_dir in the filestation settings, or pass dest_folder."
+    )
+
+
 @pytest.mark.parametrize("stall", [None, "timeout"])
 def test_handoff_lead_line_quotes_a_padded_path(stall: str | None) -> None:
     import httpx
@@ -1906,3 +2007,59 @@ async def test_a_restore_back_into_a_bin_is_refused() -> None:
     assert (error["param"], error["value"]) == ("paths", "#recycle/#recycle/x")
     assert "inside the recycle bin" in error["message"]
     assert "dest_folder" in error["suggestion"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["/video/a\nb", "/video/a\x1bb/x", "/video/a\u2028b", "/video/a\u202eb", "/video/a\U000e0041"],
+)
+def test_a_path_that_could_forge_a_reply_line_is_refused(raw: str) -> None:
+    """#604: replies show such names escaped, so a name that holds one can't be acted on, and
+    a tool can't echo it back raw. A tab is still allowed (#488)."""
+    from mcp_synology.modules.filestation.paths import check_parts
+
+    with pytest.raises(ToolError) as exc:
+        check_parts(raw, "path")
+    assert "isn't allowed" in _error(exc)["message"]
+    assert (
+        "File Station's tools and Download Station's destinations take paths only"
+        in (_error(exc)["suggestion"])
+    )
+    assert check_parts("/video/a\tb", "path") == "/video/a\tb"
+
+
+def test_a_restore_item_that_could_forge_a_reply_line_is_refused() -> None:
+    """#604: a bin item goes through the same rule as a path."""
+    from mcp_synology.modules.filestation.paths import resolve_bin_items
+
+    with pytest.raises(ToolError) as exc:
+        resolve_bin_items("video", ["Shows/a\nb"], "paths")
+    assert "isn't allowed" in _error(exc)["message"]
+    assert "give its name plainly" in _error(exc)["suggestion"]
+
+
+def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
+    """QA round 5 on #605: the caller's own advice comes after the shared text."""
+    from mcp_synology.modules.downloadstation.helpers import (
+        _DESTINATION_ADVICE,
+        normalize_destination,
+    )
+    from mcp_synology.modules.filestation.paths import (
+        DEFAULT_SUGGESTION,
+        check_parts,
+        resolve_bin_items,
+    )
+    from mcp_synology.modules.photos.helpers import FOLDER_ADVICE, check_folder_path
+
+    with pytest.raises(ToolError) as exc:
+        check_parts("/video/a\nb", "path")
+    assert _error(exc)["suggestion"].endswith(DEFAULT_SUGGESTION)
+    with pytest.raises(ToolError) as exc:
+        normalize_destination("video/a\nb", operation="Create download")
+    assert _error(exc)["suggestion"].endswith(_DESTINATION_ADVICE)
+    with pytest.raises(ToolError) as exc:
+        check_folder_path("/a\nb")
+    assert _error(exc)["suggestion"].endswith(FOLDER_ADVICE)
+    with pytest.raises(ToolError) as exc:
+        resolve_bin_items("video", ["Shows/a\nb"], "paths")
+    assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]

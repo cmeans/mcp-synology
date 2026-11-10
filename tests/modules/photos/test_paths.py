@@ -43,7 +43,7 @@ FOLDER = "SYNO.Foto.Browse.Folder"
 LOCAL_PARAMS = {"download_photos": {"dest_folder"}, "upload_photos": {"local_paths"}}
 # Arguments whose names look like a folder's but aren't one.
 NOT_FOLDERS = {
-    "merge_people": {"target"},  # the person to keep
+    "merge_people": {"target_id", "target_name"},  # the person to keep
     "copy_photos": {"dest_space"},  # personal or shared
     "move_photos": {"dest_space"},
 }
@@ -53,10 +53,12 @@ Call = Callable[["DsmClient", str, "Path"], "Awaitable[str]"]
 
 def _copy_move(operation: str, param: str) -> Call:
     def call(c: DsmClient, v: str, _tmp: Path) -> Awaitable[str]:
-        kwargs = {"folders": ["10"], "destination": "/dest"} | {param: v}
-        if param == "folders":
-            kwargs["folders"] = [v]
-        return copy_or_move(c, operation=operation, ids=None, **kwargs)  # type: ignore[arg-type]
+        kwargs: dict[str, Any] = {"folder_ids": [10], "destination_path": "/dest"}
+        if param == "folder_paths":
+            kwargs = {"folder_paths": [v], "destination_path": "/dest"}
+        else:
+            kwargs[param] = v
+        return copy_or_move(c, operation=operation, ids=None, **kwargs)
 
     return call
 
@@ -64,32 +66,34 @@ def _copy_move(operation: str, param: str) -> Call:
 def _upload(c: DsmClient, v: str, tmp: Path) -> Awaitable[str]:
     photo = tmp / "a.jpg"
     photo.write_bytes(b"\xff\xd8\xff")
-    return upload_photos(c, local_paths=[str(photo)], folder=v, allowed_roots=[tmp])
+    return upload_photos(c, local_paths=[str(photo)], folder_path=v, allowed_roots=[tmp])
 
 
 # Each registered argument, called through its tool with `value` as that argument.
 CALLS: dict[tuple[str, str], Call] = {
-    ("list_photos", "folder"): lambda c, v, _t: list_photos(c, folder=v),
-    ("list_photo_collections", "parent"): lambda c, v, _t: list_photo_collections(
-        c, type="folder", parent=v
+    ("list_photos", "folder_path"): lambda c, v, _t: list_photos(c, folder_path=v),
+    ("list_photo_collections", "parent_path"): lambda c, v, _t: list_photo_collections(
+        c, type="folder", parent_path=v
     ),
-    ("photo_folder", "folder"): lambda c, v, _t: photo_folder(
-        c, action="rename", folder=v, name="renamed"
+    ("photo_folder", "folder_path"): lambda c, v, _t: photo_folder(
+        c, action="rename", folder_path=v, name="renamed"
     ),
-    ("photo_folder", "parent"): lambda c, v, _t: photo_folder(
-        c, action="create", parent=v, name="new"
+    ("photo_folder", "parent_path"): lambda c, v, _t: photo_folder(
+        c, action="create", parent_path=v, name="new"
     ),
-    ("photo_request", "folder"): lambda c, v, _t: photo_request(
-        c, action="create", subject="s", folder=v
+    ("photo_request", "folder_path"): lambda c, v, _t: photo_request(
+        c, action="create", subject="s", folder_path=v
     ),
-    ("upload_photos", "folder"): _upload,
-    ("copy_photos", "folders"): _copy_move("copy", "folders"),
-    ("copy_photos", "destination"): _copy_move("copy", "destination"),
-    ("move_photos", "folders"): _copy_move("move", "folders"),
-    ("move_photos", "destination"): _copy_move("move", "destination"),
-    ("delete_photo_folders", "folders"): lambda c, v, _t: delete_photo_folders(c, folders=[v]),
+    ("upload_photos", "folder_path"): _upload,
+    ("copy_photos", "folder_paths"): _copy_move("copy", "folder_paths"),
+    ("copy_photos", "destination_path"): _copy_move("copy", "destination_path"),
+    ("move_photos", "folder_paths"): _copy_move("move", "folder_paths"),
+    ("move_photos", "destination_path"): _copy_move("move", "destination_path"),
+    ("delete_photo_folders", "folder_paths"): lambda c, v, _t: delete_photo_folders(
+        c, folder_paths=[v]
+    ),
     ("photo_album", "condition"): lambda c, v, _t: photo_album(
-        c, action="create_smart", name="smart", condition={"folders": [v]}
+        c, action="create_smart", name="smart", condition={"folder_paths": [v]}
     ),
 }
 
@@ -119,6 +123,9 @@ def test_every_folder_argument_is_registered() -> None:
             known = FOLDER_PARAMS.get(name, set()) | LOCAL_PARAMS.get(name, set())
             if param in known | NOT_FOLDERS.get(name, set()):
                 continue
+            if param.endswith(("_id", "_ids")):
+                continue  # a folder's ID (#617): no path to check
+
             unregistered.append(f"{name}.{param}")
     assert not unregistered, f"folder arguments not in FOLDER_PARAMS: {unregistered}"
     registered = {(name, p) for name, params in FOLDER_PARAMS.items() for p in params}
@@ -174,3 +181,28 @@ async def test_a_leading_space_name_is_looked_up_exactly(
             await CALLS[tool, param](client, "  /x/ foo/", tmp_path)
     names = [c.params.get("name") for c in fake.of(FOLDER, "get")]
     assert "/x/ foo" in names, names
+
+
+@pytest.mark.parametrize("value", ["", "  "])
+@pytest.mark.parametrize(("tool", "param"), sorted(CALLS))
+@respx.mock
+async def test_an_empty_path_is_refused_everywhere(
+    tool: str, param: str, value: str, tmp_path: Path
+) -> None:
+    """QA round 1 on #615: an empty path was the root, so `parent_path=""` created in the
+    root and `destination_path=" "` moved there. Every registered path argument refuses one
+    before any folder lookup."""
+    fake = _fake()
+    install(fake)
+    client = make_client()
+    async with client:
+        with pytest.raises(ToolError) as exc:
+            await CALLS[(tool, param)](client, value, tmp_path)
+    err = _error(exc)
+    assert err["code"] == "invalid_parameter", err
+    # Refused as empty (photo_request's create says the path is required, which it checks
+    # first), never looked up as the root.
+    assert (
+        "the space's root is written `/`" in err["message"] or "needs folder_path" in err["message"]
+    )
+    assert all(c.params != {"id": 0} for c in fake.of(FOLDER)), fake.calls

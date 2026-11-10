@@ -9,11 +9,18 @@ import math
 from typing import TYPE_CHECKING, Any
 
 from mcp_synology.core.errors import SynologyError
-from mcp_synology.core.formatting import format_size, format_table, synology_error_response
+from mcp_synology.core.formatting import (
+    escape_controls,
+    format_size,
+    format_table,
+    synology_error_response,
+    unescaped_length,
+)
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
+    Ref,
     add_rejected,
     check_folder_path,
     check_ids,
@@ -21,7 +28,9 @@ from mcp_synology.modules.photos.helpers import (
     in_batches,
     invalid,
     not_found,
+    one_ref,
     parse_expires,
+    refs,
     rejected_text,
     space_label,
 )
@@ -43,8 +52,10 @@ async def photo_folder(
     client: DsmClient,
     *,
     action: str,
-    folder: str | None = None,
-    parent: str = "/",
+    folder_id: int | None = None,
+    folder_path: str | None = None,
+    parent_id: int | None = None,
+    parent_path: str | None = None,
     name: str | None = None,
     item_id: int | None = None,
     space: str = "personal",
@@ -52,6 +63,10 @@ async def photo_folder(
     """Create or rename a folder, or set its cover (spec: photo_folder)."""
     op = "Photo folder"
     sp = check_space(op, space)
+    folder = one_ref(op, "folder", folder_id, folder_path, other="path", required=False)
+    parent = one_ref(
+        op, "folder", parent_id, parent_path, prefix="parent", other="path", required=False
+    )
     if action not in _FOLDER_ACTIONS:
         invalid(
             op,
@@ -68,37 +83,46 @@ async def photo_folder(
         if not leaf:
             invalid(op, f"action={action} needs name.", param="name", value=name)
         refuse_bad_name(op, leaf, "name", "Pass one folder name, without /, such as Trips.")
+    if action == "create" and parent is None:
+        # Required, the root included: a lost parent mustn't create in the root (#615).
+        invalid(
+            op,
+            "action=create needs parent_id or parent_path (`/` for the space's root).",
+            param="parent_id",
+        )
     if action in ("rename", "set_cover") and folder is None:
-        invalid(op, f"action={action} needs folder.", param="folder")
+        invalid(op, f"action={action} needs folder_id or folder_path.", param="folder_id")
     if action == "set_cover" and item_id is None:
         invalid(op, "action=set_cover needs item_id.", param="item_id")
     try:
         ph = Photos(client, sp, op)
         if action == "create":
-            under = await ph.folder(parent, param="parent")
+            under = await ph.folder(parent)
             data = await ph.call(
                 "Browse.Folder", "create", {"target_id": int(under["id"]), "name": leaf}
             )
             made = data["folder"]
             return f"Created {made.get('name')} (id {made['id']}, {space_label(sp)})."
-        target = await ph.folder(folder or "")
-        folder_id = int(target["id"])
+        assert folder is not None  # checked above
+        target = await ph.folder(folder)
+        fid = int(target["id"])
         if action == "rename":
-            if target.get("parent") == folder_id or target.get("name") == "/":
+            if target.get("parent") == fid or target.get("name") == "/":
                 invalid(
-                    op, "the space's root folder can't be renamed.", param="folder", value=folder
+                    op,
+                    "the space's root folder can't be renamed.",
+                    param=folder.param,
+                    value=folder.given,
                 )
-            data = await ph.call("Browse.Folder", "rename", {"id": folder_id, "name": leaf})
-            return f"Renamed folder {folder_id} to {data['folder'].get('name')}."
+            data = await ph.call("Browse.Folder", "rename", {"id": fid, "name": leaf})
+            return f"Renamed folder {fid} to {data['folder'].get('name')}."
         found, _missing = await ph.items([int(item_id or 0)])
         if not found:
             not_found(
                 op, f"no item {item_id} in the {space_label(sp)}.", param="item_id", value=item_id
             )
-        await ph.call(
-            "Browse.Folder", "set_cover", {"id": folder_id, "id_item": [item_id]}, version=2
-        )
-        return f"Folder {folder_id}'s cover is now item {item_id}."
+        await ph.call("Browse.Folder", "set_cover", {"id": fid, "id_item": [item_id]}, version=2)
+        return f"Folder {fid}'s cover is now item {item_id}."
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -339,7 +363,8 @@ async def edit_person(
     client: DsmClient,
     *,
     action: str,
-    person: str,
+    person_id: int | None = None,
+    person_name: str | None = None,
     name: str | None = None,
     item_id: int | None = None,
     space: str = "personal",
@@ -347,6 +372,8 @@ async def edit_person(
     """Rename, hide, unhide or set a person's cover (spec: edit_person)."""
     op = "Edit person"
     sp = check_space(op, space)
+    person = one_ref(op, "person", person_id, person_name)
+    assert person is not None  # required
     if action not in _PERSON_ACTIONS:
         invalid(
             op,
@@ -362,15 +389,15 @@ async def edit_person(
     try:
         ph = Photos(client, sp, op)
         target = await ph.person(person)
-        person_id = int(target["id"])
+        pid = int(target["id"])
         if action == "rename":
-            await ph.call("Browse.Person", "set", {"id": person_id, "name": name})
+            await ph.call("Browse.Person", "set", {"id": pid, "name": name})
         elif action in ("hide", "unhide"):
-            await ph.call("Browse.Person", "show", {"id": [person_id], "show": action == "unhide"})
+            await ph.call("Browse.Person", "show", {"id": [pid], "show": action == "unhide"})
         else:
             # photo_id is an item of this person; DSM picks that item's face (verified).
-            await ph.call("Browse.Person", "set_cover", {"id": person_id, "photo_id": item_id})
-        return person_line(await _person_now(ph, person_id))
+            await ph.call("Browse.Person", "set_cover", {"id": pid, "photo_id": item_id})
+        return person_line(await _person_now(ph, pid))
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -378,8 +405,10 @@ async def edit_person(
 async def merge_people(
     client: DsmClient,
     *,
-    target: str,
-    merge: list[str],
+    target_id: int | None = None,
+    target_name: str | None = None,
+    merge_ids: list[int] | None = None,
+    merge_names: list[str] | None = None,
     name: str | None = None,
     space: str = "personal",
 ) -> str:
@@ -387,24 +416,36 @@ async def merge_people(
     ignores a missing ``merged_id`` and reports success."""
     op = "Merge people"
     sp = check_space(op, space)
-    if not merge:
-        invalid(op, "pass at least one person in merge.", param="merge", value=merge)
+    target = one_ref(op, "person", target_id, target_name, prefix="target")
+    assert target is not None  # required
+    merge = refs(op, merge_ids, merge_names, prefix="merge")
     try:
         ph = Photos(client, sp, op)
-        keep = await ph.person(target, param="target")
+        keep = await ph.person(target)
         keep_id = int(keep["id"])
         merged: dict[int, dict[str, Any]] = {}
-        for value in merge:
-            found = await ph.person(str(value), param="merge")
+        for ref in merge:
+            found = await ph.person(ref)
             if int(found["id"]) == keep_id:
                 invalid(
                     op,
                     f"person {keep_id} is the target; it can't be merged into itself.",
-                    param="merge",
-                    value=value,
+                    param=ref.param,
+                    value=ref.given,
                 )
             merged[int(found["id"])] = found
         final = name if name is not None else str(keep.get("name") or "")
+        if name is None and unescaped_length(final) != len(final):
+            # The kept name came escaped (#604): sent back, it would rename the person.
+            invalid(
+                op,
+                f"person {keep_id}'s name may hold a character replies show escaped "
+                f"({final}), so keeping it can't be sent back as it is.",
+                param="name",
+                value=None,
+                suggestion="Pass `name`: the name to keep, written plainly, without the "
+                "backslash escapes shown here (they'd become part of the name).",
+            )
         await ph.call(
             "Browse.Person",
             "merge",
@@ -469,7 +510,7 @@ async def photo_request(
     request: str | None = None,
     subject: str | None = None,
     description: str | None = None,
-    folder: str | None = None,
+    folder_path: str | None = None,
     space: str = "personal",
     max_file_mib: int | None = None,
     expires: str | None = None,
@@ -488,8 +529,8 @@ async def photo_request(
     if action == "create":
         if not (subject or "").strip():
             invalid(op, "action=create needs subject.", param="subject", value=subject)
-        if not folder:
-            invalid(op, "action=create needs folder.", param="folder")
+        if not folder_path:
+            invalid(op, "action=create needs folder_path.", param="folder_path")
     if action in ("update", "delete") and not request:
         invalid(
             op, f"action={action} needs request (its passphrase from action=list).", param="request"
@@ -543,11 +584,13 @@ async def photo_request(
             fields["subject"] = subject
         if description is not None:
             fields["description"] = description
-        if folder is not None:
-            # A path only: an ID here would be a folder named after it (`12` is `/12`).
-            path = check_folder_path(folder, advice=_REQUEST_FOLDER_ADVICE)
+        if folder_path is not None:
+            # A path only: DSM takes a request's folder by path (`12` is `/12`).
+            path = check_folder_path(folder_path, "folder_path", advice=_REQUEST_FOLDER_ADVICE)
             # Checked here, so a typo isn't a request into a folder that doesn't exist.
-            await Photos(client, sp, op).folder(path, missing_advice=_REQUEST_MISSING_ADVICE)
+            await Photos(client, sp, op).folder(
+                Ref("folder_path", name=path), missing_advice=_REQUEST_MISSING_ADVICE
+            )
             fields["library"] = _LIBRARY[sp]
             fields["folder_home_path"] = path
         if max_file_mib is not None:
@@ -565,6 +608,8 @@ async def photo_request(
             invalid(op, "nothing to change.", param="action", value=action)
         await ph.call("PhotoRequest", "update", {"passphrase": request, **fields}, personal=True)
         now = {str(e.get("passphrase")): e for e in await ph.walk("PhotoRequest", personal=True)}
-        return _request_block(now.get(str(request), {**existing[str(request)], **fields}))
+        # The fallback shows this call's own text: escaped as DSM's would be (#604).
+        shown = {k: escape_controls(v) if isinstance(v, str) else v for k, v in fields.items()}
+        return _request_block(now.get(str(request), {**existing[str(request)], **shown}))
     except SynologyError as e:
         synology_error_response(op, e)

@@ -84,8 +84,9 @@ connection:
 
   # Connection timeout in seconds for individual API requests.
   # A few calls set their own read timeout: the reads pause_download adds wait 5 s for data, and
-  # connect at most 5 s, so the reply normally beats an MCP client's limit; File Station's task
-  # stops wait 90 s. It's per chunk, so a reply that trickles can take longer.
+  # connect at most 5 s, so the reply normally beats an MCP client's limit; `file_task`'s
+  # stop waits 15 s, then reads the task's status (the cleanup stop after an error just waits
+  # 15 s). It's per chunk, so a reply that trickles can take longer.
   # Default: 30
   timeout: 30
 
@@ -178,17 +179,11 @@ modules:
   #       - ~/Pictures
   #     task_timeout: 30  # seconds before a copy, move or delete hands off, or an upload stops
 
-  # Example: future module (not yet implemented)
-  # docker:
-  #   enabled: true
-  #   permission: read
-  #   settings:
-  #     # Module-specific settings would go here
+  # system:
+  #   enabled: true   # no WRITE tools, so no permission is needed
 
-  # Example: another future module
-  # system_info:
-  #   enabled: true
-  #   permission: read
+  # storage:
+  #   enabled: true   # READ tools only; needs a DSM administrator account
 
 # ─── Local folders ───────────────────────────────────────────────
 # Optional. Local folders every module's local-path tools may use (#257):
@@ -257,7 +252,7 @@ logging:
 
 ### `modules` Object
 
-Each key is a module name (e.g., `filestation`, `docker`, `system_info`). The value is a module config object:
+Each key is a module name (`system`, `filestation`, `photos`, `downloadstation`, `storage`). The value is a module config object:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
@@ -316,7 +311,7 @@ At startup, the config is validated with Pydantic. Validation failures produce c
 ### Hard Errors (server won't start)
 
 - `schema_version` is missing or not an integer
-- `schema_version` is higher than what this server version supports (with upgrade guidance)
+- `schema_version` isn't the version this server reads (1): the error gives both numbers
 - The file repeats a key in one mapping (#464): `https: true` then `https: false`, two `password:` lines, or a second, empty `connection:` (which dropped the first one's `https: true`). YAML would keep the last without a word. The error gives both lines (both columns when they're on one line, `{k: 1, k: 2}`; just the line where the `{…}` or section starts when a key came by alias, whose marks aren't its own) and names the key only when it's one the config defines, a module's name, or a key in a module's `settings` (`core/config.py` `_ConfigLoader`, used by `parse_config_text`); any other key may be a password's fragment. A `<<: *anchor` merge's keys may still be overridden, as YAML intends, but two `<<` keys in one mapping are a repeat too (the later one silently won): the error says to merge both in one, later one first, `<<: [*later, *earlier]`, since the first in a list wins, so the result doesn't change. The shared `global.yaml`, which the program writes, is read without these key checks
 - A key with no value inside `{…}`, written without a colon right after it (`{username: me, password: Spring,device_id}`; a colon inside a comment doesn't count): YAML splits a value at a comma, so the fragment became a key set to null and the password was cut short with no error (#464). It's refused with its line and the quoting hint, never named, and the advice that a colon needs a space after it (`{host:nas}` is one colon-less key to YAML). Directly under `modules`, its last advice is to give the module a colon (`{filestation: , photos: }`), since leaving it out would drop the module. `{device_id: }`, with the colon, is still a key set to null. Valid YAML that ends a value early isn't refused: `{password: Spring,}` and `password: Spring #1` both load `Spring`, so a password holding `,` or ` #` needs quotes. Both checks read each mapping as written, before anything is built: SafeLoader flattens `<<` merges in place, so a check while building would take an override for a repeat
 - `connection.host` is missing AND `SYNOLOGY_HOST` env var is not set
@@ -464,10 +459,6 @@ modules:
       file_type_indicator: text
       async_timeout: 180
 
-  # docker:
-  #   enabled: true
-  #   permission: read
-
 logging:
   level: debug
   file: ~/.local/state/mcp-synology/nas-primary/server.log
@@ -481,7 +472,12 @@ logging:
 schema_version: 1
 
 # connection block can be omitted entirely — SYNOLOGY_HOST env var
-# provides the host, port defaults from SYNOLOGY_HTTPS, etc.
+# provides the host, port defaults from SYNOLOGY_HTTPS, etc. Set
+# SYNOLOGY_HTTPS=true unless the network is trusted: without it the password
+# crosses the network in cleartext. DSM's default certificate is self-signed:
+# install one the container trusts (docs/https.md), or set it off here:
+# connection:
+#   verify_ssl: false
 
 modules:
   filestation:
@@ -492,6 +488,7 @@ modules:
 With environment variables:
 ```
 SYNOLOGY_HOST=192.168.1.100
+SYNOLOGY_HTTPS=true
 SYNOLOGY_USERNAME=mcp-service
 SYNOLOGY_PASSWORD=secret
 SYNOLOGY_DEVICE_ID=AbCdEf123456
