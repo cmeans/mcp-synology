@@ -286,8 +286,15 @@ async def test_after_one_unanswered_request_nothing_more_is_sent(tool: Any) -> N
 
 @pytest.mark.parametrize(
     "exc",
-    [httpx.ConnectError("refused"), httpx.ConnectTimeout("t"), httpx.PoolTimeout("t")],
-    ids=["connect", "connect-timeout", "pool"],
+    [
+        httpx.ConnectError("refused"),
+        httpx.ConnectTimeout("t"),
+        httpx.PoolTimeout("t"),
+        httpx.ProxyError("tunnel refused"),
+        httpx.UnsupportedProtocol("no scheme"),
+        httpx.LocalProtocolError("bad header"),
+    ],
+    ids=["connect", "connect-timeout", "pool", "proxy", "unsupported-protocol", "local-protocol"],
 )
 async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer(
     exc: Exception,
@@ -401,3 +408,9 @@ async def test_external_storage_sends_one_unanswered_request(stall: str) -> None
     text, _ = await run(list_external_storage, setup=setup)
     assert len(unanswered) == 1, unanswered
     assert text.count("no answer: ReadTimeout") == 1
+    # QA round 1 on #661: the skipped sections share one note, the eSATA probe's included.
+    assert text.count("not read (DSM didn't answer an earlier request)") == 1, text
+    if stall == "usb":
+        assert "eSATA drives and 1 more: not read (DSM didn't answer an earlier request)" in text
+    else:
+        assert "Expansion units: not read (DSM didn't answer an earlier request)" in text

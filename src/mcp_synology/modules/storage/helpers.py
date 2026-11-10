@@ -182,10 +182,24 @@ class Sections:
             # The error's type only, never its text.
             logger.debug("%s %s/%s got no answer: %r", self.operation, api, method, e)
             self.stalled = True
-            sent = not isinstance(e, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout)
+            sent = not isinstance(e, _NOT_SENT)
             why = f"no answer: {type(e).__name__}" if sent else type(e).__name__
             self.notes.append(f"{label}: couldn't be read ({why})")
             return None
+
+
+# Transport errors raised before anything reached DSM: no connection, no free connection in the
+# pool, a proxy that refused the tunnel (httpx honors an environment proxy, #565), a URL httpx
+# can't send, or a request h11 refused to write. Anything else may have reached it: "no answer"
+# (QA round 1 on #661). #442 tracks one shared predicate for every module.
+_NOT_SENT = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.ProxyError,
+    httpx.UnsupportedProtocol,
+    httpx.LocalProtocolError,
+)
 
 
 def failure(e: SynologyError) -> str:
