@@ -548,7 +548,9 @@ Common causes:
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped, or after a
   stop DSM refused, that it wasn't accepted; for the
-  stop, that it may or may not have taken effect. A stop DSM got but didn't
+  stop, that it may or may not have taken effect, or, when the connection couldn't be
+  opened ("DSM couldn't be reached for the stop request"), that nothing was stopped. A
+  stop whose effect isn't known is noted on the task's record (#657). A stop DSM got but didn't
   answer within 15 s isn't an error (#630): DSM 7.1 sometimes answers a `stop`
   only after about 60 s, although the stop takes effect at once, so the task's
   status decides the reply: stopped when the task is gone, "a stop was sent,

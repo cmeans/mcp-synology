@@ -32,6 +32,12 @@ from mcp_synology.modules.filestation.standardized_variants import (
 logger = logging.getLogger(__name__)
 
 
+def never_sent(exc: Exception) -> bool:
+    """The request never reached DSM: its connection couldn't be opened (as Photos'
+    ``photo_task`` says). A pool timeout belongs here too, but that's #442."""
+    return isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
+
+
 def dsm_str(value: str) -> str:
     """JSON-quote a free-text parameter value for a JSON-format File Station API.
 
@@ -76,6 +82,14 @@ def unanswered_status_response(
     """
     timed_out = isinstance(exc, httpx.TimeoutException)
     what = "didn't answer" if timed_out else "lost the connection during"
+    if never_sent(exc):
+        # The connection was never opened, so the request never reached DSM (as Photos says),
+        # and a longer timeout or a smaller folder wouldn't help.
+        what = "couldn't be reached for"
+        suggestion = (
+            "Check that the NAS is on and reachable from this machine, then try again; "
+            "list the path to see where the task got to."
+        )
     note = f" {task_note}" if task_note else ""
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
