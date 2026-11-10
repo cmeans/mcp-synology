@@ -121,6 +121,7 @@ async def list_external_storage(client: DsmClient) -> str:
         esata = _devices(await probe.get(client, "eSATA drives", esata_api, "list", _ALL))
         if probe.stalled:
             optional.stalled = True
+            optional.unreached = probe.unreached
             optional.notes.extend(probe.notes)
         elif esata is None:
             esata = _devices(await optional.get(client, "eSATA drives", esata_api, "list"))

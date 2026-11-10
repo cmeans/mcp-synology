@@ -170,7 +170,8 @@ def low_performance(health: Any) -> str | None:
     value = as_dict(as_dict(as_dict(health).get("healthInfo")).get("overview")).get(
         "low_performance_in_raid"
     )
-    # Only DSM's text values ("now", "normal"); anything else isn't a flag this can name.
+    # DSM sends "now" or "normal": any other text is shown as DSM sent it; "normal", empty,
+    # absent or not text shows nothing.
     if not isinstance(value, str) or value in ("", "normal"):
         return None
     return value
@@ -193,8 +194,7 @@ async def slow_disks(client: DsmClient, info: dict[str, Any], optional: Sections
             # One note for every disk left, not one each (pre-QA r4 on #661).
             which = " of the other disks" if read else ""
             optional.notes.append(
-                f"Low-performance-in-RAID flags{which}: not read (DSM didn't answer an "
-                "earlier request)"
+                f"Low-performance-in-RAID flags{which}: not read ({optional.skip_reason})"
             )
             break
         device = str(disk.get("device") or f"/dev/{disk.get('id')}")

@@ -313,6 +313,12 @@ async def test_a_connection_that_couldnt_be_opened_isnt_called_no_answer(
     text, _ = await run(list_disks, setup=setup)
     assert f"Drive 1 (sda) low-performance-in-RAID flag: couldn't be read ({name})" in text
     assert f"no answer: {name}" not in text
+    # Pre-QA r6 on #661: the skipped disks' note doesn't say DSM didn't answer either.
+    assert (
+        "Low-performance-in-RAID flags of the other disks: not read (DSM couldn't be reached "
+        "for an earlier request)"
+    ) in text, text
+    assert "didn't answer" not in text
 
 
 @pytest.mark.parametrize(
@@ -414,3 +420,23 @@ async def test_external_storage_sends_one_unanswered_request(stall: str) -> None
         assert "eSATA drives and 1 more: not read (DSM didn't answer an earlier request)" in text
     else:
         assert "Expansion units: not read (DSM didn't answer an earlier request)" in text
+
+
+async def test_an_esata_probe_that_never_reached_dsm_says_so_for_the_rest() -> None:
+    """Pre-QA r6 on #661: the probe passes on why it stalled, so the sections skipped after it
+    say DSM couldn't be reached, not that it didn't answer."""
+    from mcp_synology.modules.storage.external import list_external_storage
+
+    def setup(replay: Replay, _: Any) -> None:
+        original = replay._reply
+
+        def answer(query: dict[str, str]) -> Any:
+            if "eSATA" in query.get("api", ""):
+                raise httpx.ProxyError("tunnel refused")
+            return original(query)
+
+        replay._reply = answer  # type: ignore[method-assign]
+
+    text, _ = await run(list_external_storage, setup=setup)
+    assert "eSATA drives: couldn't be read (ProxyError)" in text, text
+    assert "Expansion units: not read (DSM couldn't be reached for an earlier request)" in text

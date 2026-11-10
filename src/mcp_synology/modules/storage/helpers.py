@@ -118,6 +118,9 @@ class Sections:
     # Set by the first request DSM didn't answer: a busy NAS would make each later section
     # wait out its own timeout, past an MCP client's 60 s, so the rest aren't sent.
     stalled: bool = False
+    # The stall was a request that never reached DSM (``_NOT_SENT``): the skipped sections'
+    # note then says DSM couldn't be reached, not that it didn't answer (pre-QA r6 on #661).
+    unreached: bool = False
     # Sections skipped since: one shared note, not one each (a loop over 500 shares).
     _skipped: list[str] = field(default_factory=list)
     _skip_note: int = -1
@@ -127,12 +130,19 @@ class Sections:
         self._skipped.append(label)
         more = len(self._skipped) - 1
         what = self._skipped[0] + (f" and {more} more" if more else "")
-        note = f"{what}: not read (DSM didn't answer an earlier request)"
+        note = f"{what}: not read ({self.skip_reason})"
         if self._skip_note < 0:
             self._skip_note = len(self.notes)
             self.notes.append(note)
         else:
             self.notes[self._skip_note] = note
+
+    @property
+    def skip_reason(self) -> str:
+        """Why sections after the stall weren't sent, for their note."""
+        if self.unreached:
+            return "DSM couldn't be reached for an earlier request"
+        return "DSM didn't answer an earlier request"
 
     async def get(
         self,
@@ -183,6 +193,7 @@ class Sections:
             logger.debug("%s %s/%s got no answer: %r", self.operation, api, method, e)
             self.stalled = True
             sent = not isinstance(e, _NOT_SENT)
+            self.unreached = not sent
             why = f"no answer: {type(e).__name__}" if sent else type(e).__name__
             self.notes.append(f"{label}: couldn't be read ({why})")
             return None
