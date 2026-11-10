@@ -760,6 +760,35 @@ class TestGetDirSizeUnansweredStatus:
         )
         assert err["suggestion"].startswith("Try a subdirectory")
 
+    @pytest.mark.parametrize(
+        ("exc", "code", "what"),
+        [
+            (httpx.ConnectError("refused"), "unavailable", "couldn't be reached for"),
+            (httpx.ConnectTimeout("t"), "timeout", "couldn't be reached for"),
+            (httpx.RemoteProtocolError("dropped"), "unavailable", "lost the connection during"),
+        ],
+    )
+    @respx.mock
+    async def test_a_status_read_that_never_left(
+        self, mock_client: DsmClient, exc: Exception, code: str, what: str
+    ) -> None:
+        """Pre-QA r3 on #660: a connection that couldn't be opened never reached DSM."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method", "")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "ds-9"}})
+            if method == "status":
+                raise exc
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/homes/cmeans")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == code
+        assert err["message"].startswith(f"Get directory size failed: DSM {what} a status request")
+
 
 class TestGetDirSizeCancellation:
     @respx.mock

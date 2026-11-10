@@ -121,6 +121,9 @@ class TaskRecord:
     # The task's progress when that stop was noted, when a status read gave it: progress that
     # has moved since means the stop didn't take effect.
     stop_progress: str | None = None
+    # The raw counts behind it (``processed_num``, ``processed_size``), compared to tell whether
+    # the task moved: the shown text rounds (a 4 TiB copy reads the same 10 GiB later).
+    stop_mark: tuple[Any, ...] | None = None
     # The store's clock (monotonic) when the stop was noted: how long ago, whatever the wall
     # clock does meanwhile (an NTP step, a resume).
     stop_noted: float | None = None
@@ -168,6 +171,7 @@ class TaskRecords:
             record.dest_of = {**old.dest_of, **record.dest_of}
             if record.stop_sent is None:
                 record.stop_sent, record.stop_progress = old.stop_sent, old.stop_progress
+                record.stop_mark = old.stop_mark
                 record.stop_noted = old.stop_noted
         self._items[key] = (self._clock(), record)
         while len(self._items) > self._max:
@@ -178,14 +182,20 @@ class TaskRecords:
         entry = self._items.get(str(handle))
         return entry[1] if entry else None
 
-    def note_stop(self, handle: Handle, when: float, progress: str | None) -> None:
+    def note_stop(
+        self,
+        handle: Handle,
+        when: float,
+        progress: str | None,
+        mark: tuple[Any, ...] | None = None,
+    ) -> None:
         """A stop was sent for this task and DSM hasn't confirmed it (#657). ``progress``: the
-        task's progress then, when a status read gave it."""
+        task's progress then, as shown, when a status read gave it; ``mark``: its raw counts."""
         record = self.get(handle)
         if record is None:
             record = TaskRecord(handle=handle, paths=[])
             self.add(record)
-        record.stop_sent, record.stop_progress = when, progress
+        record.stop_sent, record.stop_progress, record.stop_mark = when, progress, mark
         record.stop_noted = self._clock()
         logger.debug("Noted an unconfirmed stop of %s (progress then: %s)", handle, progress)
 
@@ -194,6 +204,7 @@ class TaskRecords:
         record = self.get(handle)
         if record is not None:
             record.stop_sent = record.stop_progress = record.stop_noted = None
+            record.stop_mark = None
 
     def stop_age(self, record: TaskRecord) -> float:
         """Seconds since the record's unconfirmed stop was noted (0 if none)."""
@@ -202,6 +213,15 @@ class TaskRecords:
     def stop_lapsed(self, record: TaskRecord) -> bool:
         """The noted stop is past ``STOP_CONFIRM_LIMIT``: it doesn't look like it took effect."""
         return record.stop_sent is not None and self.stop_age(record) > STOP_CONFIRM_LIMIT
+
+    def stop_verdict(self, record: TaskRecord, status: dict[str, Any] | None) -> str:
+        """For a running task with a noted stop: ``moved`` (its counts changed since),
+        ``lapsed`` (past ``STOP_CONFIRM_LIMIT``) or ``pending``. The list and the status reply
+        both ask this, so they agree."""
+        now = progress_mark(status) if status is not None else None
+        if record.stop_mark is not None and now is not None and now != record.stop_mark:
+            return "moved"
+        return "lapsed" if self.stop_lapsed(record) else "pending"
 
     def set_final(self, handle: Handle, status: dict[str, Any]) -> None:
         record = self.get(handle)
@@ -321,6 +341,14 @@ def _progress_numbers(status: dict[str, Any]) -> tuple[int, int, str] | None:
         return size, int(total), f"{format_size(size)} of {format_size(int(total))}"
     processed = int(status.get("processed_num") or 0)
     return processed, int(total), f"{processed:,} of {int(total):,} items"
+
+
+def progress_mark(status: dict[str, Any]) -> tuple[Any, ...] | None:
+    """A status's raw counts (items and bytes processed), to tell whether a task moved; None
+    when it has neither."""
+    if "processed_num" not in status and "processed_size" not in status:
+        return None
+    return (status.get("processed_num"), status.get("processed_size"))
 
 
 def _no_total_text(status: dict[str, Any]) -> str:
@@ -1013,7 +1041,7 @@ async def _list_reply(client: DsmClient, records: TaskRecords | None = None) -> 
                 task.handle.kind,
                 ", ".join(map(shown, task.paths)) + to,
                 started,
-                progress_text(task.task) + _stop_note(records, task.handle),
+                progress_text(task.task) + _stop_note(records, task.handle, task.task),
             ]
         )
     return format_table(
@@ -1023,13 +1051,18 @@ async def _list_reply(client: DsmClient, records: TaskRecords | None = None) -> 
     )
 
 
-def _stop_note(records: TaskRecords | None, handle: Handle) -> str:
-    """A list row's note for a task a stop was sent to, unconfirmed (#657)."""
-    record = records.get(handle) if records is not None else None
+def _stop_note(
+    records: TaskRecords | None, handle: Handle, status: dict[str, Any] | None = None
+) -> str:
+    """A list row's note for a task a stop was sent to, unconfirmed (#657). ``status``: the
+    task's status in the list, so the row says what a status call would."""
+    if records is None:
+        return ""
+    record = records.get(handle)
     if record is None or record.stop_sent is None:
         return ""
     sent = f"; stop sent {format_timestamp(record.stop_sent)}"
-    if records is not None and records.stop_lapsed(record):
+    if records.stop_verdict(record, status) != "pending":
         return f"{sent}, doesn't look like it took effect"
     return f"{sent}, not confirmed yet"
 
@@ -1362,7 +1395,12 @@ async def file_task(
 
     def note_unconfirmed(before: dict[str, Any] | None) -> None:
         """#657: a later status call says a stop was sent, with the progress then."""
-        records.note_stop(parsed, time.time(), progress_text(before) if before else None)
+        records.note_stop(
+            parsed,
+            time.time(),
+            progress_text(before) if before else None,
+            progress_mark(before) if before else None,
+        )
 
     def ended_first() -> str:
         """The line before a finished task's result. After a stop DSM hadn't confirmed (#657),
@@ -1572,7 +1610,7 @@ async def file_task(
     dest = record.dest if record is not None else None
     where = _describe(parsed.kind, paths, dest).partition(" ")[2] if paths else ""
     what = f"{_GERUND[parsed.kind]} on the NAS" + (f": {where}" if where else "")
-    progress = bare_progress = progress_text(status)
+    progress = progress_text(status)
     started = taskid_started(parsed.taskid)
     if started is not None:
         progress += f"; running for {_elapsed_text(time.time() - started)}"
@@ -1588,12 +1626,12 @@ async def file_task(
         # moved since or it's been running far longer than that.
         sent = f"A stop was sent at {format_timestamp(record.stop_sent)}"
         then = record.stop_progress
-        waited = records.stop_age(record)
-        if (then is not None and then != bare_progress) or records.stop_lapsed(record):
+        verdict = records.stop_verdict(record, status)
+        if verdict != "pending":
             why = (
                 f"the progress has moved since (then: {then})"
-                if then is not None and then != bare_progress
-                else f"it's still running {_elapsed_text(waited)} later"
+                if verdict == "moved"
+                else f"it's still running {_elapsed_text(records.stop_age(record))} later"
             )
             return (
                 f"Still {what} ({progress}). Handle: `{parsed}`\n"
@@ -1602,11 +1640,17 @@ async def file_task(
                 f"then be partly done).{earlier_skip()}"
             )
         then_text = f" (progress then: {then})" if then is not None else ""
+        # With no counts to compare, "hasn't moved" can't be judged, so it isn't offered.
+        hint = (
+            ": if the progress hasn't moved, it most likely has"
+            if record.stop_mark is not None and progress_mark(status) is not None
+            else ""
+        )
         return (
             f"Still shows as {what} ({progress}). Handle: `{parsed}`\n"
             f"{sent}{then_text} and DSM hasn't confirmed it yet. DSM can be slow to confirm a "
-            "stop that already took effect: if the progress hasn't moved, it most likely has. "
-            f"Check again in a minute; don't send another stop yet.{earlier_skip()}"
+            f"stop that already took effect{hint}. Check again in a minute; don't send another "
+            f"stop yet.{earlier_skip()}"
         )
     return (
         f"Still {what} ({progress}). Handle: `{parsed}`\n"
