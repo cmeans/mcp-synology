@@ -331,6 +331,13 @@ async def test_matrix(
             final.method == "status" and final.api != tool.api
         ):
             broken.add("request_after_handoff")
+        # A stall or a lost task says so; only a task still running at the wait's end reads
+        # as running on.
+        lines = text.splitlines()
+        first = lines[lines.index(handles[0]) - 1] if handles else ""
+        on_time = scenario in ("budget_out", "already_running")
+        if on_time != first.startswith("Still "):
+            broken.add("handoff_reason")
         if last.running is not None and len(dsm.starts()) != at:
             broken.add("started_a_second_task")
 
