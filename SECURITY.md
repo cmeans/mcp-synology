@@ -2,14 +2,14 @@
 
 ## Supported versions
 
-mcp-synology is currently on the 0.10.x line. Fixes for security issues
+mcp-synology is currently on the 0.11.x line. Fixes for security issues
 are applied to the latest published version only. Users of earlier
 versions should upgrade.
 
 | Version | Supported         |
 | ------- | ----------------- |
-| 0.10.x  | ✅ security fixes |
-| < 0.10  | ❌ upgrade        |
+| 0.11.x  | ✅ security fixes |
+| < 0.11  | ❌ upgrade        |
 
 ## Reporting an issue
 
