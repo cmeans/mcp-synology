@@ -633,7 +633,13 @@ text/html).`), never the page itself. It's `retryable=true`, except for a
 the NAS; `mcp-synology check` reports it as "didn't return a DSM API response".
 Downloads (`download_file`, `download_photos`) check too: DSM never sends a
 file as `text/html` or `application/xhtml+xml`, so such a page isn't saved, and
-nothing is written; neither is JSON that isn't DSM's error envelope (#292).
+nothing is written; neither is JSON that isn't DSM's error envelope (#292). Nor is
+any status but 200 (a proxy's redirect, a 204: "the answer wasn't a DSM reply (HTTP
+302); nothing was written."), a body that isn't the length it announced, or a
+`download_file` body shorter than the size DSM reported for the file ("the answer
+was 10 bytes for a file DSM reported as 1,000 bytes; nothing was saved."); a small body of a type DSM doesn't send files as is checked for DSM's
+error envelope, and an envelope there is that DSM error. In each case the local
+file that was there is kept as it was (#642).
 `file_task` reports either case as "Check task failed for `<handle>`: …", or for
 a stop "Stop task failed for `<handle>`: … Nothing was stopped." (the status
 read failed; "… The stop wasn't accepted." after a stop DSM refused) or "… The stop may or may not have taken effect." (the stop
