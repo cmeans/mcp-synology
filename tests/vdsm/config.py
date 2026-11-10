@@ -119,12 +119,14 @@ DEFAULT_DSM_VERSION: str = "7.2.2"
 BAKE_VERSION: int = 9
 
 # The virtual-dsm container image, pinned so a new upstream release can't change the
-# VM a bake or a test run boots without a bake change. From GitHub's registry, by digest:
-# on 2026-11-10 Docker Hub stopped serving vdsm/virtual-dsm ("pull access denied"; its API
-# answers 404 for the repository), while ghcr.io serves the same image, upstream's 7.66
-# (same index digest, same amd64 and arm64 images).
+# VM a bake or a test run boots without a bake change. By digest, from the maintainer's
+# mirror on GitHub's registry: on 2026-11-10 Docker Hub stopped serving vdsm/virtual-dsm
+# ("pull access denied"; its API answers 404 for the repository). The mirror is a copy of
+# upstream's 7.66 from ghcr.io/vdsm/virtual-dsm with digests preserved (same index digest,
+# same amd64 and arm64 images), so a pin to either names the same image; upstream's can
+# take its place if the mirror goes.
 VDSM_IMAGE: str = (
-    "ghcr.io/vdsm/virtual-dsm"
+    "ghcr.io/cmeans/virtual-dsm"
     "@sha256:02cea121099a65a75575c974d71a5898666cc324ab26ae8c04a04e0a42172181"  # 7.66
 )
 

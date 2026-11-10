@@ -121,6 +121,14 @@ The setup script:
 
 Golden images are stored in `.vdsm/golden/` (about 1.2 GB each, gitignored).
 
+**The container image** is pinned by digest in `tests/vdsm/config.py` `VDSM_IMAGE`, from the maintainer's public mirror `ghcr.io/cmeans/virtual-dsm`: Docker Hub stopped serving `vdsm/virtual-dsm` on 2026-11-10. To move to a newer upstream release, copy it with its digests kept, then pin the new digest and bump `BAKE_VERSION` (a new image is a bake change):
+
+```bash
+skopeo copy --all --preserve-digests docker://ghcr.io/vdsm/virtual-dsm:<tag> docker://ghcr.io/cmeans/virtual-dsm:<tag>
+```
+
+Pushing needs a GitHub token with `write:packages` (`gh auth refresh -h github.com -s write:packages`), and the package must stay public for CI's anonymous pulls.
+
 ### Running
 
 ```bash
