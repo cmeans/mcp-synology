@@ -263,6 +263,28 @@ class TestUploadFile:
         result = await upload_file(mock_client, local_path=str(local_file), dest_folder="/v ")
         assert result.startswith(f"[+] Uploaded test.txt (7 B) to {'/v '!r}/"), result
 
+    @respx.mock
+    async def test_a_name_with_a_tab_is_quoted_in_every_line(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA): a tab is allowed in a name, and the reply's lines all quote it."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        there = {"files": [{"isdir": False, "path": "/v/a\tb.txt"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": there})
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        name = "a\tb.txt"
+        result = await upload_file(
+            mock_client,
+            local_path=str(local_file),
+            dest_folder="/v",
+            filename=name,
+            overwrite=True,
+        )
+        assert result.startswith(f"[+] Uploaded {name!r} (7 B) to /v/"), result
+        assert f"It replaced the {name!r} that was there." in result, result
+        assert "\t" not in result, result
+
     @pytest.mark.parametrize(
         ("there", "said"),
         [(True, True), (False, False), (None, False), ("folder", False)],
@@ -685,6 +707,13 @@ class TestDownloadFile:
         assert "Downloaded the folder /video/shows as a ZIP archive of it" in out
         assert str(tmp_path / "shows.zip") in out
         assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA  # #640
+
+    @respx.mock
+    async def test_a_padded_folder_is_quoted(self, mock_client: DsmClient, tmp_path: Path) -> None:
+        """#688: the reply names the folder it downloaded, quoted when padded (#519's rule)."""
+        self._route(self._folder_info("/video/shows "), httpx.Response(200, content=b"PK\x03\x04"))
+        out = await download_file(mock_client, path="/video/shows ", dest_folder=str(tmp_path))
+        assert f"Downloaded the folder {'/video/shows '!r} as a ZIP archive of it" in out, out
 
     @respx.mock
     async def test_download_folder_name_too_long_with_zip(

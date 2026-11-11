@@ -376,7 +376,7 @@ async def get_dir_size(
                         ("Files", f"{num_file:,}"),
                         ("Directories", f"{num_dir:,}"),
                     ],
-                    title=f"Directory Size: {normalized}",
+                    title=f"Directory Size: {shown(normalized)}",
                 )
                 break
 

@@ -1345,6 +1345,39 @@ class TestPaddedPathsAreShownQuoted:
         text = await rename(client, path=PADDED, new_name="bar")  # type: ignore[arg-type]
         assert f"{QUOTED} \u2192 /video/x/bar" in text, text
 
+    async def test_rename_reply_padded_parent(self) -> None:
+        """#688: a padded parent pads the new path too, so it's quoted as well."""
+        from mcp_synology.modules.filestation.operations import rename
+
+        client = _FakeClient(
+            {"/video/x /foo"}, methods={"rename": {"files": [{"path": "/video/x /bar"}]}}
+        )
+        text = await rename(client, path="/video/x /foo", new_name="bar")  # type: ignore[arg-type]
+        assert f"{'/video/x /foo'!r} \u2192 {'/video/x /bar'!r}" in text, text
+
+    async def test_rename_reply_without_dsms_path(self) -> None:
+        """#688: the fallback line, when DSM's reply names no path, quotes both too."""
+        from mcp_synology.modules.filestation.operations import rename
+
+        client = _FakeClient({PADDED}, methods={"rename": {"files": []}})
+        name = "b\tr"
+        text = await rename(client, path=PADDED, new_name=name)  # type: ignore[arg-type]
+        assert f"Renamed {QUOTED} to {name!r}" in text, text
+
+    async def test_get_dir_size_title(self) -> None:
+        """#688: get_dir_size's title names the folder it measured, quoted when padded."""
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        client = _FakeClient(
+            {PADDED},
+            methods={
+                "start": {"taskid": "t1"},
+                "status": {"finished": True, "num_dir": 1, "num_file": 0, "total_size": 0},
+            },
+        )
+        text = await get_dir_size(client, path=PADDED)  # type: ignore[arg-type]
+        assert f"Directory Size: {QUOTED}" in text, text
+
     async def test_create_folder_reply(self) -> None:
         """#688: create_folder's reply quotes a padded folder DSM made."""
         from mcp_synology.modules.filestation.operations import create_folder

@@ -3305,6 +3305,31 @@ async def test_the_running_list_shows_paths_safely(mock_client: DsmClient) -> No
 
 
 @respx.mock
+async def test_the_running_list_writes_a_padded_folder_as_the_summaries_do(
+    mock_client: DsmClient,
+) -> None:
+    """#688: the folder quoted, then its slash, not the slash inside the quotes."""
+    from mcp_synology.modules.filestation.tasks import file_task
+
+    task = {
+        "api": "SYNO.FileStation.CopyMove",
+        "taskid": "FileStation_X",
+        "finished": False,
+        "params": {
+            "path": ["/s/a"],
+            "dest_folder_path": "/s/dst ",
+            "overwrite": False,
+            "remove_src": False,
+        },
+    }
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        return_value=httpx.Response(200, json={"success": True, "data": {"tasks": [task]}})
+    )
+    text = await file_task(mock_client, records=TaskRecords())
+    assert f"/s/a -> {'/s/dst '!r}/" in text, text
+
+
+@respx.mock
 async def test_the_bound_counts_from_the_first_599(
     mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
