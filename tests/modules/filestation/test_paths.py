@@ -1290,6 +1290,52 @@ class TestPaddedPathsAreShownQuoted:
         assert "Couldn't check whether /homes" in text, text
         assert f"  {padded!r}" in text.splitlines(), text
 
+    async def test_move_summary_removed_from_lines(self) -> None:
+        """QA round 1 on #687: the "removed from" lines name where the sources were, so a padded
+        folder or name is quoted there too, in a restore's wording as well."""
+        from mcp_synology.modules.filestation.operations import _as_restore, _copy_move_summary
+
+        moved = await _copy_move_summary(
+            _FakeClient(),  # type: ignore[arg-type]
+            ["/video/a /f0"],
+            "/video/d",
+            True,
+            0,
+            [],
+        )
+        assert f"Source files have been removed from {'/video/a '!r}/." in moved, moved
+        named = await _copy_move_summary(
+            _FakeClient(),  # type: ignore[arg-type]
+            ["/video/a /f1 "],
+            "/video/d",
+            True,
+            0,
+            [],
+            only_named_sources_removed=True,
+        )
+        line = f"Moved sources removed from {'/video/a '!r}/: {'f1 '!r}"
+        assert line in named, named
+        restored = _as_restore(named, "video")
+        assert line.replace("Moved sources", "Restored items") in restored, restored
+
+    async def test_skip_report_still_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QA round 1 on #687: a skipped file's folder, quoted when padded."""
+        from mcp_synology.modules.filestation import operations
+
+        async def kinds(client: Any, paths: list[str]) -> dict[str, bool]:
+            return dict.fromkeys(paths, False)
+
+        monkeypatch.setattr(operations, "paths_isdir", kinds)
+        text = await operations._copy_move_summary(
+            _FakeClient(),  # type: ignore[arg-type]
+            ["/video/a /f0"],
+            "/video/d",
+            True,
+            0,
+            ["/video/a /f0"],
+        )
+        assert f"(skipped items are still in {'/video/a '!r}/)" in text, text
+
     def test_partial_delete_lists(self) -> None:
         from mcp_synology.core.formatting import error_response
 

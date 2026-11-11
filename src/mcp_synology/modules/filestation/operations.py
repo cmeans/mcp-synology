@@ -702,7 +702,7 @@ async def _skip_report(
     def entry(p: str, folder: bool = False) -> str:
         # A skipped folder's leftovers are its own children; a file stays in its parent.
         src_dir = p if folder else "/".join(p.split("/")[:-1]) or ""
-        where = f" (skipped items are still in {src_dir}/)"
+        where = f" (skipped items are still in {shown(src_dir)}/)"
         if p in unknown:
             where = " (skipped items are still at this path or under it)"
         return f"  {shown(p)}" + (where if remove_src else "")
@@ -1364,13 +1364,13 @@ async def _copy_move_summary(
     # sources may still be in that folder, it names what went instead (#585).
     if remove_src and not skipped_paths and not only_named_sources_removed:
         src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
-        lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)
+        lines.extend(f"\nSource files have been removed from {shown(d)}/." for d in src_dirs)
     elif remove_src:
         by_dir: dict[str, list[str]] = {}
         for p in ok:
             by_dir.setdefault("/".join(p.split("/")[:-1]), []).append(name(p))
         lines.extend(
-            f"\nMoved sources removed from {d}/: {', '.join(names)}"
+            f"\nMoved sources removed from {shown(d)}/: {', '.join(map(shown, names))}"
             for d, names in sorted(by_dir.items())
         )
 
