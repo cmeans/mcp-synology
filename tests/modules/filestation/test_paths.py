@@ -1228,6 +1228,45 @@ class TestPaddedPathsAreShownQuoted:
             _delete_result({"finished": True, "total": -1}, PADDED, recursive=True)
         assert _error(exc)["message"].endswith(f"deleted for {QUOTED}.")
 
+    def test_delete_result_error(self) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_result
+
+        with pytest.raises(ToolError) as exc:
+            _delete_result({"finished": True, "error": {"code": 900}}, PADDED, recursive=True)
+        assert _error(exc)["message"].endswith(f"on path: {QUOTED}.")
+
+    async def test_delete_summary_lists(self) -> None:
+        """#519: a summary names what the call acted on, so a padded path is quoted there."""
+        from mcp_synology.modules.filestation.operations import _delete_summary
+
+        text = await _delete_summary(_FakeClient(), [PADDED], {"video": True})  # type: ignore[arg-type]
+        assert f"  {QUOTED}" in text.splitlines()
+
+    async def test_copy_summary_and_skipped_list(self) -> None:
+        """#519: the copied names and the skipped list, both quoted when padded."""
+        from mcp_synology.modules.filestation.helpers import _escaped_repr
+        from mcp_synology.modules.filestation.operations import _copy_move_summary
+
+        name = PADDED.rsplit("/", 1)[-1]
+        text = await _copy_move_summary(
+            _FakeClient(),  # type: ignore[arg-type]
+            [PADDED],
+            "/video/d",
+            False,
+            0,
+            [],
+        )
+        assert f"  {_escaped_repr(name)}" in text.splitlines()
+        skipped = await _copy_move_summary(
+            _FakeClient(),  # type: ignore[arg-type]
+            [PADDED, "/video/ok"],
+            "/video/d",
+            True,
+            0,
+            [PADDED],
+        )
+        assert any(line.startswith(f"  {QUOTED} (") for line in skipped.splitlines()), skipped
+
     def test_partial_delete_lists(self) -> None:
         from mcp_synology.core.formatting import error_response
 
@@ -2066,10 +2105,8 @@ def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
 
 def _with_progress_so_far(error: Any, failed: str, done: list[str], rest: list[str]) -> Any:
     """A delete's failure through the batch formatter, as `DeleteAdapter` words it (#512 PR 3)."""
-    from mcp_synology.modules.filestation.batch import _with_progress
+    from mcp_synology.modules.filestation.batch import _with_not_started, _with_progress
     from mcp_synology.modules.filestation.operations import _already_done
-
-    from mcp_synology.modules.filestation.batch import _with_not_started
 
     out = _with_progress(
         error,

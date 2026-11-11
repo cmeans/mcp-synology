@@ -698,11 +698,11 @@ async def _skip_report(
         where = f" (skipped items are still in {src_dir}/)"
         if p in unknown:
             where = " (skipped items are still at this path or under it)"
-        return f"  {p}" + (where if remove_src else "")
+        return f"  {shown(p)}" + (where if remove_src else "")
 
     if ok:
         lines.append(f"{verb}:")
-        lines.extend(f"  {p.split('/')[-1]}" for p in ok)
+        lines.extend(f"  {shown(p.split('/')[-1])}" for p in ok)
     if files:
         lines.append("Skipped:")
         lines.extend(entry(p) for p in files)
@@ -1309,7 +1309,7 @@ async def _copy_move_summary(
 
     if not skipped_paths:
         lines = [format_status(f"{verb} {len(normalized):,} item(s) to {dest}/:")]
-        lines.extend(f"  {name(p)}" for p in normalized)
+        lines.extend(f"  {shown(name(p))}" for p in normalized)
     else:
         lines = await _skip_report(
             client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
@@ -1528,7 +1528,7 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
         mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
             mapped.error_code,
-            f"Delete files failed: DSM error code {err_code} on path: {err_path}.",
+            f"Delete files failed: DSM error code {err_code} on path: {shown(str(err_path))}.",
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -1730,7 +1730,8 @@ async def _delete_summary(
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
-    lines.extend(f"  {p}" for p in normalized)
+    # A list: padding and characters that draw nothing are shown, as errors show them (#519).
+    lines.extend(f"  {shown(p)}" for p in normalized)
 
     # DSM keeps no empty folder in the bin, not even one deleted on its own (seska DSM
     # 7.1.1; vdsm, all four versions, for one inside a deleted folder), so the note doesn't
@@ -1761,7 +1762,7 @@ async def _delete_summary(
                 "after the user agrees:"
             )
             home_bin = f"/homes/{user}/#recycle"
-            lines.extend(f"  {kept}{p[len(home_bin) :]}" for p in bin_paths)
+            lines.extend(f"  {shown(kept + p[len(home_bin) :])}" for p in bin_paths)
             continue
         if share in unknown_bins:
             lines.append(
@@ -1769,7 +1770,7 @@ async def _delete_summary(
                 f"went from {user}'s home recycle bin into {kept}, and list_recycle_bin "
                 "share=homes shows whether they can be recovered:"
             )
-            lines.extend(f"  {p}" for p in bin_paths)
+            lines.extend(f"  {shown(p)}" for p in bin_paths)
             continue
         # Name the bin items only when the call also deleted others, so it's clear
         # which ones are gone for good.
@@ -1778,7 +1779,7 @@ async def _delete_summary(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
                 "these cannot be recovered:"
             )
-            lines.extend(f"  {p}" for p in bin_paths)
+            lines.extend(f"  {shown(p)}" for p in bin_paths)
         else:
             lines.append(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "

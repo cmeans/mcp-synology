@@ -7523,10 +7523,8 @@ class TestSourcesDsmWontShow:
 
 def _with_progress_so_far(error: Any, failed: str, done: list[str], rest: list[str]) -> Any:
     """A delete's failure through the batch formatter, as `DeleteAdapter` words it (#512 PR 3)."""
-    from mcp_synology.modules.filestation.batch import _with_progress
+    from mcp_synology.modules.filestation.batch import _with_not_started, _with_progress
     from mcp_synology.modules.filestation.operations import _already_done
-
-    from mcp_synology.modules.filestation.batch import _with_not_started
 
     out = _with_progress(
         error,
