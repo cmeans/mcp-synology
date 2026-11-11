@@ -3185,7 +3185,8 @@ ODD = "/s/rep\u200bort"
         ),
         ("copy", "/s/d\u200best", "status", _err(599), repr("/s/d\u200best")),
         ("delete", None, "stop", _ok(RUNNING), repr(ODD)),
-        ("copy", "/s/d\u200best", "status", _ok(RUNNING), repr("/s/d\u200best/")),
+        # The folder quoted, then its slash, as the tools' summaries write it (#688).
+        ("copy", "/s/d\u200best", "status", _ok(RUNNING), repr("/s/d\u200best") + "/"),
     ],
     ids=[
         "gone",

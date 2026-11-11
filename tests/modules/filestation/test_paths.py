@@ -1337,6 +1337,22 @@ class TestPaddedPathsAreShownQuoted:
         )
         assert f"(skipped items are still in {'/video/a '!r}/)" in text, text
 
+    async def test_rename_reply(self) -> None:
+        """#688: rename's reply quotes a padded source (a new name can't be padded)."""
+        from mcp_synology.modules.filestation.operations import rename
+
+        client = _FakeClient({PADDED}, methods={"rename": {"files": [{"path": "/video/x/bar"}]}})
+        text = await rename(client, path=PADDED, new_name="bar")  # type: ignore[arg-type]
+        assert f"{QUOTED} \u2192 /video/x/bar" in text, text
+
+    async def test_create_folder_reply(self) -> None:
+        """#688: create_folder's reply quotes a padded folder DSM made."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        client = _FakeClient(methods={"create": {"folders": [{"path": "/video/x/new "}]}})
+        text = await create_folder(client, paths=["/video/x/new "])  # type: ignore[arg-type,list-item]
+        assert f"  \U0001f4c1 {'/video/x/new '!r}" in text.splitlines(), text
+
     def test_partial_delete_lists(self) -> None:
         from mcp_synology.core.formatting import error_response
 

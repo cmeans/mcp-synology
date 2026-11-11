@@ -250,6 +250,19 @@ class TestUploadFile:
         assert "[+]" in result
         assert "test.txt" in result
 
+    @respx.mock
+    async def test_a_padded_destination_is_quoted(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688: the reply names the folder it uploaded to, quoted when padded (#519's rule)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        missing = {"files": [{"code": 408, "path": "/v /test.txt"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": missing})
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        result = await upload_file(mock_client, local_path=str(local_file), dest_folder="/v ")
+        assert result.startswith(f"[+] Uploaded test.txt (7 B) to {'/v '!r}/"), result
+
     @pytest.mark.parametrize(
         ("there", "said"),
         [(True, True), (False, False), (None, False), ("folder", False)],

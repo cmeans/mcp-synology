@@ -211,7 +211,10 @@ async def upload_file(
     if progress_callback:
         await progress_callback(file_size, file_size)
 
-    result = format_status(f"Uploaded {effective_name} ({format_size(file_size)}) to {dest}/")
+    # Quoted when padding or a hidden character wouldn't show (#519, #688).
+    result = format_status(
+        f"Uploaded {shown(effective_name)} ({format_size(file_size)}) to {shown(dest)}/"
+    )
     if replaced:
         # Whether DSM's Upload keeps the old file in the recycle bin isn't probed; say what
         # copy, move and restore say (QA round 1 on #623).
