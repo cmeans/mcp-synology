@@ -519,6 +519,40 @@ async def test_a_call_canceled_during_a_start_stops_what_it_started(
         assert (record.stop is not None) == isinstance(stop, httpx.ReadTimeout)
 
 
+@pytest.mark.parametrize(
+    ("stop", "says", "handle"),
+    [
+        ("ok", "DSM confirmed the stop of its task", False),
+        (httpx.ReadTimeout("x"), "a stop was sent for its task, and DSM hasn't confirmed it", True),
+        (401, "DSM refused the stop of its task, so it may still be running", True),
+        (httpx.ConnectError("x"), "the stop for its task couldn't be sent", True),
+    ],
+)
+async def test_a_poll_errors_reply_says_how_the_stop_ended(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    stop: Any,
+    says: str,
+    handle: bool,
+) -> None:
+    """#497: only a stop DSM confirmed is called one; otherwise the error gives the handle and
+    the follow-up, and isn't retryable."""
+    tool = TOOLS[0]
+    scripts = {src: PathScript() for src in tool.sources}
+    scripts[tool.sources[0]].statuses = [RUNNING, 400]
+    scripts[tool.sources[0]].stop = stop
+    FakeDsm(scripts).mount(respx_mock)
+    with pytest.raises(ToolError) as raised:
+        await tool.call(mock_client, TaskRecords())
+    error = json.loads(str(raised.value))["error"]
+    assert says in error["message"], error["message"]
+    assert bool(error.get("handle")) == handle
+    if handle:
+        assert error["retryable"] is False
+        assert f"file_task(handle={error['handle']!r})" in error["suggestion"]
+
+
 def test_known_gaps_name_real_cells() -> None:
     cells = {(p.values[0].name, p.values[1], p.values[2]) for p in _cells()}
     assert set(KNOWN_GAPS) <= cells

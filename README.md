@@ -244,7 +244,7 @@ modules:
       async_timeout: 120          # search_files and get_dir_size
       # search_timeout: 120       # defaults to async_timeout
       # dir_size_timeout: 120     # defaults to async_timeout
-      delete_timeout: 30          # how long delete_files waits before handing off
+      delete_timeout: 30          # how long a delete_files call waits before handing off
       copy_move_timeout: 30       # copy_files, move_files, restore_from_recycle_bin
       upload_timeout: 300
       download_timeout: 300
@@ -264,8 +264,8 @@ modules:
 | `async_timeout` | `120` | 10–3600 s | Time limit for `search_files` and `get_dir_size`. It doesn't apply to delete, copy, move or restore. |
 | `search_timeout` | `async_timeout` | 10–3600 s | Time limit for `search_files` only. The NAS search is stopped when it runs out. |
 | `dir_size_timeout` | `async_timeout` | 10–3600 s | Time limit for `get_dir_size` only. |
-| `delete_timeout` | `30` | 10–3600 s | How long `delete_files` waits before handing off (capped at 600). |
-| `copy_move_timeout` | `30` | 10–3600 s | How long `copy_files`, `move_files` and `restore_from_recycle_bin` wait before handing off (capped at 600). |
+| `delete_timeout` | `30` | 10–3600 s | How long a `delete_files` call waits before handing off, for all its paths together (capped at 600). |
+| `copy_move_timeout` | `30` | 10–3600 s | How long a `copy_files`, `move_files` or `restore_from_recycle_bin` call waits before handing off, for all its paths together (capped at 600). |
 | `upload_timeout` | `300` | 10–3600 s | Time limit for `upload_file`. |
 | `download_timeout` | `300` | 10–3600 s | Time limit for `download_file`. |
 | `search_poll_interval` | `1.0` | 0.5–10.0 s | How often `search_files` checks on DSM's search while it runs. |

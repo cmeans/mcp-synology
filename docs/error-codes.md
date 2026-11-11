@@ -474,7 +474,7 @@ path.
 
 A delete, copy, move or restore that's still running when the call's wait
 runs out (`delete_timeout` or `copy_move_timeout`, default 30 s, capped at
-600 s) is **not** a timeout (#245). The NAS keeps working on it, and the tool
+600 s, one wait for the call's paths together, #496) is **not** a timeout (#245). The NAS keeps working on it, and the tool
 returns a normal result: "Still deleting on the NAS: … This operation keeps
 running after this reply", with the progress and a handle such as
 `delete:FileStation_179219158016597225`. In a multi-path call, the paths after
