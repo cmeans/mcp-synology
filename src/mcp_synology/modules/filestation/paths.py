@@ -139,10 +139,10 @@ PATH_PARAMS: dict[str, dict[str, PathRole]] = {
 # bin-relative items (`resolve_bin_items`).
 NAME_PARAMS: dict[str, str] = {"rename": "new_name", "upload_file": "filename"}
 BIN_ITEM_PARAMS: dict[str, str] = {"restore_from_recycle_bin": "paths"}
-# Tools that put sources into a destination; each calls `refuse_planted_bin` (a source named
+# Tools that put sources into a destination; each runs `refuse_planted_bin` (a source named
 # `#recycle` landing where it would be a bin) and `refuse_same_names` (two sources replacing
-# each other). test_paths.py runs each through both, and fails if a tool with sources and a
-# DEST isn't listed here.
+# each other) through `plan_landings`, first thing in its operation (#684). test_paths.py runs
+# each through both, and fails if a tool with sources and a DEST isn't listed here.
 PLANTED_BIN_TOOLS: frozenset[str] = frozenset(
     {"copy_files", "move_files", "restore_from_recycle_bin"}
 )

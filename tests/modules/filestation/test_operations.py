@@ -1318,6 +1318,21 @@ class TestRestoreFromRecycleBin:
         assert "[+]" in result
 
     @respx.mock
+    @pytest.mark.parametrize("dest", ["/video/Restored/", "video/Restored"])
+    async def test_restore_to_a_dest_written_another_way(
+        self, mock_client: DsmClient, dest: str
+    ) -> None:
+        """Pre-QA r2 on #684: the plan and the items agree on the destination's spelling."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await restore_from_recycle_bin(
+            mock_client,
+            share="video",
+            paths=["old_ep.mkv"],
+            dest_folder=dest,  # type: ignore[arg-type]
+        )
+        assert "[+]" in result
+
+    @respx.mock
     async def test_restore_full_path(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
         result = await restore_from_recycle_bin(

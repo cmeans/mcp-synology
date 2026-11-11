@@ -1644,6 +1644,17 @@ async def _tool(tool: str, client: _FakeClient | None = None, **settings: Any) -
 
 
 class TestToolWiring:
+    @pytest.mark.parametrize("tool", ["copy_files", "move_files"])
+    async def test_a_landing_refusal_quotes_the_callers_own_text(self, tool: str) -> None:
+        """#684 (pre-QA r2): the checks run in the operation, and still quote the caller's
+        text, threaded through ``paths_arg``, not the resolved path."""
+        fn = await _tool(tool)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), paths=["video/sub/#recycle"], dest_folder="/video")
+        error = _error(exc)
+        assert "'video/sub/#recycle'" in error["message"], error
+        assert error["value"] == "video/sub/#recycle", error
+
     async def test_rename_to_recycle_at_a_shares_top(self) -> None:
         fn = await _tool("rename")
         with pytest.raises(ToolError) as exc:

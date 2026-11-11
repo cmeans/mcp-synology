@@ -1933,6 +1933,10 @@ async def restore_from_recycle_bin(
     destinations, the items after the handed-off one are listed as not started.
     """
     share_name = share.strip("/").split("/")[0]
+    # Normalized once, so the plan's landings and the items' are the same text (pre-QA r2 on
+    # #684: `/video/Restored/` planned one landing and ran another).
+    if dest_folder is not None:
+        dest_folder = ResolvedPath(normalize_path(dest_folder))
     # One progress token per tool call, shared by every destination's task (#245).
     on_progress = MonotonicProgress.wrap(on_progress)
 
