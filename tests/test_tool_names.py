@@ -11,6 +11,7 @@ and the README's limits are computed from it.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,12 +20,13 @@ import pytest
 from click.testing import CliRunner
 
 from mcp_synology.cli import main
-from mcp_synology.cli.setup import _emit_claude_desktop_snippet
+from mcp_synology.cli.setup import _emit_claude_desktop_snippet, _hostname_alias_fits
 from mcp_synology.server import (
     _MODULE_REGISTRY,
     DESKTOP_PREFIX,
     TOOL_SEARCH_LIMIT,
     _module_plan,
+    create_server,
     server_name_problem,
     suggested_server_name,
 )
@@ -115,7 +117,7 @@ def test_the_constants_are_the_servers() -> None:
     [
         ({"alias": "HomeNAS"}, True),  # synology-HomeNAS, 16
         ({"instance_id": "home-nas"}, True),  # synology-home-nas, 17: exactly the limit
-        ({"instance_id": "diskstation"}, False),  # DSM's default host name: 20
+        ({"instance_id": "diskstation"}, False),  # a host name such as DiskStation: 20
         ({"instance_id": "192-168-1-100"}, False),  # an IP address as the host: 22
         # Only the tools this config serves count: read-only File Station's longest is shorter.
         ({"instance_id": "diskstation", "modules": {"filestation": {"enabled": True}}}, True),
@@ -133,12 +135,47 @@ def test_the_suggested_server_name_is_checked(overrides: dict[str, object], fits
 def test_the_warning_says_what_to_do() -> None:
     problem = server_name_problem(_config(instance_id="diskstation"))
     assert problem == (
-        "the server name 'synology-diskstation' is 20 characters: in Claude Desktop, with "
-        "restore_from_recycle_bin (24 characters), a tool's full name would be over Claude's "
-        "64-character limit, and every conversation would fail once Claude loads it. Set a "
-        "shorter alias in the config (up to 8 characters, e.g. alias: nas), or name the server "
-        "17 characters or fewer in your MCP client's config."
+        "the server name setup suggests, 'synology-diskstation' (20 characters), is too long "
+        "for Claude Desktop: with restore_from_recycle_bin (24 characters), a tool's full name "
+        "would be over Claude's 64-character limit, and a conversation fails once Claude loads "
+        "that tool. Set an alias of up to 8 characters in the config (e.g. alias: nas), or "
+        "name the server 17 characters or fewer in your MCP client's config. If it already is, "
+        "or you use only Claude Code (where 33 characters fit), this doesn't apply."
     )
+
+
+@pytest.mark.parametrize(
+    ("alias", "instance_id", "fits"),
+    [
+        # The alias names the server when there is one, whatever the instance ID.
+        ("long-alias", "nas", False),
+        ("nas", "diskstation", True),
+    ],
+)
+def test_the_alias_wins_over_the_instance_id(alias: str, instance_id: str, fits: bool) -> None:
+    assert (server_name_problem(_config(alias=alias, instance_id=instance_id)) is None) == fits
+
+
+def test_serve_names_itself_so_and_logs_the_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+        assert create_server(_config(alias="HomeNAS")).name == "synology-HomeNAS"
+        assert "server name setup suggests" not in caplog.text
+        create_server(_config(instance_id="diskstation"))
+    assert "the server name setup suggests, 'synology-diskstation'" in caplog.text
+
+
+def test_setup_offers_the_host_name_only_when_it_fits(capsys: pytest.CaptureFixture[str]) -> None:
+    """Setup offered DSM's host name as the alias, then warned it was too long (pre-QA r2)."""
+    config_dict = {
+        "schema_version": 1,
+        "instance_id": "nas",
+        "connection": {"host": "nas"},
+        "modules": WRITE_FILES,
+    }
+    assert _hostname_alias_fits(config_dict, "HomeNAS")
+    assert capsys.readouterr().out == ""
+    assert not _hostname_alias_fits(config_dict, "DiskStation")
+    assert "not offered as the alias" in capsys.readouterr().out
 
 
 def test_check_warns(tmp_path: Path) -> None:
@@ -153,13 +190,13 @@ def test_check_warns(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     result = CliRunner().invoke(main, ["check", "-c", str(config)])
-    assert "Warning: the server name 'synology-diskstation' is 20 characters" in result.output
+    assert "Warning: the server name setup suggests, 'synology-diskstation'" in result.output
 
 
 def test_setup_warns_under_its_snippet(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _emit_claude_desktop_snippet(_config(instance_id="diskstation"), tmp_path / "c.yaml")
     out, err = capsys.readouterr()
     assert '"synology-diskstation"' in out
-    assert "Warning: the server name 'synology-diskstation' is 20 characters" in err
+    assert "Warning: the server name setup suggests, 'synology-diskstation'" in err
     _emit_claude_desktop_snippet(_config(alias="HomeNAS"), tmp_path / "c.yaml")
     assert "Warning" not in capsys.readouterr().err

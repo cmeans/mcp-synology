@@ -510,7 +510,7 @@ Set `alias` to give Claude a display name for the connection:
 alias: HomeNAS
 ```
 
-The alias appears in the MCP server name (e.g., `synology-HomeNAS`) so Claude knows which NAS it's talking to.
+The alias appears in the MCP server name (e.g., `synology-HomeNAS`) so Claude knows which NAS it's talking to. Keep it to 8 characters when File Station's write tools are on, so the name fits Claude Desktop's limit (see [Add it to your MCP client](#2-add-it-to-your-mcp-client)); `setup` and `check` warn when it doesn't.
 
 ### Custom instructions
 

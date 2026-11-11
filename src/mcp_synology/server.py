@@ -1197,13 +1197,17 @@ def server_name_problem(config: AppConfig) -> str | None:
     if len(name) <= budget:
         return None
     room = budget - len("synology-")
+    code_budget = TOOL_SEARCH_LIMIT - len("mcp__") - len("__") - len(longest)
+    # The client's own name for the server isn't in the config: this is about the name `setup`
+    # suggests, and says when it doesn't apply (pre-QA r2 on #682).
     return (
-        f"the server name {name!r} is {len(name)} characters: in Claude Desktop, with "
-        f"{longest} ({len(longest)} characters), a tool's full name would be over Claude's "
-        f"{TOOL_SEARCH_LIMIT}-character limit, and every conversation would fail once Claude "
-        f"loads it. Set a shorter alias in the config (up to {room} characters, e.g. "
+        f"the server name setup suggests, {name!r} ({len(name)} characters), is too long for "
+        f"Claude Desktop: with {longest} ({len(longest)} characters), a tool's full name would "
+        f"be over Claude's {TOOL_SEARCH_LIMIT}-character limit, and a conversation fails once "
+        f"Claude loads that tool. Set an alias of up to {room} characters in the config (e.g. "
         f"alias: nas), or name the server {budget} characters or fewer in your MCP client's "
-        "config."
+        f"config. If it already is, or you use only Claude Code (where {code_budget} "
+        "characters fit), this doesn't apply."
     )
 
 
@@ -1446,6 +1450,9 @@ def create_server(config: AppConfig) -> MCPServer:
     settings = module_settings(config)
     for notice in _unknown_keys(config):
         logger.warning("%s", notice)
+    # Logged by serve too: the client's MCP log is where a broken conversation sends people.
+    if name_problem := server_name_problem(config):
+        logger.warning("%s", name_problem)
     # One read. An ERROR: the model gets other instructions than the config names, and that
     # must show at `logging.level: error` too.
     instructions_text, instructions_problem = _read_instructions_file(config)

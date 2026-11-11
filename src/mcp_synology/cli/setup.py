@@ -334,6 +334,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         and nas_hostname
         and not alias
         and not alias_problem(nas_hostname)
+        and _hostname_alias_fits(config_dict, nas_hostname)
     ):
         use_hostname = click.confirm(
             f'NAS reports hostname "{nas_hostname}". Use as alias?', default=True
@@ -1042,6 +1043,23 @@ async def _logout(client: Any) -> None:
         )
     except Exception as e:  # noqa: BLE001 - TimeoutError included; never fails setup
         logger.debug("Setup logout failed: %s: %s", type(e).__name__, e)
+
+
+def _hostname_alias_fits(config_dict: dict[str, Any], hostname: str) -> bool:
+    """Whether the NAS's host name, as the alias, keeps the server name `setup` suggests within
+    Claude Desktop's limit (#682). If not, it isn't offered, and setup says why: it would be
+    offered and then warned about under the snippet."""
+    from mcp_synology.core.config import AppConfig
+    from mcp_synology.server import server_name_problem, suggested_server_name
+
+    candidate = AppConfig(**{**config_dict, "alias": hostname})
+    if not server_name_problem(candidate):
+        return True
+    click.echo(
+        f"NAS reports hostname {hostname!r}; not offered as the alias: the server name it "
+        f"gives, {suggested_server_name(candidate)!r}, is too long for Claude Desktop."
+    )
+    return False
 
 
 def _emit_claude_desktop_snippet(
