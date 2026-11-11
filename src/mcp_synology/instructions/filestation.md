@@ -8,6 +8,9 @@ PATH FORMAT:
 All file paths start with a shared folder name: /video/..., /music/..., etc.
 Write them out in full: `.` and `..` parts are refused.
 Call list_shares first to discover available shared folders.
+A path a reply shows in quotes ('/photos/Paris, France') is quoted to show its exact
+characters: pass what's inside the quotes. In one written with escapes (\t, \u200b, \\),
+each escape stands for the one character it names.
 
 DOWNLOADING:
 When the user says "download" without specifying a local path, use the default

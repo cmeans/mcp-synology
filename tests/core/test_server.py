@@ -227,6 +227,17 @@ class TestInstructionsPerModule:
         # The core file comes first, then File Station's.
         assert text.index("FILE SIZES") < text.index("FILE STATION")
 
+    def test_path_format_says_what_quotes_and_escapes_mean(self) -> None:
+        """#692 (the maintainer's Q2; pre-QA r2): replies quote a path holding ", ", padding or a
+        hidden character (`shown`), so a model is told what's inside the quotes is the path and
+        an escape is the one character it names."""
+        text = _guidance(_instructions(filestation={"enabled": True, "permission": "read"}))
+        assert (
+            "A path a reply shows in quotes ('/photos/Paris, France') is quoted to show its exact\n"
+            "characters: pass what's inside the quotes. In one written with escapes (\\t, \\u200b,"
+            " \\\\),\neach escape stands for the one character it names."
+        ) in text
+
     @pytest.mark.parametrize("permission", ["write", "admin"])
     def test_file_station_write_guidance_with_write_tools(self, permission: str) -> None:
         text = _guidance(_instructions(filestation={"enabled": True, "permission": permission}))
@@ -2120,7 +2131,10 @@ class TestInstructionComments:
 # and a name or path in separate parameters (album_id / album_name, folder_id / folder_path and
 # the like).
 # +288 by #615: the server instructions' TEXT FROM THE NAS section.
-PAYLOAD_BUDGET_CHARS = 61_400
+# +113 over the budget by #692 (#685, the maintainer's Q2): PATH FORMAT says a path a reply
+# shows in quotes is quoted to show its exact characters, so pass what's inside, and that an
+# escape in one stands for the one character it names.
+PAYLOAD_BUDGET_CHARS = 61_513
 
 
 class TestPayloadBudget:

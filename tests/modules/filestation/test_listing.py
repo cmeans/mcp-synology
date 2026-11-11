@@ -1327,6 +1327,18 @@ class TestRecycleBinSearch:
         assert "desktop.ini" in out
 
     @respx.mock
+    async def test_an_unreadable_subfolder_holding_a_comma_is_quoted(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#685: a list joined by ", " quotes a name holding ", ", so it reads as one."""
+        names = ["a, photos", "b"]
+        tree = {_BIN: [_entry(f"{_BIN}/{n}", isdir=True) for n in names]}
+        errors = {f"{_BIN}/{n}": 407 for n in names}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree, errors))
+        out = await list_recycle_bin(mock_client, share="home", pattern="zzz")
+        assert "Not searched (couldn't be listed): 'a, photos', b." in out, out
+
+    @respx.mock
     async def test_more_than_five_unreadable_subfolders_are_counted(
         self, mock_client: DsmClient
     ) -> None:

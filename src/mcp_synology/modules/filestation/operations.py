@@ -760,11 +760,9 @@ def _with_replaced_note(
     that failed after them; unchanged when nothing is to be said."""
 
     def of(kind: str) -> list[str]:
-        # A name holding ", " is quoted, so a list can't read it as two (QA round 1 on #623).
-        return [
-            _escaped_repr(n) if ", " in n else n
-            for n in (where_it_went(q, went, dest) for q in done if replaced.get(q) == kind)
-        ]
+        # A name holding ", " is quoted by shown(), so a list can't read it as two (QA round 1
+        # on #623, #685).
+        return [where_it_went(q, went, dest) for q in done if replaced.get(q) == kind]
 
     files, folders = of(_REPLACED_FILE), of(_MERGED)
     other, unchecked = of(_FILE_THERE) + of(_FOLDER_THERE), of(_UNCHECKED)

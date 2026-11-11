@@ -645,16 +645,19 @@ def _escaped_repr(path: str) -> str:
 
 
 def shown(path: str) -> str:
-    """``path`` for a message: as is, or quoted (`_escaped_repr`) when a part has whitespace
-    at its start or end, a character that doesn't print (a tab, a no-break space) or one
-    `invisible_problem` refuses, so a stray space or a hidden character is visible once
-    paths are taken exactly (#488, #489, #515).
+    """``path`` for a message: as is, or quoted (`_escaped_repr`, with escapes) when a
+    part has whitespace at its start or end, a character that doesn't print (a tab, a
+    no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
+    character is visible once paths are taken exactly (#488, #489, #515). A path holding
+    ``", "`` and nothing else to show is quoted without escapes, unless it holds a
+    backslash (`_plain_quoted`, #685, below).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
     error or list that names a path the server checked or got
-    from DSM uses ``shown`` (plain unless something would be invisible), and so does a reply
+    from DSM uses ``shown`` (plain unless something would be invisible or the path holds
+    ``", "``), and so does a reply
     naming what a call acted on, successful or not: a delete's, copy's, move's or restore's
     summary and its skipped list (#519), a rename's, upload's, download's or create_folder's
     reply and get_dir_size's title (#688), since those are the paths a model will act on next.
@@ -662,7 +665,11 @@ def shown(path: str) -> str:
     the slash (#688).
     Listings of what's on the NAS (list_files, search_files, list_recycle_bin, get_file_info)
     show the names DSM returns as DSM does, escaped by the client (#604); their titles, which
-    name the path the caller asked about, use ``shown`` (#690)."""
+    name the path the caller asked about, use ``shown`` (#690).
+
+    A path holding ``", "`` is quoted too (#685): replies list paths joined by ``", "``, where
+    a folder named ``a, photos/family`` would read as two paths, ``/s/a`` and the
+    share-relative ``photos/family`` the server accepts."""
     for part in path.split("/"):
         if not part:
             continue
@@ -677,7 +684,26 @@ def shown(path: str) -> str:
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
+    if ", " in path:
+        # Quoted only, with no escapes: nothing else needs showing, so what's inside the
+        # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
+        # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
+        return _plain_quoted(path)
     return path
+
+
+def _plain_quoted(path: str) -> str:
+    """``path`` in quotes that hold it exactly: single quotes, or double when it holds a
+    single one; with both, or with a backslash, `_escaped_repr`'s form. In any quoted path a
+    backslash is then always an escape, as the server instructions say: a plain-quoted
+    ``C:\temp`` would read as ``C:<TAB>emp`` (pre-QA r3 on #692)."""
+    if "\\" in path:
+        return _escaped_repr(path)
+    if "'" not in path:
+        return f"'{path}'"
+    if '"' not in path:
+        return f'"{path}"'
+    return _escaped_repr(path)
 
 
 def normalize_path(path: str) -> str:
@@ -722,10 +748,17 @@ def validate_share_path(path: str, known_shares: set[str]) -> str | None:
     # (DSM 7.1 and 7.2.2; QA R1 on #173). The user home service doesn't: /Home is 408 (#353).
     if share.casefold() not in {s.casefold() for s in known_shares}:
         available = ", ".join(sorted(known_shares)) if known_shares else "(none)"
+        # A path passed back with the quotes a reply showed it in (`shown`): say so, as
+        # advice only, so a share really named that way isn't refused (pre-QA r2 on #692).
+        quotes = (
+            " If the path came from a reply in quotes, pass it without them."
+            if share in ("'", '"')
+            else ""
+        )
         return (
             f"Unknown shared folder {share!r}. "
             f"Available shares: {available}. "
-            f"Use list_shares to see all shared folders."
+            f"Use list_shares to see all shared folders.{quotes}"
         )
     return None
 
