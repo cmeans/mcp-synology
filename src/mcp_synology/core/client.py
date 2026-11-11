@@ -56,7 +56,8 @@ def _log_safe(
     params: dict[str, Any], sensitive: frozenset[str] = _SENSITIVE_PARAMS
 ) -> dict[str, Any]:
     """Params as they may be logged: sensitive names masked, URL secrets redacted (#143), in a
-    list's items too (#458: a URI list was logged as it was)."""
+    list's items too (#458). Today's callers send URI lists as one string (JSON or comma-joined),
+    which was redacted already; a list value is for any caller that doesn't."""
 
     def safe(value: Any) -> Any:
         if isinstance(value, str):

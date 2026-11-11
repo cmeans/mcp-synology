@@ -231,7 +231,7 @@ class TestRedactTitle:
 
 CREDENTIAL_ROWS = [
     # URL userinfo with a character urlsplit or the URL match stops at (#458).
-    pytest.param("https://us er:CANARY01@h.example/x", "er:CANARY01", id="userinfo-space"),
+    pytest.param("https://user:CAN ARY01@h.example/x", "CAN ARY01", id="userinfo-space"),
     pytest.param("https://user:CAN/ARY02@h.example/x", "CAN/ARY02", id="userinfo-slash"),
     pytest.param("https://user:CAN#ARY03@h.example/x", "CAN#ARY03", id="userinfo-hash"),
     pytest.param("https://user%3ACANARY04@h.example/x", "CANARY04", id="userinfo-percent-encoded"),
@@ -278,7 +278,7 @@ def test_a_credential_never_survives(redact: object, text: str, secret: str) -> 
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("https://us er:CANARY01@h.example/x", "https://***@h.example/x"),
+        ("https://user:CAN ARY01@h.example/x", "https://***@h.example/x"),
         ("https://user:CAN/ARY02@h.example/x", "https://***@h.example/x"),
         ("thunder://QUFodHRw", "thunder://***"),
         ("qqdl:Q0FOQVJZMDk=", "qqdl:***"),
@@ -371,8 +371,23 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
         ),
         # A password holding `@` ends at the `@` before the host.
         ("https://user:p@ss:CANARY05@h/x", "https://***@h/x"),
-        # A password with a space; a user name with one.
+        # A password with a space. A user name can't hold one (RFC 3986): what reads as one is
+        # prose after a bare host.
         ("https://user:pw d@h/x", "https://***@h/x"),
+        ("https://us er:pw@h/x", "https://us er:pw@h/x"),
+        (
+            "See https://example.com. Note: write to bob@example.org",
+            "See https://example.com. Note: write to bob@example.org",
+        ),
+        (
+            "Cannot reach https://nas.local now: ask admin@example.com",
+            "Cannot reach https://nas.local now: ask admin@example.com",
+        ),
+        # An IPv6 host's colons aren't userinfo's; a password before one is.
+        ("https://[::1]:5001/photo/@name", "https://[::1]:5001/photo/@name"),
+        ("https://u:p w@[::1]:5001/x", "https://***@[::1]:5001/x"),
+        # A Windows drive isn't a user name.
+        ("file://C:/Users/me@corp/x", "file://C:/Users/me@corp/x"),
         # Prose after a bare host: neither "nas.local, contact" nor another URL is userinfo.
         (
             "Failed to reach https://nas.local, contact: admin@example.com",
@@ -433,6 +448,9 @@ def test_names_that_look_like_links_are_kept(text: str) -> None:
         ("thunder://QUFodHRw", "thunder://***"),
         ("thunder://***", "thunder://***"),
         ("Thunder:Struck.mp3", "Thunder:Struck.mp3"),
+        # Punctuation after a `//` link ends it (a sentence, a Markdown link).
+        ("thunder://QUFodHRw=.", "thunder://***."),
+        ("thunder://QUFodHRw=)", "thunder://***)"),
     ],
 )
 def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
@@ -451,7 +469,24 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ('{"token": "' + "A" * 5000 + 'TAIL"}', '{"token": "***"}'),
         # Unterminated, to the line's end.
         ('{"passwd": "CANARY', '{"passwd": "***'),
+        # A number.
+        ('{"otp_code": 123456}', '{"otp_code": ***}'),
+        ("{'otp_code': 123456, 'x': 1}", "{'otp_code': ***, 'x': 1}"),
+        # A wrapped link in a sentence or a Markdown link.
+        ("see thunder://QUFodHRw=.", "see thunder://***."),
+        ("[link](thunder://QUFodHRw=)", "[link](thunder://***)"),
     ],
 )
 def test_more_credential_forms(text: str, expected: str) -> None:
     assert redact_secrets(text) == expected
+
+
+def test_log_safe_redacts_list_items() -> None:
+    """`_log_safe` redacts a list value's items (#458). Today's callers send URI lists as one
+    string, redacted already; this covers a caller that doesn't."""
+    from mcp_synology.core.client import _log_safe
+
+    logged = _log_safe({"uri": ["https://u:CANARY@h/x", "magnet:?xt=urn:btih:a&tr=x"], "n": 2})
+    assert "CANARY" not in str(logged)
+    assert logged["n"] == 2
+    assert logged["uri"][0] == "https://***@h/x"

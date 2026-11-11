@@ -10,7 +10,8 @@ Rules, chosen so the host stays visible and nothing secret-shaped survives:
 
 - userinfo becomes ``***@``: found by a scan after each ``://`` (a 256-character window on one line,
   ending at the next ``://``), ending at the first ``@`` followed by a whole host, else the last
-  ``@`` before a host, so a password holding a space, ``/``, ``#`` or ``@`` is masked
+  ``@`` before a host, so a password holding a space, ``/``, ``#`` or ``@`` is masked; a user
+  name holds no whitespace or brackets (RFC 3986), so prose and IPv6 hosts aren't userinfo
 - a host followed by text a host can't hold (``c&token=…``) keeps the host and masks the rest,
   and ``&key=value`` in a path is masked as a query item (#466)
 - every query value becomes ``***`` (keys are kept); a bare query item becomes ``***``
@@ -91,11 +92,11 @@ _AMP_ITEM = re.compile(r"&([^\s=&?;#/]+)=[^\s&;#/]*")
 
 # Wrapped links in free text, masked whole with their scheme kept.
 _WRAPPED_IN_TEXT = re.compile(
-    r"""(?i)(?<![^\s,"'<>(\[=])(thunder|flashget|qqdl):(//)?[A-Za-z0-9+=][A-Za-z0-9+/=]*"""
-    r"""(?=[\s,"'<>&]|$)"""
+    r"""(?i)(?<![^\s,"'<>(\[=])(thunder|flashget|qqdl):"""
+    r"""(?:(//)[A-Za-z0-9+=][A-Za-z0-9+/=]*|[A-Za-z0-9+=][A-Za-z0-9+/=]*(?=[\s,"'<>&]|$))"""
 )
 # A wrapped link's body: base64, not starting with `/` (so `//` is the separator, never body).
-_WRAPPED_BODY = re.compile(r"(?://)?[A-Za-z0-9+=][A-Za-z0-9+/=]*")
+_WRAPPED_BODY = re.compile(r"(//)?[A-Za-z0-9+=][A-Za-z0-9+/=]*")
 
 # Credential parameters, as `key=value` in a query, a form body or prose, or as a JSON member.
 # The keys DSM and this server use for a password, a session, a 2FA code or device, and the
@@ -112,8 +113,10 @@ _CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<![A-Za-z0-9_])({_KEY}=)[^\s&;#"'<>]+"
 _CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
-_CREDENTIAL_JSON = re.compile(rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}}")(?:[^"\\\n]|\\.)+("?)""")
-_CREDENTIAL_REPR = re.compile(rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}}')(?:[^'\\\n]|\\.)+('?)""")
+# A number is masked too (`{"otp_code": 123456}`). Not a bare `key: value` in YAML or prose:
+# `password: try again` is a sentence as often as a secret.
+_CREDENTIAL_JSON = re.compile(rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}})("(?:[^"\\\n]|\\.)*"?|-?\d+)""")
+_CREDENTIAL_REPR = re.compile(rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}})('(?:[^'\\\n]|\\.)*'?|-?\d+)""")
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
 # How many `@`s in one window the scan tries, last first: a password holds few, and a cap keeps
@@ -139,13 +142,15 @@ def _is_userinfo(span: str) -> bool:
     a plain ``user`` with no whitespace, ``/``, ``?`` or ``#`` (``https://site/@name`` is a
     path). The scan passes a non-empty span from one line.
     """
-    if "://" in span:
-        return False  # another URL starts before this `@` (`http://h then ftp://u:p@x`)
     user, colon, rest = span.partition(":")
     if not colon:
-        return not any(c.isspace() or c in "/?#" for c in span)
-    if any(c in "/?#" for c in user) or ", " in user:
-        # A path before the colon, or prose (`https://nas.local, contact: admin@x`).
+        return not any(c.isspace() or c in "/?#[]" for c in span)
+    # A user name holds no whitespace (RFC 3986), path or bracket: what does is a path before
+    # the colon, prose (`https://nas.local now: ask admin@x`) or an IPv6 host (`[::1]:5001`).
+    if any(c.isspace() or c in "/?#[]" for c in user):
+        return False
+    if rest[:1].isspace() or (len(user) == 1 and rest[:1] == "/"):
+        # Prose after a colon, or a Windows drive (`file://C:/Users/me@corp`).
         return False
     return _PORT_THEN_PATH.match(rest) is None
 
@@ -214,8 +219,16 @@ def redact_secrets(text: str) -> str:
     text = _mask_userinfo(_mask_wrapped(text))
     text = _CREDENTIAL_PARAM.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
-    text = _CREDENTIAL_JSON.sub(lambda m: f"{m.group(1)}{MASK}{m.group(2)}", text)
-    return _CREDENTIAL_REPR.sub(lambda m: f"{m.group(1)}{MASK}{m.group(2)}", text)
+    text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
+    return _CREDENTIAL_REPR.sub(lambda m: m.group(1) + _masked_value(m.group(2), "'"), text)
+
+
+def _masked_value(value: str, quote: str) -> str:
+    """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number."""
+    if not value.startswith(quote):
+        return MASK
+    closed = len(value) > 1 and value.endswith(quote) and not value.endswith("\\" + quote)
+    return f"{quote}{MASK}{quote}" if closed else f"{quote}{MASK}"
 
 
 def _is_token(run: str) -> bool:
@@ -269,12 +282,13 @@ def redact_url(url: str) -> str:
     if url[: len("magnet:?")].lower() == "magnet:?":  # any case, as DSM may accept it
         return _redact_magnet(url)
     scheme, colon, rest = url.partition(":")
-    if (
-        colon
-        and scheme.lower() in _WRAPPED
-        and (_WRAPPED_BODY.fullmatch(rest) or rest in (MASK, f"//{MASK}"))
-    ):
-        return f"{scheme}:{'//' if rest.startswith('//') else ''}{MASK}"
+    if colon and scheme.lower() in _WRAPPED:
+        if rest.startswith((MASK, f"//{MASK}")):
+            return url  # masked already (`redact_urls` masks wrapped links first)
+        body = _WRAPPED_BODY.match(rest)
+        # With `//` the body ends at punctuation (`thunder://…=.`); without, it's the whole rest.
+        if body and (body.group(1) or body.end() == len(rest)):
+            return f"{scheme}:{body.group(1) or ''}{MASK}{rest[body.end() :]}"
     if "://" not in url:
         if colon and re.fullmatch(_SCHEME, scheme) and ("?" in rest or "&" in rest):
             # An opaque link such as `ed2k:foo?token=…` or `ed2k:foo&token=…`: its query is
