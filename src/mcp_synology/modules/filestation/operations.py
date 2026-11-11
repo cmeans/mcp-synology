@@ -1935,8 +1935,9 @@ async def restore_from_recycle_bin(
     share_name = share.strip("/").split("/")[0]
     # Normalized once, so the plan's landings and the items' are the same text (pre-QA r2 on
     # #684: `/video/Restored/` planned one landing and ran another).
-    if dest_folder is not None:
-        dest_folder = ResolvedPath(normalize_path(dest_folder))
+    # An empty one is no destination (each item goes back where it was), not the root (pre-QA
+    # r3 on #694: normalize_path("") is "/").
+    dest_folder = ResolvedPath(normalize_path(dest_folder)) if dest_folder else None
     # One progress token per tool call, shared by every destination's task (#245).
     on_progress = MonotonicProgress.wrap(on_progress)
 

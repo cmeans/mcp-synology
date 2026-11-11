@@ -1655,6 +1655,17 @@ class TestToolWiring:
         assert "'video/sub/#recycle'" in error["message"], error
         assert error["value"] == "video/sub/#recycle", error
 
+    async def test_a_restores_landing_refusal_quotes_the_callers_own_text(self) -> None:
+        """#694 (pre-QA r3): a restore's landing refusal quotes the item as given."""
+        fn = await _tool("restore_from_recycle_bin", _FakeClient({"/video/#recycle/sub/#recycle"}))
+        with pytest.raises(ToolError) as exc:
+            await fn(
+                ctx=_fake_mcp_ctx(), share="video", paths=["sub/#recycle"], dest_folder="/video"
+            )
+        error = _error(exc)
+        assert "'sub/#recycle'" in error["message"], error
+        assert error["value"] == "sub/#recycle", error
+
     async def test_rename_to_recycle_at_a_shares_top(self) -> None:
         fn = await _tool("rename")
         with pytest.raises(ToolError) as exc:

@@ -1318,7 +1318,7 @@ class TestRestoreFromRecycleBin:
         assert "[+]" in result
 
     @respx.mock
-    @pytest.mark.parametrize("dest", ["/video/Restored/", "video/Restored"])
+    @pytest.mark.parametrize("dest", ["/video/Restored/", "video/Restored", ""])
     async def test_restore_to_a_dest_written_another_way(
         self, mock_client: DsmClient, dest: str
     ) -> None:
