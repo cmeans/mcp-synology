@@ -468,7 +468,9 @@ async def test_matrix(
         rest = [x.source for x in outcome.not_started()]
         if rest and not all(shown(p) in text for p in rest):
             broken.add("names_not_started")
-    ran = outcome.items[0].state == "done" or (last is not None and last.started)
+    ran = outcome.items[0].state == "done" or (
+        last is not None and (last.started or last.state == "may_have_started")
+    )
     if error is not None and ran and error.get("retryable"):
         # Something ran, an earlier item or this one's own task: the same call again isn't the
         # way to retry (#452; the maintainer's Q5 on #512).
@@ -1142,7 +1144,65 @@ async def test_a_busy_failure_after_its_task_started_says_to_check_first(
         await tool.call(mock_client, TaskRecords())
     error = json.loads(str(raised.value))["error"]
     assert error["retryable"] is False
+    # Where its task may have left something: a delete's path, a copy's destination (its
+    # source doesn't change), a move's or restore's source and destination (pre-QA r3).
+    where = {
+        "delete": tool.sources[0],
+        "copy": tool.dests[0],
+    }.get(tool.kind, f"{tool.sources[0]} and {tool.dests[0]}")
     assert error["suggestion"] == (
-        "The NAS is too busy. Wait and retry. It may be partly done: check "
-        f"{tool.sources[0]} with list_files before running it again."
+        f"The NAS is too busy. Wait and retry. It may be partly done: check {where} with "
+        "list_files before running it again."
     ), error["suggestion"]
+
+
+@pytest.mark.parametrize("tool", [t for t in TOOLS if t.kind != "delete"], ids=lambda t: t.name)
+async def test_a_refused_item_after_others_has_no_check_of_its_own(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool
+) -> None:
+    """Pre-QA r3 on #687: a landing refusal of an item that never started gave "check <it> with
+    list_files first", meant for an item that may be done. It says what to leave out only."""
+    dsm = FakeDsm({src: PathScript() for src in tool.sources})
+    name = tool.sources[1].rsplit("/", 1)[-1]
+    # As the matrix's landing_refused cell: a task of another call, landing in item 1's folder
+    # under its name, listed once item 0 has started.
+    dsm.later_tasks.append(
+        (
+            1,
+            {
+                "finished": False,
+                "taskid": "FileStation_Other",
+                "api": "SYNO.FileStation.CopyMove",
+                "params": {
+                    "path": [f"/s/other/{name}"],
+                    "dest_folder_path": tool.dests[1],
+                    "overwrite": True,
+                    "remove_src": False,
+                },
+            },
+        )
+    )
+    dsm.mount(respx_mock)
+    with pytest.raises(ToolError) as raised:
+        await tool.call(mock_client, TaskRecords())
+    suggestion = json.loads(str(raised.value))["error"]["suggestion"]
+    assert "When retrying, leave out the paths already" in suggestion, suggestion
+    assert "first." not in suggestion.split("When retrying", 1)[1], suggestion
+
+
+async def test_a_restores_recreated_note_quotes_a_padded_folder(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA r3 on #687: the Re-created line quotes a padded folder, as the header does."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    FakeDsm({src: PathScript() for src in tool.sources}).mount(respx_mock)
+
+    async def recreated(client: Any, destinations: Any) -> tuple[list[str], list[str]]:
+        return ["/s/o2 "], []
+
+    monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
+    text = await tool.call(mock_client, TaskRecords())
+    assert f"Re-created {'/s/o2 '!r} (no longer there) to restore into." in text, text

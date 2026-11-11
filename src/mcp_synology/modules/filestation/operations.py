@@ -1287,6 +1287,14 @@ class CopyMoveAdapter:
             failing=outcome.item.source,
         )
 
+    def check_clause(self, item: Item) -> str:
+        # A copy's source doesn't change: what it may have left is at the destination (pre-QA
+        # r3 on #687); a move's or restore's may be in either.
+        dest = shown(item.dest or self.dest)
+        if self.remove_src:
+            return f"check {shown(item.source)} and {dest} with list_files"
+        return f"check {dest} with list_files"
+
     def retry_advice(self) -> str:
         past = _PAST_TENSE.get(self.operation, "processed")
         if self.remove_src:
@@ -1531,6 +1539,9 @@ class DeleteAdapter:
 
     def progress_text(self, outcome: ItemOutcome) -> str:
         return _already_done("Delete", self.deleted)
+
+    def check_clause(self, item: Item) -> str:
+        return f"check {shown(item.source)} with list_files"
 
     def retry_advice(self) -> str:
         # The same call again is refused (the deleted paths are missing): only the items not
@@ -1914,7 +1925,7 @@ async def restore_from_recycle_bin(
             else await _recreate_missing_folders(client, restore_destinations)
         )
         note = (
-            f"\nRe-created {', '.join(recreated)} (no longer there) to restore into."
+            f"\nRe-created {', '.join(map(shown, recreated))} (no longer there) to restore into."
             if recreated
             else ""
         )

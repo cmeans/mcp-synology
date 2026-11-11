@@ -251,6 +251,12 @@ class TaskAdapter(Protocol):
         """What to leave out when retrying after some items were done (#480, #482)."""
         ...
 
+    def check_clause(self, item: Item) -> str:
+        """Where to look for what ``item``'s task may have done, as ``check … with list_files``:
+        a delete's path; a copy's destination (its source doesn't change); a move's or
+        restore's source and destination (pre-QA r3 on #687)."""
+        ...
+
     def amend(self, error: ToolError) -> ToolError:
         """The adapter's last note on a failure after items were done (copy: what they
         replaced, #620)."""
@@ -617,48 +623,58 @@ def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcom
         adapter.cause(outcome)
     except ToolError as e:
         error = e
-    failed = outcome.item.source
+    item = outcome.item
     done = adapter.progress_text(outcome)
     rest = [x.source for x in batch.not_started()]
     refused = _refused_path(error)
-    if refused is not None and refused != failed and refused in rest:
+    if refused is not None and refused != item.source and refused in rest:
         # A refusal of a later item, checked before this one's start (a landing clash, #587):
         # that's the item it names; this one wasn't started either.
-        rest = [failed, *(r for r in rest if r != refused)]
-        failed = refused
+        rest = [item.source, *(r for r in rest if r != refused)]
+        item = Item(refused, item.dest, item.group)
+    # Its own task ran or may have (a start with no answer): it may be partly done. A refusal
+    # of ours (a ToolError before its start) did nothing to it, so there's nothing to check.
+    ran = outcome.started or outcome.state == "may_have_started"
+    ours = isinstance(outcome.error, ToolError) and not outcome.started
+    check = None if ours else adapter.check_clause(item)
     if done or rest:
-        error = _with_progress(error, failed, done, adapter.retry_advice())
+        error = _with_progress(error, item.source, done, adapter.retry_advice(), check)
         if done:
             error = adapter.amend(error)
         error = _with_not_started(error, rest)
-    if outcome.started:
-        # Its own task ran, maybe partly: not retryable, whatever the cause's flag (402 and 421
-        # say to wait and retry, #490), as for a call where earlier items were done (Q5). The
-        # advice says why, unless an earlier item's note already says to check (pre-QA r2).
-        error = _not_retryable(error, None if done else failed)
+    if ran:
+        # Not retryable, whatever the cause's flag (402 and 421 say to wait and retry, #490), as
+        # for a call where earlier items were done (Q5). The advice says why, unless an earlier
+        # item's note already says to check (pre-QA r2).
+        error = _not_retryable(error, None if done else check)
     return _with_stop(error, outcome)
 
 
+def _add_advice(details: dict[str, Any], note: str) -> None:
+    """``note`` added to an error's own advice, never in place of it (QA round 3 on #480): after
+    it, or alone; first when the advice ends in a list (418's characters to avoid), so no
+    punctuation is read as part of the list."""
+    original = str(details.get("suggestion") or "").strip()
+    if not original:
+        details["suggestion"] = note
+    elif original[-1] in ".!?)":
+        details["suggestion"] = f"{original} {note}"
+    else:
+        details["suggestion"] = f"{note} {original}"
+
+
 def _not_retryable(error: ToolError, check: str | None) -> ToolError:
-    """``error`` not retryable; with ``check``, advice to check that path first, since its task
-    may be partly done."""
+    """``error`` not retryable; with ``check`` (an adapter's `check_clause`), advice to check
+    first, since its task may be partly done."""
     try:
         body = json.loads(str(error))
         details = body["error"]
     except (ValueError, KeyError, TypeError):
         return error
     details["retryable"] = False
-    original = str(details.get("suggestion") or "").strip()
-    if check is not None and not CHECKS_WITH_LIST_FILES.search(original):
-        note = (
-            f"It may be partly done: check {shown(check)} with list_files before running it again."
-        )
-        if not original:
-            details["suggestion"] = note
-        elif original[-1] in ".!?)":
-            details["suggestion"] = f"{original} {note}"
-        else:
-            details["suggestion"] = f"{note} {original}"
+    advice = str(details.get("suggestion") or "")
+    if check is not None and not CHECKS_WITH_LIST_FILES.search(advice):
+        _add_advice(details, f"It may be partly done: {check} before running it again.")
     return rewrapped_error(body)
 
 
@@ -672,7 +688,9 @@ def _refused_path(error: ToolError) -> str | None:
     return value if details.get("param") == "paths" and isinstance(value, str) else None
 
 
-def _with_progress(error: ToolError, failed: str, done: str, leave_out: str) -> ToolError:
+def _with_progress(
+    error: ToolError, failed: str, done: str, leave_out: str, check: str | None
+) -> ToolError:
     """``error`` with which item failed and what was done before it (``done``), so the user
     can tell what's left (QA round 1 on #480)."""
     try:
@@ -697,20 +715,14 @@ def _with_progress(error: ToolError, failed: str, done: str, leave_out: str) -> 
         details["retryable"] = False
         # A note that reads after any advice, or alone (QA round 4 on #480): no "Then", no
         # second "retry", and a check first, since the failed item may be done already, unless
-        # the advice already says to check with list_files (QA round 5).
-        original = str(details.get("suggestion") or "").strip()
+        # the advice already says to check with list_files (QA round 5), or the item is one this
+        # server refused before its start (pre-QA r3 on #687: nothing of it can be done).
         retry = f"When retrying, leave out {leave_out}"
-        if not CHECKS_WITH_LIST_FILES.search(original):
-            retry += f", and check {shown(failed)} with list_files first"
-        retry += "."
-        if not original:
-            details["suggestion"] = retry
-        elif original[-1] in ".!?)":
-            details["suggestion"] = f"{original} {retry}"
-        else:
-            # Advice that ends in a list (418's characters to avoid) goes last, so no
-            # punctuation is read as part of it.
-            details["suggestion"] = f"{retry} {original}"
+        if check is not None and not CHECKS_WITH_LIST_FILES.search(
+            str(details.get("suggestion") or "")
+        ):
+            retry += f", and {check} first"
+        _add_advice(details, retry + ".")
     details["message"] = message
     return rewrapped_error(body)
 

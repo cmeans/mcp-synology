@@ -39,6 +39,7 @@ from mcp_synology.modules.filestation.paths import (
     resolve_bin_items,
     resolve_paths,
 )
+from tests.modules.filestation.formatter import with_progress_so_far as _with_progress_so_far
 from tests.modules.filestation.test_register import _fake_mcp_ctx, _make_ctx
 from tests.path_words import PATHLIKE_WORDS
 
@@ -2170,17 +2171,3 @@ def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
     with pytest.raises(ToolError) as exc:
         resolve_bin_items("video", ["Shows/a\nb"], "paths")
     assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]
-
-
-def _with_progress_so_far(error: Any, failed: str, done: list[str], rest: list[str]) -> Any:
-    """A delete's failure through the batch formatter, as `DeleteAdapter` words it (#512 PR 3)."""
-    from mcp_synology.modules.filestation.batch import _with_not_started, _with_progress
-    from mcp_synology.modules.filestation.operations import _already_done
-
-    out = _with_progress(
-        error,
-        failed,
-        _already_done("Delete", done),
-        "the paths already deleted (the same call would be refused)",
-    )
-    return _with_not_started(out, rest)

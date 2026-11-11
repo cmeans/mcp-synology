@@ -28,6 +28,7 @@ from mcp_synology.modules.filestation.operations import (
 )
 from mcp_synology.modules.filestation.tasks import Handle, HandleKind, TaskRecords
 from tests.conftest import BASE_URL
+from tests.modules.filestation.formatter import with_progress_so_far as _with_progress_so_far
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -7521,17 +7522,3 @@ class TestSourcesDsmWontShow:
             "be in the recycle bin. Not started: "
         ) in message, message
         assert message.endswith("Not started: /w/src/b. Not started: c."), message
-
-
-def _with_progress_so_far(error: Any, failed: str, done: list[str], rest: list[str]) -> Any:
-    """A delete's failure through the batch formatter, as `DeleteAdapter` words it (#512 PR 3)."""
-    from mcp_synology.modules.filestation.batch import _with_not_started, _with_progress
-    from mcp_synology.modules.filestation.operations import _already_done
-
-    out = _with_progress(
-        error,
-        failed,
-        _already_done("Delete", done),
-        "the paths already deleted (the same call would be refused)",
-    )
-    return _with_not_started(out, rest)
