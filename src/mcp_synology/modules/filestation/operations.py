@@ -26,6 +26,7 @@ from mcp_synology.core.formatting import (
     format_size,
     format_status,
     holds_escape,
+    rewrapped_error,
     synology_error_response,
 )
 from mcp_synology.modules.filestation.batch import (
@@ -390,7 +391,7 @@ def _with_progress_so_far(
     if rest:
         message = _unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
     body["error"]["message"] = message
-    return ToolError(json.dumps(body))
+    return rewrapped_error(body)
 
 
 def _already_done(
@@ -883,7 +884,7 @@ def _with_replaced_note(
         body["error"]["message"] = f"{message[:end]}. {added}{message[end:] or '.'}"
     else:
         body["error"]["message"] = f"{_unstop(message)}. {added}."
-    return ToolError(json.dumps(body))
+    return rewrapped_error(body)
 
 
 # What a source's name met at the destination (#620): a file it replaced (`file`), a folder it

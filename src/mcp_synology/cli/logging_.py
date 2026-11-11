@@ -8,6 +8,21 @@ import sys
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
+
+class RedactingFormatter(logging.Formatter):
+    """A formatter that masks credentials in the whole formatted record, traceback included
+    (#514): `core.redaction.redact_secrets` on what `logging.Formatter` produces, so a URL with
+    userinfo in an exception's text or a `passwd=` in a message can't reach stderr or the log
+    file. Every handler the CLI sets up uses it (`tests/test_redaction_sinks.py`). One path it
+    doesn't cover: a malformed logging call (the wrong number of arguments) makes the handler
+    print the raw arguments through `Handler.handleError`, which no formatter sees."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        from mcp_synology.core.redaction import redact_secrets
+
+        return redact_secrets(super().format(record))
+
+
 # More than a config load usually logs at any level; the cap matters for a `setup` or `check -v`
 # that never replays them.
 _EARLY_RECORDS_CAP = 1000
@@ -77,7 +92,12 @@ def _init_early_logging(*, verbose: bool = False) -> None:
             except EnvVarError:
                 name = "info"
         level = getattr(logging, name.upper())
-    logging.basicConfig(level=level, format=_LOG_FORMAT, stream=sys.stderr)
+    stderr = logging.StreamHandler(sys.stderr)
+    stderr.setFormatter(RedactingFormatter(_LOG_FORMAT))
+    logging.basicConfig(level=level, handlers=[stderr])
+    # Python's warnings (the SDK's deprecation warnings among them) go through logging too, so
+    # they're redacted like every record, not written to stderr as they are (QA r1 on #681).
+    logging.captureWarnings(True)
     _start_early_records()
 
 
@@ -91,7 +111,7 @@ def _configure_logging(level: str, log_file: str | None = None) -> None:
 
     if log_file:
         file_handler = logging.FileHandler(os.path.expanduser(log_file), encoding="utf-8")
-        file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        file_handler.setFormatter(RedactingFormatter(_LOG_FORMAT))
         for record in early:
             if record.levelno >= root.level or getattr(record, "show_always", False):
                 file_handler.handle(record)
