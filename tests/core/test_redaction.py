@@ -412,10 +412,18 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
         ),
         ("https://nas,ftp://u:p@h/x", "https://nas,ftp://***@h/x"),
         # A backslash before `@` reads as `/` to a browser: not userinfo (WHATWG).
-        ("https://evil.example\\@nas.local/x", "https://evil.example\\@nas.local/x"),
-        ("https://evil.com:443\\@nas.local/", "https://evil.com:443\\@nas.local/"),
-        ("https://evil.com:\\@nas.local/", "https://evil.com:\\@nas.local/"),
-        ("file://C:\\Users\\me@corp\\x", "file://C:\\Users\\me@corp\\x"),
+        # A backslash before `@` (not a JSON escape) makes the host ambiguous (WHATWG reads it as
+        # `/`): the whole authority is masked, never left as it is (QA round 1 on #680).
+        ("https://evil.example\\@nas.local/x", "https://***/x"),
+        ("https://evil.com:443\\@nas.local/", "https://***/"),
+        ("https://evil.com:\\@nas.local/", "https://***/"),
+        ("file://C:\\Users\\me@corp\\x", "file://***"),
+        ("ftp://CORP\\jdoe:S3cr3tPw@ftp.example/x", "ftp://***/x"),
+        # A JSON escape is one character of the user name (`json.dumps` of a URI list).
+        (
+            '["https://j\\u00f6rg:S3cr3tPw@nas.example/file.iso"]',
+            '["https://***@nas.example/file.iso"]',
+        ),
         # A port that's only a colon.
         ("https://u:p@h:/x", "https://***@h:/x"),
         # A comma inside a password is part of the URL.
@@ -495,11 +503,14 @@ def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
         "Report password=draft.docx",
         "token=2024",
         "x-api-key=S",
+        # A paging cursor and Dev's fixed device label aren't credentials (QA round 1 on #680).
+        "?page_token=abc&next_token=d",
+        "?device_name=MCPSynology",
         # ed2k without `//` is a link only right after a comma (pre-QA r7 on #514).
         "Not found: /music/My ed2k:Song#1.mp3",
         "/x/Best of ed2k:Hits?vol=2.mp3",
-        # A cookie's `uid` isn't its `id`; a `did` after `; ` isn't a query item.
-        "Cookie: uid=1; did=2",
+        # A cookie's `uid` isn't its `id`.
+        "Cookie: lang=en; uid=1; x=1",
         "thunder:///x",
         # An IDN host is a host.
         "https://bücher.example/announce",
@@ -557,6 +568,19 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         # DSM's 2FA device token in a login reply, and the session as its `id` cookie.
         ('{"data": {"did": "DEVTOKEN", "sid": "S1"}}', '{"data": {"did": "***", "sid": "***"}}'),
         ("Cookie: lang=en; id=SESSION; x=1", "Cookie: lang=en; id=***; x=1"),
+        # Every credential item of a cookie, in a header line, a dict repr or JSON (QA r1 on #680).
+        ("Cookie: id=a; did=D1d", "Cookie: id=***; did=***"),
+        ("{'Cookie': 'id=SEC'}", "{'Cookie': 'id=***'}"),
+        ('{"Cookie": "id=SEC; did=D1d"}', '{"Cookie": "id=***; did=***"}'),
+        ("Headers({'cookie': 'id=SEC'})", "Headers({'cookie': 'id=***'})"),
+        # A quoted value however long, escaped JSON, wide spacing.
+        ('?passwd="' + "a" * 5000 + 'TAIL"', '?passwd="***"'),
+        ('{\\"passwd\\":\\"SEC\\"}', '{\\"passwd\\":\\"***\\"}'),
+        ('{"passwd":      "SEC"}', '{"passwd":      "***"}'),
+        ("X-SYNO-Token:      SEC", "X-SYNO-Token:      ***"),
+        # A percent-encoded wrapped link, inside a URL's query too.
+        ("thunder://QUFodHRw%2BOi8vdTpDQU5BUlk=", "thunder://***"),
+        ("?u=thunder%3A%2F%2FQUFodHRw", "?u=thunder%3A%2F%2F***"),
         ("candid=1", "candid=1"),
         # A placeholder for the user to fill in isn't a secret (`setup`'s client snippet).
         ('"SYNOLOGY_PASSWORD": "<your password>"', '"SYNOLOGY_PASSWORD": "<your password>"'),
