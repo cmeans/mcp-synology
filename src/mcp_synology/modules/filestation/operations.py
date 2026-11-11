@@ -1224,7 +1224,7 @@ class CopyMoveAdapter:
         ran = {name_key(path) for path in [*placed, *self.skipped]}
         alike = [q for q in self.group[self.group.index(p) + 1 :] if name_key(q) in ran]
         if alike:
-            # #580: "Run them again" with overwrite=true would replace what it placed.
+            # #580: running them with overwrite=true would replace what it placed.
             named = ", ".join(map(_escaped_repr, alike))
             reply += (
                 f"\nNamed like one this call already ran: {named}. "
