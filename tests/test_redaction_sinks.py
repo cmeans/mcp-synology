@@ -201,6 +201,68 @@ def test_an_input_request_is_scrubbed() -> None:
     assert _scrubbed_model(state, "t", "input request").request_state == state.request_state
 
 
+async def test_call_tool_scrubs_an_input_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through the sink itself, not only its helper (QA round 2 on #681): an elicitation's
+    message and a sampling message are masked; what the client hands back or opens isn't."""
+    server = _SynologyServer("canary")
+    link = "https://auth.example/connect?state=abc&token=T0K"
+    state = '{"token": "opaque-state-123"}'
+    request = InputRequiredResult.model_validate(
+        {
+            "inputRequests": {
+                "form": {
+                    "method": "elicitation/create",
+                    "params": {
+                        "mode": "form",
+                        "message": f"Sign in at {LEAKS[0]}",
+                        "requestedSchema": {"type": "object", "properties": {}},
+                    },
+                },
+                "link": {
+                    "method": "elicitation/create",
+                    "params": {"mode": "url", "message": f"Open {LEAKS[1]}", "url": link},
+                },
+                "sample": {
+                    "method": "sampling/createMessage",
+                    "params": {
+                        "messages": [
+                            {"role": "user", "content": {"type": "text", "text": LEAKS[2]}}
+                        ],
+                        "maxTokens": 10,
+                    },
+                },
+            },
+            "requestState": state,
+        }
+    )
+
+    async def asks(name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        return request
+
+    monkeypatch.setattr(server, "_call_tool", asks)
+    result = await server.call_tool("asks", {})
+    assert isinstance(result, InputRequiredResult)
+    dumped = json.dumps(result.model_dump(mode="json", by_alias=True))
+    assert CANARY not in dumped
+    assert result.request_state == state
+    assert link in dumped
+
+
+async def test_a_protocol_errors_own_args_are_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The client rebuilds the error from the wire; on the server, its `args` (what `repr`,
+    a traceback or a log of it shows) are scrubbed too (QA round 2 on #681)."""
+    server = _SynologyServer("canary")
+
+    async def fails(name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        raise MCPError(-32603, f"failed {LEAKS[0]}", {"url": LEAKS[1]})
+
+    monkeypatch.setattr(server, "_call_tool", fails)
+    with pytest.raises(MCPError) as raised:
+        await server.call_tool("fails", {})
+    assert CANARY not in repr(raised.value)
+    assert CANARY not in repr(raised.value.args)
+
+
 def test_a_url_elicitation_keeps_its_link() -> None:
     from mcp_synology.server import _passed_through
 
