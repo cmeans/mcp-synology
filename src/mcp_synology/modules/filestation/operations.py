@@ -1269,8 +1269,10 @@ class CopyMoveAdapter:
                 retryable=False,
                 param="paths",
                 value=p,
-                suggestion="Check with list_files, or file_task with no handle, before "
-                "running it again.",
+                # Where it may have left something, not its source: a copy doesn't change it
+                # (pre-QA r4 on #687).
+                suggestion=f"{self.check_clause(outcome.item).capitalize()}, or file_task with "
+                "no handle, before running it again.",
             )
         if isinstance(e, ToolError):
             raise e
@@ -1691,6 +1693,7 @@ async def _delete_summary(
     shares_with_recycle: set[str] = set()
     shares_without_recycle: set[str] = set()
     shares_unknown: set[str] = set()  # DSM didn't answer
+    shares_late: set[str] = set()  # not checked: the call's wait was over (`bounded_summary`)
     shares_unclear: set[str] = set()  # answered, but not whether the bin is on
 
     # A home bin through /homes follows the homes share's own bin (#610), checked once per
@@ -1750,7 +1753,7 @@ async def _delete_summary(
                     shares_without_recycle.add(share_name)
                 continue
             if not probe and share_name not in recycle_bin_status:
-                shares_unknown.add(share_name)
+                shares_late.add(share_name)
                 continue
             try:
                 enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
@@ -1768,7 +1771,12 @@ async def _delete_summary(
     # Shares where this call deleted from a bin for good (a home bin kept in /homes's isn't).
     bin_shares = {key.split("/")[0] for key in in_bin if key not in kept_bins | unknown_bins}
     has_recycle = bool(
-        shares_with_recycle or shares_unknown or shares_unclear or kept_bins or unknown_bins
+        shares_with_recycle
+        or shares_unknown
+        or shares_late
+        or shares_unclear
+        or kept_bins
+        or unknown_bins
     )
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
@@ -1836,6 +1844,12 @@ async def _delete_summary(
         f"\nCouldn't check whether /{share} has its recycle bin enabled (DSM didn't answer); "
         "list_recycle_bin shows whether these files can be recovered."
         for share in sorted(shares_unknown)
+    )
+    # Cut short by this server, not DSM: the call's wait was over (pre-QA r4 on #687).
+    lines.extend(
+        f"\nDidn't check whether /{share} has its recycle bin enabled (the call's wait was over); "
+        "list_recycle_bin shows whether these files can be recovered."
+        for share in sorted(shares_late)
     )
     lines.extend(
         f"\nCouldn't check whether /{share} has its recycle bin enabled; "

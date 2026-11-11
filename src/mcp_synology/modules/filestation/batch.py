@@ -588,7 +588,13 @@ async def bounded_summary(
     try:
         return await asyncio.wait_for(make(True), wait)
     except TimeoutError:
-        logger.debug("%s: the summary's checks didn't finish within the call's wait", label)
+        # A WARNING: the reply says a check got no answer in time, and the cause is ours.
+        logger.warning(
+            "%s: the summary's checks didn't finish within what was left of the call's wait "
+            "(%.1f s); replying without them",
+            label,
+            wait,
+        )
     return await make(False)
 
 
@@ -663,6 +669,13 @@ def _add_advice(details: dict[str, Any], note: str) -> None:
         details["suggestion"] = f"{note} {original}"
 
 
+def _checks_already(advice: str, check: str) -> bool:
+    """The advice already says to check with list_files: in general words, or as ``check``
+    itself (a cause that names where to look, whose paths may hold the dots the general pattern
+    stops at: pre-QA r4 on #687)."""
+    return bool(CHECKS_WITH_LIST_FILES.search(advice)) or check.lower() in advice.lower()
+
+
 def _not_retryable(error: ToolError, check: str | None) -> ToolError:
     """``error`` not retryable; with ``check`` (an adapter's `check_clause`), advice to check
     first, since its task may be partly done."""
@@ -673,7 +686,7 @@ def _not_retryable(error: ToolError, check: str | None) -> ToolError:
         return error
     details["retryable"] = False
     advice = str(details.get("suggestion") or "")
-    if check is not None and not CHECKS_WITH_LIST_FILES.search(advice):
+    if check is not None and not _checks_already(advice, check):
         _add_advice(details, f"It may be partly done: {check} before running it again.")
     return rewrapped_error(body)
 
@@ -718,9 +731,7 @@ def _with_progress(
         # the advice already says to check with list_files (QA round 5), or the item is one this
         # server refused before its start (pre-QA r3 on #687: nothing of it can be done).
         retry = f"When retrying, leave out {leave_out}"
-        if check is not None and not CHECKS_WITH_LIST_FILES.search(
-            str(details.get("suggestion") or "")
-        ):
+        if check is not None and not _checks_already(str(details.get("suggestion") or ""), check):
             retry += f", and {check} first"
         _add_advice(details, retry + ".")
     details["message"] = message

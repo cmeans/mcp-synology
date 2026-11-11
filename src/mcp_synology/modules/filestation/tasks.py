@@ -892,7 +892,12 @@ async def running_task(
         tasks = await _list_running(client, read_timeout=read_timeout)
     except (SynologyError, httpx.TransportError) as e:
         # The duplicate-task guard (#245) is down for this call: a WARNING, as for copy's.
-        logger.warning("BackgroundTask list failed, skipping the running-task check: %s", e)
+        # The type too: an httpx timeout's text is empty (pre-QA r4 on #687).
+        logger.warning(
+            "BackgroundTask list failed, skipping the running-task check: %s: %s",
+            type(e).__name__,
+            e,
+        )
         return None
     return find_running(tasks, api=api, path=path, params=params)
 
@@ -1000,7 +1005,8 @@ async def tasks_for_landing_check(
     except (SynologyError, httpx.TransportError) as e:
         logger.warning(
             "BackgroundTask list failed, leaving DSM's tasks out of the same-landing check "
-            "(this server's own calls are still checked): %s",
+            "(this server's own calls are still checked): %s: %s",
+            type(e).__name__,
             e,
         )
         listed = []

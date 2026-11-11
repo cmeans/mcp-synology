@@ -4045,8 +4045,10 @@ async def test_an_unanswered_start_partway_says_what_happened(
     assert body["param"] == "paths"
     assert body["value"] == "/s/b"
     assert body["suggestion"] == (
-        "Check with list_files, or file_task with no handle, before running it again. When "
-        "retrying, leave out the paths already moved (they're no longer where they were)."
+        # Where the move may have left something: its source and destination (pre-QA r4).
+        "Check /s/b and /d with list_files, or file_task with no handle, before running it "
+        "again. When retrying, leave out the paths already moved (they're no longer where they "
+        "were)."
     )
     assert body["message"].startswith(
         f"Move files failed: DSM didn't answer for /s/b ({type(error).__name__}"
@@ -4085,7 +4087,8 @@ async def test_an_unanswered_only_start_isnt_retryable(
         "Copy files failed: DSM didn't answer for /s/a (ReadTimeout); its copy may have started."
     )
     assert body["suggestion"] == (
-        "Check with list_files, or file_task with no handle, before running it again."
+        # A copy's source doesn't change: the destination is where to look (pre-QA r4).
+        "Check /d with list_files, or file_task with no handle, before running it again."
     )
 
 

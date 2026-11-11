@@ -273,6 +273,8 @@ _POLL_ERRORS = (
     "poll_dsm_error_stop_not_sent",
     "poll_dsm_error_stop_gone",
 )
+# The scenarios where the item's own task started before it failed: never retryable (Q5).
+_STARTED = (*_POLL_ERRORS, "finished_with_error", "finished_with_busy_error")
 # The poll errors whose task may still run: a stop DSM didn't confirm and didn't say was moot.
 _MAY_RUN = (
     "poll_dsm_error_stop_unanswered",
@@ -468,8 +470,9 @@ async def test_matrix(
         rest = [x.source for x in outcome.not_started()]
         if rest and not all(shown(p) in text for p in rest):
             broken.add("names_not_started")
+    # From the scenario, not the runner's own flag: the item's task started (or may have).
     ran = outcome.items[0].state == "done" or (
-        last is not None and (last.started or last.state == "may_have_started")
+        last is not None and (scenario in _STARTED or last.state == "may_have_started")
     )
     if error is not None and ran and error.get("retryable"):
         # Something ran, an earlier item or this one's own task: the same call again isn't the
@@ -976,6 +979,8 @@ async def test_the_task_list_before_a_start_waits_at_most_whats_left(
     """#512 PR 3: the BackgroundTask list read before each start gets what's left of the call's
     wait (at least ``MIN_CHECK_WAIT``), not the client's default timeout."""
     scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    for script in scripts.values():
+        script.statuses = [RUNNING, FINISHED]  # each item's polling takes some of the wait
     FakeDsm(scripts).mount(respx_mock)
     real = mock_client.request
     waits: list[float | None] = []
@@ -994,6 +999,9 @@ async def test_the_task_list_before_a_start_waits_at_most_whats_left(
         waits = waits[1:]
     assert len(waits) == 3, waits
     assert all(w is not None and batch.MIN_CHECK_WAIT <= w <= WAIT for w in waits), waits
+    # What's left, not the whole wait each time: it shrinks as the items run (pre-QA r4).
+    assert waits[0] == WAIT, waits
+    assert waits[0] > waits[1] > waits[2], waits
 
 
 async def test_bounded_summary_falls_back_without_checks() -> None:
@@ -1206,3 +1214,91 @@ async def test_a_restores_recreated_note_quotes_a_padded_folder(
     monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
     text = await tool.call(mock_client, TaskRecords())
     assert f"Re-created {'/s/o2 '!r} (no longer there) to restore into." in text, text
+
+
+async def test_a_list_read_that_fails_logs_its_type(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pre-QA r4 on #687: an httpx timeout's text is empty, so the WARNING that the duplicate-
+    task guard is down names the error's type."""
+    tool = TOOLS[0]
+
+    class SlowList(FakeDsm):
+        def _answer(self, request: httpx.Request) -> httpx.Response:
+            if dict(request.url.params).get("api") == "SYNO.FileStation.BackgroundTask":
+                raise httpx.ReadTimeout("")
+            return super()._answer(request)
+
+    SlowList({src: PathScript(gone_after=True) for src in tool.sources}).mount(respx_mock)
+    with caplog.at_level(logging.WARNING):
+        await tool.call(mock_client, TaskRecords())
+    lines = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        m == "BackgroundTask list failed, skipping the running-task check: ReadTimeout: "
+        for m in lines
+    ), lines
+
+
+async def test_a_summary_out_of_time_says_so_and_logs_it(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Pre-QA r4 on #687: the reply said DSM didn't answer, though this server cut the check
+    short, and only a DEBUG line said why. It says the call's wait was over, at WARNING."""
+
+    async def hang(*args: Any, **kwargs: Any) -> bool:
+        await asyncio.sleep(30)
+        return True
+
+    monkeypatch.setattr(batch, "MIN_CHECK_WAIT", 0.05)
+    monkeypatch.setattr(operations, "ensure_recycle_status", hang)
+    adapter = operations.DeleteAdapter(
+        mock_client, ["/s/d0"], paths_arg=["/s/d0"], recursive=True, recycle_bin_status={}
+    )
+    budget = batch.Budget(WAIT)
+    budget.start()
+    clock.now += WAIT * 2
+    outcome = BatchOutcome(items=[batch.ItemOutcome(batch.Item("/s/d0", None), "done")])
+    outcome.budget = budget
+    with caplog.at_level(logging.WARNING):
+        text = await asyncio.wait_for(adapter.summary(outcome), 5)
+    assert "Didn't check whether /s has its recycle bin enabled (the call's wait was over)" in text
+    assert "DSM didn't answer" not in text, text
+    assert any("replying without them" in r.getMessage() for r in caplog.records), caplog.text
+
+
+async def test_a_copy_cut_short_bounds_its_group_summary(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA r4 on #687: a group cut short by the call's wait is summarized within what's left
+    too: its skip lookup doesn't hold the reply."""
+    tool = next(t for t in TOOLS if t.name == "copy_files")
+    scripts = _scripts(tool, "skipped", 0)
+
+    class Slow(FakeDsm):
+        def _answer(self, request: httpx.Request) -> httpx.Response:
+            response = super()._answer(request)
+            params = dict(request.url.params)
+            if params.get("method") == "status":
+                clock.now += WAIT  # the first item's task took the call's whole wait
+            return response
+
+    Slow(scripts).mount(respx_mock)
+
+    async def hang(*args: Any, **kwargs: Any) -> dict[str, bool]:
+        await asyncio.sleep(30)
+        return {}
+
+    monkeypatch.setattr(batch, "MIN_CHECK_WAIT", 0.05)
+    monkeypatch.setattr(operations, "paths_isdir", hang)
+    text = await asyncio.wait_for(tool.call(mock_client, TaskRecords()), 5)
+    assert "ran out after 1 of 3" in text, text
+    assert "skipped in whole or in part" in text, text
