@@ -1484,6 +1484,26 @@ class TestDownloadFile:
         assert not (tmp_path / "report.txt").is_symlink()
         assert (tmp_path / "report.txt").read_bytes() == b"new"
 
+    @respx.mock
+    async def test_a_replaced_symlink_with_a_tab_in_its_name_is_quoted(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """QA round 1 on #690: the replaced-symlink line quotes the name as line 1 does."""
+        name = "a\tb.txt"
+        (tmp_path / "real.txt").write_bytes(b"keep")
+        (tmp_path / name).symlink_to(tmp_path / "real.txt")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new", headers={"content-type": "application/octet-stream"}
+        )
+        result = await download_file(
+            mock_client, path=f"/docs/{name}", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert (
+            f"    It replaced the symlink {name!r} that was there (its target is untouched)."
+            in result.splitlines()
+        ), result
+        assert "\t" not in result, result
+
     @pytest.mark.parametrize("overwrite", [False, True])
     @respx.mock
     async def test_download_directory_at_destination_is_refused_up_front(
