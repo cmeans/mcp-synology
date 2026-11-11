@@ -1,25 +1,29 @@
 """#514's acceptance canary, end to end: real modules, the real server and real logging.
 
 `tests/test_redaction_sinks.py` plants credentials at each output point. This file runs the
-paths that reach them, as the design asked (issue #514, design section 4): `serve`'s startup
-with DEBUG logging and a log file, a tool call that can't connect, and Download Station's
-listing, details and create, with credentials in every place the user's own data or DSM can put
-one:
+paths that reach them, as the design asked (issue #514, design section 4): `serve`'s logging
+setup at DEBUG with a log file and `create_server` (not `load_or_exit`), a tool call that can't
+connect, and Download Station's listing, details and create, with credentials where the user's
+own data or DSM can put one:
 
-- the password, from an environment variable;
-- a 2FA device token, from a keyring entry recorded for this host;
-- DSM's session ID and device token in its login reply;
+- the password, from an environment variable (it reaches the login request's DEBUG log);
+- a 2FA device token, from a keyring entry recorded for this host (the same);
 - a tracker passkey in a task's URI, its title and its tracker list;
+- userinfo and DSM's session ID in a task's destination, which only the reply sink masks;
+- userinfo and a passkey query in the user's custom instructions;
 - a URL with userinfo in the error a connection fails with.
 
-Every tool reply and error, the instructions, the progress messages, stderr and the log file
-are read, and no canary may appear in any of them.
+Every tool reply and error, the instructions, stderr and the log file are read, and no canary
+may appear in any of them. (None of these tools reports progress: `test_redaction_sinks`
+covers that sink.)
 """
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import sys
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs
 
@@ -43,8 +47,8 @@ if TYPE_CHECKING:
 PASSWORD = "CANARYpw514e2e"
 DEVICE_TOKEN = "CANARYdid514e2e"
 SESSION = "CANARYsid514e2e"
-# As long as a real tracker passkey (32 hex digits): a path token needs 16+ letters and digits.
-PASSKEY = "CANARYpk514e2e0123456789abcdef"
+# As long as a real tracker passkey (32 characters): a path token needs 16+ letters and digits.
+PASSKEY = "CANARYpk514e2e0123456789abcdef01"
 USERINFO = "CANARYui514e2e"
 CANARIES = (PASSWORD, DEVICE_TOKEN, SESSION, PASSKEY, USERINFO)
 
@@ -58,7 +62,16 @@ def _assert_clean(where: str, text: str) -> None:
 
 
 @pytest.fixture
-def isolated_logging(tmp_path: Path) -> Iterator[Path]:
+def stderr(monkeypatch: pytest.MonkeyPatch) -> io.StringIO:
+    """What the logging's stderr handler writes. Set before the handler is made, which binds
+    the stream it's given: `capsys` would read nothing."""
+    buffer = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", buffer)
+    return buffer
+
+
+@pytest.fixture
+def isolated_logging(tmp_path: Path, stderr: io.StringIO) -> Iterator[Path]:
     """The root logger as `serve` sets it up, at DEBUG with a log file; restored after."""
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
@@ -115,7 +128,10 @@ def _with_passkeys(body: dict[str, Any]) -> dict[str, Any]:
     for task in body["data"]["tasks"]:
         task["title"] = f"show.torrent?passkey={PASSKEY}"
         additional = task.setdefault("additional", {})
-        additional.setdefault("detail", {})["uri"] = TORRENT
+        detail = additional.setdefault("detail", {})
+        detail["uri"] = TORRENT
+        # No call site masks a destination: only the reply sink does.
+        detail["destination"] = f"video/https://admin:{USERINFO}@nas/webapi/x?_sid={SESSION}"
         if "tracker" in additional:
             additional["tracker"] = [
                 {"url": f"https://tracker.example/announce/{PASSKEY}", "status": "Success"}
@@ -184,15 +200,10 @@ def _config() -> Any:
 
 
 async def test_serve_and_download_station_never_show_a_credential(
-    isolated_logging: Path, credentials: None, capsys: pytest.CaptureFixture[str]
+    isolated_logging: Path, credentials: None, stderr: io.StringIO
 ) -> None:
     fake = FakeDsm()
     outputs: list[tuple[str, str]] = []
-    progress: list[str] = []
-
-    async def on_progress(done: float, total: float | None, message: str | None) -> None:
-        progress.append(message or "")
-
     with respx.mock(base_url=BASE_URL, assert_all_called=False) as router:
         router.route().mock(side_effect=fake)
         server = create_server(_config())
@@ -203,7 +214,7 @@ async def test_serve_and_download_station_never_show_a_credential(
                 ("get_download_info", {"task_id": "dbid_1"}),
                 ("create_download", {"uri": TORRENT}),
             ]:
-                result = await client.call_tool(tool, arguments, progress_callback=on_progress)
+                result = await client.call_tool(tool, arguments)
                 outputs.append((tool, _text(result)))
 
     assert fake.unknown == [], fake.unknown
@@ -218,15 +229,17 @@ async def test_serve_and_download_station_never_show_a_credential(
         h.flush()
     log = isolated_logging.read_text(encoding="utf-8")
     assert "SYNO.API.Auth" in log and "SYNO.DownloadStation" in log
-    for where, text in [*outputs, ("progress", "\n".join(progress)), ("log file", log)]:
+    # The destination really reached a reply, masked: so the reply sink is what's tested.
+    assert "video/https://***@nas/webapi/x?_sid=***" in dict(outputs)["get_download_info"]
+    for where, text in [*outputs, ("log file", log)]:
         _assert_clean(where, text)
-    out, err = capsys.readouterr()
-    _assert_clean("stdout", out)
-    _assert_clean("stderr", err)
+    # The DEBUG log reached stderr too: the check below reads a real stream.
+    assert "SYNO.API.Auth" in stderr.getvalue()
+    _assert_clean("stderr", stderr.getvalue())
 
 
 async def test_a_tool_call_that_cant_connect_never_shows_a_credential(
-    isolated_logging: Path, credentials: None, capsys: pytest.CaptureFixture[str]
+    isolated_logging: Path, credentials: None, stderr: io.StringIO
 ) -> None:
     """The connection fails with the NAS's URL, userinfo included, in the error's text."""
     refused = httpx.ConnectError(f"refused by https://admin:{USERINFO}@nas:5000/webapi")
@@ -246,6 +259,6 @@ async def test_a_tool_call_that_cant_connect_never_shows_a_credential(
         _assert_clean("error", text)
         json.loads(text[text.index("{") :])
     _assert_clean("log file", isolated_logging.read_text(encoding="utf-8"))
-    out, err = capsys.readouterr()
-    _assert_clean("stdout", out)
-    _assert_clean("stderr", err)
+    # The DEBUG log reached stderr too: the check below reads a real stream.
+    assert "[DEBUG]" in stderr.getvalue()
+    _assert_clean("stderr", stderr.getvalue())

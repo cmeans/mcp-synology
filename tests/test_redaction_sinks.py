@@ -347,9 +347,7 @@ def test_logs_never_carry_a_credential(
 
 
 @respx.mock
-def test_check_at_debug_never_shows_a_credential(
-    fresh_root_logging: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_check_at_debug_never_shows_a_credential(fresh_root_logging: None, tmp_path: Path) -> None:
     """End to end, as #514 asked: `check` at debug level (`logging.level`) with a log file,
     the password from the environment, and DSM's connection failing with a credential in the
     error's text. No canary reaches stdout, stderr or the log file."""
@@ -389,9 +387,11 @@ def test_check_at_debug_never_shows_a_credential(
         h.flush()
     written = log_file.read_text(encoding="utf-8")
     assert "SYNO.API.Auth" in written
+    # The CLI's runner captured stderr's DEBUG log with the rest (capsys would read nothing:
+    # the handler holds the stream it was made with).
+    assert "[DEBUG]" in result.output
     assert CANARY not in result.output
     assert CANARY not in written
-    assert CANARY not in capsys.readouterr().err
 
 
 def test_the_sdk_keeps_the_redacting_handlers(fresh_root_logging: None) -> None:
