@@ -40,6 +40,7 @@ from mcp_synology.core.formatting import rewrapped_error
 from mcp_synology.modules.filestation import tasks as _tasks
 from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.filestation.tasks import (
+    STOP_WAIT,
     Handle,
     HandleKind,
     Handoff,
@@ -260,12 +261,7 @@ async def _run_item(
             running = await adapter.before_start(item)
             if running is None:
                 try:
-                    data = await client.request(
-                        adapter.api,
-                        "start",
-                        version=adapter.version,
-                        params=adapter.start_params(item),
-                    )
+                    data = await _shielded_start(client, adapter, item, records)
                 except SynologyError as e:
                     return ItemOutcome(item, "failed", error=e)
                 taskid = str(data.get("taskid", ""))
@@ -321,6 +317,69 @@ async def _run_item(
     except ToolError as e:
         return ItemOutcome(item, "failed", error=e)
     return ItemOutcome(item, "done", result=reading)
+
+
+async def _shielded_start(
+    client: DsmClient, adapter: TaskAdapter, item: Item, records: TaskRecords | None
+) -> dict[str, Any]:
+    """Send the item's start. A call canceled while it's in flight (#394 C3) may still have
+    started a task on the NAS: the start is shielded, its answer is awaited for up to
+    ``STOP_WAIT``, and the task it names is stopped and recorded (with a ``StopNote`` when DSM
+    didn't confirm the stop), so none is left running unknown. Then the cancellation goes on."""
+    start = asyncio.ensure_future(
+        client.request(
+            adapter.api, "start", version=adapter.version, params=adapter.start_params(item)
+        )
+    )
+    try:
+        return await asyncio.shield(start)
+    except asyncio.CancelledError:
+        # anyio cancel scopes (the MCP SDK's) are level-triggered: shield the cleanup, or it is
+        # canceled again at once and the NAS task is orphaned.
+        with anyio.CancelScope(shield=True):
+            await _stop_what_started(client, adapter, item, records, start)
+        raise
+
+
+async def _stop_what_started(
+    client: DsmClient,
+    adapter: TaskAdapter,
+    item: Item,
+    records: TaskRecords | None,
+    start: asyncio.Future[Any],
+) -> None:
+    """After a cancel during the start: stop the task it started, if it started one."""
+    with anyio.move_on_after(STOP_WAIT):
+        with contextlib.suppress(BaseException):
+            await asyncio.shield(start)
+    if not start.done():
+        start.cancel()
+        logger.warning(
+            "%s start for %s unanswered after a cancel: a task it started can't be stopped "
+            "or followed (no task ID)",
+            adapter.api,
+            item.source,
+        )
+        return
+    if start.cancelled() or start.exception() is not None:
+        return  # no task started, or none DSM said it started
+    taskid = str((start.result() or {}).get("taskid", ""))
+    if not taskid:
+        return
+    stop = await _stop_background_task(
+        client, adapter.api, dsm_str(taskid), adapter.version, logger
+    )
+    logger.warning(
+        "%s for %s started as the call was canceled: stopping it %s",
+        adapter.api,
+        item.source,
+        stop.value,
+    )
+    if stop is not StopResult.CONFIRMED:
+        outcome = ItemOutcome(
+            item, "failed", stop=stop, handoff=Handoff(Handle(adapter.kind, taskid), {})
+        )
+        _record(adapter, outcome, records, stop_sent=stop is StopResult.UNANSWERED)
 
 
 async def _gone(client: DsmClient, adapter: TaskAdapter, item: Item, taskid: str) -> bool:

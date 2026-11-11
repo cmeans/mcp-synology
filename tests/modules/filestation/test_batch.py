@@ -34,6 +34,7 @@ from mcp_synology.modules.filestation.tasks import TaskRecords, parse_handle
 from tests.modules.filestation.fake_dsm import (
     CANCEL,
     FINISHED,
+    HOLD,
     RUNNING,
     FakeClock,
     FakeDsm,
@@ -482,6 +483,40 @@ async def test_the_wait_is_the_calls_not_each_items(
     assert "Handle: `" in text, text
     assert shown(tool.sources[2]) in text  # not started, and said so
     assert clock.now <= WAIT + batch.MIN_ITEM_WAIT, clock.now
+
+
+@pytest.mark.parametrize("stop", ["ok", 401, httpx.ReadTimeout("no answer")])
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_a_call_canceled_during_a_start_stops_what_it_started(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool, stop: Any
+) -> None:
+    """#394 C3: the call is canceled while DSM is still answering a start. The start's answer
+    is awaited anyway, the task it started is stopped, and unless DSM confirmed that, the task
+    is recorded (noted as stopped-but-unconfirmed when the stop may have reached DSM), so no
+    task is left running that nothing knows of."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    scripts[tool.sources[1]].start = HOLD
+    scripts[tool.sources[1]].stop = stop
+    dsm = FakeDsm(scripts)
+    dsm.mount(respx_mock)
+    records = TaskRecords()
+    call = asyncio.ensure_future(tool.call(mock_client, records))
+    await asyncio.wait_for(dsm.holding.wait(), 5)
+    call.cancel()
+    await asyncio.sleep(0)
+    dsm.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert len(dsm.starts()) == 2  # the third was never started
+    stops = dsm.stops()
+    assert len(stops) == 1, dsm.methods()
+    taskid = stops[0].params["taskid"].strip('"')
+    record = records.get(parse_handle(f"{tool.kind}:{taskid}"))
+    if stop == "ok":
+        assert record is None  # stopped, as DSM confirmed: nothing to follow up
+    else:
+        assert record is not None and record.paths == [tool.sources[1]]
+        assert (record.stop is not None) == isinstance(stop, httpx.ReadTimeout)
 
 
 def test_known_gaps_name_real_cells() -> None:
