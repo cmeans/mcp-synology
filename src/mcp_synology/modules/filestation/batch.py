@@ -151,6 +151,9 @@ class ItemOutcome:
     stop: StopResult | None = None
     handoff: Handoff | None = None
     running: dict[str, Any] | None = None
+    # Its task started (a status read's error, or a finished task's): it may have done part of
+    # its work, so its failure isn't retryable (the maintainer's Q5 on #512).
+    started: bool = False
 
 
 @dataclass
@@ -378,7 +381,7 @@ async def _run_item(
     )
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
-        outcome = ItemOutcome(item, "failed", error=result.error, stop=result.stop)
+        outcome = ItemOutcome(item, "failed", error=result.error, stop=result.stop, started=True)
         if result.stop not in (StopResult.CONFIRMED,):
             # DSM didn't confirm the stop: the task may still run, so the reply gives its handle
             # and file_task knows it; a stop that may have reached DSM is noted (#497, #660).
@@ -402,7 +405,7 @@ async def _run_item(
     try:
         reading = adapter.read_finished(item, result.status)
     except ToolError as e:
-        return ItemOutcome(item, "failed", error=e)
+        return ItemOutcome(item, "failed", error=e, started=True)
     return ItemOutcome(item, "done", result=reading)
 
 
@@ -608,7 +611,8 @@ def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcom
     failed, what the call did before it, what wasn't started, the adapter's note and the stop
     sent for its task, the same for every tool. One retryable rule (#452, #490; the maintainer's
     Q4 and Q5 on #512): only when nothing ran, nothing may have, and the cause's own flag says
-    so. Advice is added to the cause's own, never in place of it (QA round 3 on #480)."""
+    so: not once an earlier item was done or this item's own task started. Advice is added to
+    the cause's own, never in place of it (QA round 3 on #480)."""
     try:
         adapter.cause(outcome)
     except ToolError as e:
@@ -627,7 +631,23 @@ def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcom
         if done:
             error = adapter.amend(error)
         error = _with_not_started(error, rest)
+    if outcome.started:
+        # Its own task ran, maybe partly: not retryable, whatever the cause's flag (402 and 421
+        # say to wait and retry, #490), as for a call where earlier items were done (Q5).
+        error = _not_retryable(error)
     return _with_stop(error, outcome)
+
+
+def _not_retryable(error: ToolError) -> ToolError:
+    try:
+        body = json.loads(str(error))
+        details = body["error"]
+    except (ValueError, KeyError, TypeError):
+        return error
+    if not details.get("retryable"):
+        return error
+    details["retryable"] = False
+    return rewrapped_error(body)
 
 
 def _refused_path(error: ToolError) -> str | None:

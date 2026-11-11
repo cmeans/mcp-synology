@@ -891,7 +891,8 @@ async def running_task(
     try:
         tasks = await _list_running(client, read_timeout=read_timeout)
     except (SynologyError, httpx.TransportError) as e:
-        logger.debug("BackgroundTask list failed, skipping the running-task check: %s", e)
+        # The duplicate-task guard (#245) is down for this call: a WARNING, as for copy's.
+        logger.warning("BackgroundTask list failed, skipping the running-task check: %s", e)
         return None
     return find_running(tasks, api=api, path=path, params=params)
 

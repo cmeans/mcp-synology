@@ -570,7 +570,8 @@ def _copy_move_result(
                 dest=dest,
                 failing=path,
                 landed=landed,
-            ),
+            )
+            + ".",
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -601,7 +602,8 @@ def _copy_move_result(
                 dest=dest,
                 failing=path,
                 landed=landed,
-            ),
+            )
+            + ".",
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -691,7 +693,7 @@ async def _skip_report(
     in_full = " in full" if folders or unknown else ""
     lines = [
         format_status(
-            f"{verb} {len(ok):,} of {len(normalized):,} item(s){in_full} to {dest}/; "
+            f"{verb} {len(ok):,} of {len(normalized):,} item(s){in_full} to {shown(dest)}/; "
             f"{', '.join(parts)} (that name is already at the destination, overwrite=false):",
             success=False,
         )
@@ -1322,7 +1324,7 @@ async def _copy_move_summary(
         return p.split("/")[-1]
 
     if not skipped_paths:
-        lines = [format_status(f"{verb} {len(normalized):,} item(s) to {dest}/:")]
+        lines = [format_status(f"{verb} {len(normalized):,} item(s) to {shown(dest)}/:")]
         lines.extend(f"  {shown(name(p))}" for p in normalized)
     else:
         lines = await _skip_report(

@@ -165,6 +165,15 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
         "failed",
     ),
     "poll_dsm_error": (lambda t, i, s: setattr(s, "statuses", [RUNNING, 400]), "failed"),
+    # 402 and 421 are retryable by their own flag (#490), but the task had started: not
+    # retryable (the maintainer's Q5 on #512; pre-QA r1 on #512 PR 3).
+    "poll_busy_error": (lambda t, i, s: setattr(s, "statuses", [RUNNING, 402]), "failed"),
+    "finished_with_busy_error": (
+        lambda t, i, s: setattr(
+            s, "statuses", [{"finished": True, "errors": [{"code": 421, "path": t.sources[i]}]}]
+        ),
+        "failed",
+    ),
     # The stop sent after that error isn't confirmed: the task may still run, so the failure
     # gives its handle and file_task knows it (#497).
     "poll_dsm_error_stop_unanswered": (
@@ -258,6 +267,7 @@ POSITIONS = {"first": 0, "middle": 1, "last": 2}
 _COPY_FAMILY = ("copy_files", "move_files", "restore_flat", "restore_origin")
 _POLL_ERRORS = (
     "poll_dsm_error",
+    "poll_busy_error",
     "poll_dsm_error_stop_unanswered",
     "poll_dsm_error_stop_refused",
     "poll_dsm_error_stop_not_sent",
@@ -458,8 +468,10 @@ async def test_matrix(
         rest = [x.source for x in outcome.not_started()]
         if rest and not all(shown(p) in text for p in rest):
             broken.add("names_not_started")
-    if error is not None and outcome.items[0].state == "done" and error.get("retryable"):
-        # Something ran: the same call again isn't the way to retry (#452).
+    ran = outcome.items[0].state == "done" or (last is not None and last.started)
+    if error is not None and ran and error.get("retryable"):
+        # Something ran, an earlier item or this one's own task: the same call again isn't the
+        # way to retry (#452; the maintainer's Q5 on #512).
         broken.add("retryable")
 
     assert broken == KNOWN_GAPS.get((tool.name, scenario, position), frozenset()), (
@@ -565,8 +577,8 @@ async def test_a_poll_errors_reply_says_how_the_stop_ended(
     the follow-up, and isn't retryable."""
     tool = TOOLS[0]
     scripts = {src: PathScript() for src in tool.sources}
-    # 416 (disk full) is retryable by its own flag: the unconfirmed stop must override it.
-    scripts[tool.sources[0]].statuses = [RUNNING, 416]
+    # 421 (in use) is retryable by its own flag (#490): the unconfirmed stop must override it.
+    scripts[tool.sources[0]].statuses = [RUNNING, 421]
     scripts[tool.sources[0]].stop = stop
     FakeDsm(scripts).mount(respx_mock)
     with pytest.raises(ToolError) as raised:
@@ -951,16 +963,18 @@ def test_every_tool_reaching_the_runner_is_in_the_matrix() -> None:
     assert {t.name for t in TOOLS} >= set(BATCH_TOOLS) - {"restore_from_recycle_bin"}
 
 
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
 async def test_the_task_list_before_a_start_waits_at_most_whats_left(
     mock_client: DsmClient,
     clock: FakeClock,
     respx_mock: respx.Router,
     monkeypatch: pytest.MonkeyPatch,
+    tool: Tool,
 ) -> None:
     """#512 PR 3: the BackgroundTask list read before each start gets what's left of the call's
     wait (at least ``MIN_CHECK_WAIT``), not the client's default timeout."""
-    tool = TOOLS[0]
-    FakeDsm({src: PathScript(gone_after=True) for src in tool.sources}).mount(respx_mock)
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    FakeDsm(scripts).mount(respx_mock)
     real = mock_client.request
     waits: list[float | None] = []
 
@@ -971,6 +985,11 @@ async def test_the_task_list_before_a_start_waits_at_most_whats_left(
 
     monkeypatch.setattr(mock_client, "request", spy)
     await tool.call(mock_client, TaskRecords())
+    if tool.kind == "restore":
+        # A restore's check before anything starts (and before the call's wait begins) isn't
+        # bounded, as the spec says; then one read per item.
+        assert waits[0] is None, waits
+        waits = waits[1:]
     assert len(waits) == 3, waits
     assert all(w is not None and batch.MIN_CHECK_WAIT <= w <= WAIT for w in waits), waits
 
@@ -1087,3 +1106,24 @@ async def test_a_restore_whose_later_folder_is_gone_says_what_was_restored(
     assert body["retryable"] is False
     assert "leave out the paths already restored" in body["suggestion"]
     assert [c.params["path"] for c in dsm.starts()] == ["/s/#recycle/o0/f0"]
+
+
+async def test_a_copy_summary_out_of_time_doesnt_wait_on_the_skip_lookup(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#512 PR 3 (pre-QA r1): a copy's group summary reads what a skipped source is; that read
+    is bounded too, and out of time the summary keeps the hedged wording."""
+    tool = next(t for t in TOOLS if t.name == "copy_files")
+    scripts = _scripts(tool, "skipped", 0)
+    FakeDsm(scripts).mount(respx_mock)
+
+    async def hang(*args: Any, **kwargs: Any) -> dict[str, bool]:
+        await asyncio.sleep(30)
+        return {}
+
+    monkeypatch.setattr(operations, "paths_isdir", hang)
+    text = await asyncio.wait_for(tool.call(mock_client, TaskRecords()), WAIT + 3)
+    assert "skipped in whole or in part" in text, text

@@ -1267,6 +1267,29 @@ class TestPaddedPathsAreShownQuoted:
         )
         assert any(line.startswith(f"  {QUOTED} (") for line in skipped.splitlines()), skipped
 
+    def test_handoff_waits_on_a_padded_path(self) -> None:
+        """#679: the not-started line names the path it waits on, quoted when padded."""
+        from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+        text = handoff_reply(
+            verb="Still deleting",
+            path=PADDED,
+            handle=Handle("delete", "FileStation_1"),
+            status={},
+            done=[],
+            not_started=["/video/b"],
+        )
+        assert f"Run it once the task of {QUOTED} finishes." in text, text
+
+    async def test_delete_summary_unknown_home_bin(self) -> None:
+        """#519: the home-bin list a summary couldn't check is quoted too."""
+        from mcp_synology.modules.filestation.operations import _delete_summary
+
+        padded = "/homes/u/#recycle/foo "
+        text = await _delete_summary(_FakeClient(), [padded], {}, probe=False)  # type: ignore[arg-type]
+        assert "Couldn't check whether /homes" in text, text
+        assert f"  {padded!r}" in text.splitlines(), text
+
     def test_partial_delete_lists(self) -> None:
         from mcp_synology.core.formatting import error_response
 
