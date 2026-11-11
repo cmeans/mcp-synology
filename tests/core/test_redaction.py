@@ -340,6 +340,8 @@ LONG_INPUTS = [
     pytest.param("passwd=" + "a" * 60_000, id="long-parameter"),
     pytest.param("https://u:p@h/x?a=1 " * 5_000, id="many-urls"),
     pytest.param("https://h/" + "@" * 60_000, id="at-run"),
+    pytest.param(("https://a@" + "b@" * 60 + " ") * 500, id="ats-after-userinfo"),
+    pytest.param("https://u:" + "p@" * 60_000 + "h/x", id="one-long-password-of-ats"),
 ]
 
 

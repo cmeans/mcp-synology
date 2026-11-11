@@ -156,7 +156,8 @@ def _mask_userinfo(text: str) -> str:
     start = text.find("://")
     while start >= 0:
         begin = start + 3
-        window = text[begin : begin + _USERINFO_WINDOW].partition("\n")[0]
+        # Userinfo ends the line's text before another URL starts: it never holds a `://`.
+        window = text[begin : begin + _USERINFO_WINDOW].partition("\n")[0].partition("://")[0]
         end = _userinfo_end(window)
         if end is not None and window[:end] != MASK:
             out.append(text[pos:begin])
