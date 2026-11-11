@@ -949,3 +949,88 @@ def test_every_tool_reaching_the_runner_is_in_the_matrix() -> None:
         }
     assert public == set(BATCH_TOOLS)
     assert {t.name for t in TOOLS} >= set(BATCH_TOOLS) - {"restore_from_recycle_bin"}
+
+
+async def test_the_task_list_before_a_start_waits_at_most_whats_left(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#512 PR 3: the BackgroundTask list read before each start gets what's left of the call's
+    wait (at least ``MIN_CHECK_WAIT``), not the client's default timeout."""
+    tool = TOOLS[0]
+    FakeDsm({src: PathScript(gone_after=True) for src in tool.sources}).mount(respx_mock)
+    real = mock_client.request
+    waits: list[float | None] = []
+
+    async def spy(api: str, method: str, *args: Any, **kwargs: Any) -> Any:
+        if api == "SYNO.FileStation.BackgroundTask":
+            waits.append(kwargs.get("read_timeout"))
+        return await real(api, method, *args, **kwargs)
+
+    monkeypatch.setattr(mock_client, "request", spy)
+    await tool.call(mock_client, TaskRecords())
+    assert len(waits) == 3, waits
+    assert all(w is not None and batch.MIN_CHECK_WAIT <= w <= WAIT for w in waits), waits
+
+
+async def test_bounded_summary_falls_back_without_checks() -> None:
+    """Out of time, the summary is the one made without reading the NAS (#512 PR 3)."""
+    made: list[bool] = []
+
+    async def make(probe: bool) -> str:
+        made.append(probe)
+        if probe:
+            await asyncio.sleep(30)
+        return f"probe={probe}"
+
+    assert await batch.bounded_summary(make, 0.05, "test") == "probe=False"
+    assert made == [True, False]
+    assert await batch.bounded_summary(lambda probe: _quick(probe), 1.0, "test") == "probe=True"
+
+
+async def _quick(probe: bool) -> str:
+    return f"probe={probe}"
+
+
+async def test_a_delete_summary_out_of_time_doesnt_wait_on_the_bin_check(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#512 PR 3: a recycle-bin check that doesn't answer once the call's wait is over leaves
+    the bin line out, as for one DSM didn't answer; the reply doesn't wait on it."""
+
+    async def hang(*args: Any, **kwargs: Any) -> bool:
+        await asyncio.sleep(30)
+        return True
+
+    monkeypatch.setattr(batch, "MIN_CHECK_WAIT", 0.05)
+    monkeypatch.setattr(operations, "ensure_recycle_status", hang)
+    adapter = operations.DeleteAdapter(
+        mock_client, ["/s/d0"], paths_arg=["/s/d0"], recursive=True, recycle_bin_status={}
+    )
+    budget = batch.Budget(WAIT)
+    budget.start()
+    clock.now += WAIT * 2
+    outcome = BatchOutcome(items=[batch.ItemOutcome(batch.Item("/s/d0", None), "done")])
+    outcome.budget = budget
+    text = await asyncio.wait_for(adapter.summary(outcome), 5)
+    assert "Deleted 1 item(s):" in text, text
+    assert "Recycle bin is enabled" not in text, text
+
+
+async def test_a_skip_report_out_of_time_doesnt_read_the_kinds(
+    mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#512 PR 3: without time to read what a skipped source is, the hedged wording."""
+
+    async def unexpected(*args: Any, **kwargs: Any) -> dict[str, bool]:
+        raise AssertionError("read the kinds with no time left")
+
+    monkeypatch.setattr(operations, "paths_isdir", unexpected)
+    text = await operations._copy_move_summary(
+        mock_client, ["/s/a", "/s/b"], "/s/d", False, 0, ["/s/b"], probe=False
+    )
+    assert "1 skipped in whole or in part" in text, text

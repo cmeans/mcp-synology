@@ -58,7 +58,7 @@ from mcp_synology.modules.filestation.tasks import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from mcp_synology.core.client import DsmClient
@@ -73,6 +73,10 @@ BATCH_TOOLS = ("delete_files", "copy_files", "move_files", "restore_from_recycle
 # at poll_task's interval, so a task that ends at once is still reported as done.
 MIN_ITEM_WAIT = 1.0
 
+# The least a check's read gets when the call's budget is nearly spent (the task list before a
+# start, a summary's checks): one read, as poll_task's status reads get.
+MIN_CHECK_WAIT = 1.0
+
 
 def _now() -> float:
     # The task module's clock, which the tests' fake clock replaces.
@@ -84,8 +88,9 @@ class Budget:
     """How long a call waits on its tasks, all of them together (#496): ``delete_timeout`` or
     ``copy_move_timeout``. An item gets what's left when it starts (at least ``MIN_ITEM_WAIT``);
     a task still running when the call's time is up is handed off, no item starts after it, and
-    the rest are listed as not started. The summary's checks after the last task aren't bounded
-    yet (#512 PR 3)."""
+    the rest are listed as not started. The task list read before each start and the summary's
+    checks get what's left too, at least ``MIN_CHECK_WAIT`` (#512 PR 3); the start itself
+    doesn't: cut short, it would leave a task that may have started."""
 
     per_call: float
     deadline: float | None = None
@@ -100,6 +105,12 @@ class Budget:
         self.start()
         assert self.deadline is not None
         return max(self.deadline - _now(), MIN_ITEM_WAIT)
+
+    def for_check(self) -> float:
+        """The wait for a check's read: the task list before a start, a summary's checks."""
+        self.start()
+        assert self.deadline is not None
+        return max(self.deadline - _now(), MIN_CHECK_WAIT)
 
     def spent(self) -> bool:
         """The call's wait is over: no further item is started (#496)."""
@@ -150,6 +161,8 @@ class BatchOutcome:
 
     items: list[ItemOutcome] = field(default_factory=list)
     out_of_time: float | None = None
+    # The call's budget, which bounds the summary's checks (#512 PR 3).
+    budget: Budget | None = None
 
     @property
     def last(self) -> ItemOutcome | None:
@@ -184,9 +197,11 @@ class TaskAdapter(Protocol):
         """Held from `before_start` until the start returns (copy, move, restore: #587)."""
         ...
 
-    async def before_start(self, item: Item) -> dict[str, Any] | None:
+    async def before_start(self, item: Item, read_timeout: float) -> dict[str, Any] | None:
         """The task already running for this item (none is started then), or None. May raise a
-        ToolError, the item's failure."""
+        ToolError, the item's failure. ``read_timeout`` bounds its task list read (#512 PR 3):
+        a list that doesn't answer in time skips the guard, and the item isn't started once the
+        call's wait is over."""
         ...
 
     def start_params(self, item: Item) -> dict[str, str]: ...
@@ -214,8 +229,9 @@ class TaskAdapter(Protocol):
         """The hand-off's TaskRecord fields beside its handle."""
         ...
 
-    async def end_group(self, items: Sequence[Item]) -> None:
-        """After a group's last item finished, before the next group's checks."""
+    async def end_group(self, items: Sequence[Item], wait: float) -> None:
+        """After a group's last item finished, before the next group's checks. ``wait`` bounds
+        its summary's checks (`bounded_summary`)."""
         ...
 
     def cause(self, outcome: ItemOutcome) -> NoReturn:
@@ -254,7 +270,7 @@ async def run_batch(
     """Run ``items`` one task at a time, stopping at the first that doesn't finish."""
     # One progress token per tool call: keep its values increasing across items (#245).
     progress = MonotonicProgress.wrap(on_progress)
-    batch = BatchOutcome()
+    batch = BatchOutcome(budget=budget)
     budget.start()
     with adapter.batch_scope():
         for i, item in enumerate(items):
@@ -264,7 +280,7 @@ async def run_batch(
                 # summarized with what it did.
                 if not first_of_group:
                     done = [x for x in items[:i] if x.group == item.group]
-                    await adapter.end_group(done)
+                    await adapter.end_group(done, budget.for_check())
                 batch.items.extend(ItemOutcome(x, "not_started") for x in items[i:])
                 batch.out_of_time = budget.per_call
                 return batch
@@ -285,7 +301,9 @@ async def run_batch(
             if outcome.state == "not_started":
                 # The wait ran out during the checks before its start (a slow task list).
                 if not first_of_group:
-                    await adapter.end_group([x for x in items[:i] if x.group == item.group])
+                    await adapter.end_group(
+                        [x for x in items[:i] if x.group == item.group], budget.for_check()
+                    )
                 batch.items.extend(ItemOutcome(x, "not_started") for x in items[i:])
                 batch.out_of_time = budget.per_call
                 return batch
@@ -296,7 +314,9 @@ async def run_batch(
             adapter.item_done(item, outcome.result)
             last_of_group = i == len(items) - 1 or items[i + 1].group != item.group
             if last_of_group:
-                await adapter.end_group([x for x in items if x.group == item.group])
+                await adapter.end_group(
+                    [x for x in items if x.group == item.group], budget.for_check()
+                )
     return batch
 
 
@@ -312,7 +332,7 @@ async def _run_item(
 ) -> ItemOutcome:
     try:
         async with adapter.start_guard(item):
-            running = await adapter.before_start(item)
+            running = await adapter.before_start(item, budget.for_check())
             if running is None and not first and budget.spent():
                 # The checks before the start (a BackgroundTask list) used up the wait: no new
                 # start once it's over (QA round 1 on #686).
@@ -545,6 +565,22 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome, note: str = "")
     if last.state == "handed_off":
         return adapter.handoff_text(last, batch) + note
     raise failure_error(adapter, last, batch)
+
+
+async def bounded_summary(
+    make: Callable[[bool], Awaitable[str]], wait: float | None, label: str
+) -> str:
+    """A summary within ``wait`` (#512 PR 3): ``make(True)`` may read the NAS (the recycle bin's
+    setting, what a skipped source is), and those reads are what's bounded. Out of time, it's
+    ``make(False)``, the same summary from what's known already, worded as for a check DSM
+    didn't answer: the tasks are done, and a slow check mustn't take the call past its wait."""
+    if wait is None:
+        return await make(True)
+    try:
+        return await asyncio.wait_for(make(True), wait)
+    except TimeoutError:
+        logger.debug("%s: the summary's checks didn't finish within the call's wait", label)
+    return await make(False)
 
 
 def unstop(message: str) -> str:

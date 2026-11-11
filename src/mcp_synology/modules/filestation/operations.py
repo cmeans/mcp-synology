@@ -34,6 +34,7 @@ from mcp_synology.modules.filestation.batch import (
     Item,
     ItemOutcome,
     batch_reply,
+    bounded_summary,
     no_scope,
     run_batch,
 )
@@ -633,6 +634,8 @@ async def _skip_report(
     skipped_paths: list[str],
     remove_src: bool,
     earlier: Sequence[str] = (),
+    *,
+    probe: bool = True,
 ) -> list[str]:
     """Lines for a copy/move/restore result where DSM skipped something (#171, #189).
 
@@ -644,7 +647,9 @@ async def _skip_report(
     places split it up.
     """
     try:
-        kinds = await paths_isdir(client, skipped_paths)
+        # Out of time (`bounded_summary`), the kinds aren't read: the hedged wording, as for a
+        # lookup DSM didn't answer.
+        kinds = await paths_isdir(client, skipped_paths) if probe else {}
     except Exception as e:
         # The copy already happened; report it with the hedged wording, never as an error,
         # whatever the lookup met: right after a large task, DSM may not answer at all (#588).
@@ -1046,7 +1051,7 @@ class CopyMoveAdapter:
         # at a time, so calls can't deadlock.
         return self.client.destination_lock(self.dest)
 
-    async def before_start(self, item: Item) -> dict[str, Any] | None:
+    async def before_start(self, item: Item, read_timeout: float) -> dict[str, Any] | None:
         p = item.source
         at = self.group.index(p)
         # A copy of the same source to another destination is a different operation; a
@@ -1054,7 +1059,7 @@ class CopyMoveAdapter:
         match: dict[str, Any] = {"remove_src": self.remove_src}
         if not self.remove_src:
             match["dest_folder_path"] = self.dest
-        listed, tasks = await tasks_for_landing_check(self.client)
+        listed, tasks = await tasks_for_landing_check(self.client, read_timeout=read_timeout)
         _refuse_landing_on_a_running_task(
             tasks,
             self.operation,
@@ -1142,29 +1147,36 @@ class CopyMoveAdapter:
             "dest_of": dict(self.went),
         }
 
-    async def end_group(self, items: Sequence[Item]) -> None:
+    async def end_group(self, items: Sequence[Item], wait: float) -> None:
         # ``items``: the group's items that ran, all of them unless the call's wait ran out
         # partway (#496), so a summary never names one that wasn't started.
         ran = [x.source for x in items]
         cut_short = len(ran) < len(self.group)
         self.group = [p for p in self.group if p in ran]
-        text = await _copy_move_summary(
-            self.client,
-            self.group,
-            self.dest,
-            self.remove_src,
-            self.total,
-            self.skipped_paths,
-            # Cut short by the call's wait: only the named sources went (pre-QA r2).
-            only_named_sources_removed=self.multi or cut_short,
-            # A restore's earlier items at this destination; for any other call, none.
-            earlier=[
-                q
-                for q in [*self.done, *self.skipped]
-                if q not in self.group and self.went.get(q) == self.dest
-            ],
-            replaced=self.replaced,
-        )
+        group = list(self.group)
+        # A restore's earlier items at this destination; for any other call, none.
+        earlier = [
+            q
+            for q in [*self.done, *self.skipped]
+            if q not in group and self.went.get(q) == self.dest
+        ]
+
+        def make(probe: bool) -> Awaitable[str]:
+            return _copy_move_summary(
+                self.client,
+                group,
+                self.dest,
+                self.remove_src,
+                self.total,
+                self.skipped_paths,
+                # Cut short by the call's wait: only the named sources went (pre-QA r2).
+                only_named_sources_removed=self.multi or cut_short,
+                earlier=earlier,
+                replaced=self.replaced,
+                probe=probe,
+            )
+
+        text = await bounded_summary(make, wait, f"{self.operation} to {self.dest}")
         if self.operation == "Restore" and self.share_name:
             # Rephrase from "Moved" to "Restored"
             text = _as_restore(text, self.share_name)
@@ -1297,10 +1309,12 @@ async def _copy_move_summary(
     only_named_sources_removed: bool = False,
     earlier: Sequence[str] = (),
     replaced: dict[str, str] | None = None,
+    probe: bool = True,
 ) -> str:
     """The result text of a finished copy or move (a restore rewords it, ``_as_restore``).
     ``replaced``: sources whose name was already at the destination (with overwrite), and
-    whether that was a folder (#620)."""
+    whether that was a folder (#620). ``probe``: False when the call's wait is over, so a
+    skipped source's kind isn't read (`bounded_summary`)."""
     verb = "Copied" if not remove_src else "Moved"
     ok = [p for p in normalized if p not in skipped_paths]
 
@@ -1312,7 +1326,7 @@ async def _copy_move_summary(
         lines.extend(f"  {shown(name(p))}" for p in normalized)
     else:
         lines = await _skip_report(
-            client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
+            client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier, probe=probe
         )
 
     met = {p: kind for p, kind in (replaced or {}).items() if p in ok}
@@ -1417,9 +1431,11 @@ class DeleteAdapter:
     def start_guard(self, item: Item) -> AbstractAsyncContextManager[Any]:
         return contextlib.nullcontext()
 
-    async def before_start(self, item: Item) -> dict[str, Any] | None:
+    async def before_start(self, item: Item, read_timeout: float) -> dict[str, Any] | None:
         # Never start a second delete of a path that already has one running (#245).
-        return await running_task(self.client, api=self.api, path=item.source)
+        return await running_task(
+            self.client, api=self.api, path=item.source, read_timeout=read_timeout
+        )
 
     def start_params(self, item: Item) -> dict[str, str]:
         return {
@@ -1459,13 +1475,18 @@ class DeleteAdapter:
             recycle[share_name] = status[share_name]
         return {"paths": [p], "recursive": self.recursive, "recycle": recycle}
 
-    async def end_group(self, items: Sequence[Item]) -> None:
+    async def end_group(self, items: Sequence[Item], wait: float) -> None:
         return None
 
     async def summary(self, batch: BatchOutcome) -> str:
         # Only what ran: the call's wait may have run out before the rest (#496).
         ran = [o.item.source for o in batch.items if o.state == "done"]
-        return await _delete_summary(self.client, ran, self.recycle_bin_status)
+
+        def make(probe: bool) -> Awaitable[str]:
+            return _delete_summary(self.client, ran, self.recycle_bin_status, probe=probe)
+
+        wait = batch.budget.for_check() if batch.budget is not None else None
+        return await bounded_summary(make, wait, "Delete")
 
     def handoff_text(self, outcome: ItemOutcome, batch: BatchOutcome) -> str:
         assert outcome.handoff is not None
@@ -1625,8 +1646,12 @@ async def _delete_summary(
     client: DsmClient,
     normalized: list[str],
     recycle_bin_status: dict[str, bool] | None,
+    *,
+    probe: bool = True,
 ) -> str:
-    """The result text of a finished delete_files call."""
+    """The result text of a finished delete_files call. ``probe``: False when the call's wait
+    is over (`bounded_summary`): a share whose bin setting isn't known yet is reported as one
+    DSM didn't answer for, never guessed."""
     # A path inside a share's bin (/<share>/#recycle/…) is gone for good whatever the share's
     # setting: DSM keeps no second copy (#220). A user's home bin reached through /homes
     # (/homes/<user>/#recycle/…) is, to DSM, a folder inside the homes share, so a delete there
@@ -1665,6 +1690,8 @@ async def _delete_summary(
     if home_keys and recycle_bin_status is not None:
         if "homes" in recycle_bin_status:
             homes_bin = recycle_bin_status["homes"]
+        elif not probe:
+            homes_answered = False
         else:
             try:
                 homes_bin, definite = await probe_recycle_status(client, "homes")
@@ -1708,6 +1735,9 @@ async def _delete_summary(
                     shares_with_recycle.add(share_name)
                 else:
                     shares_without_recycle.add(share_name)
+                continue
+            if not probe and share_name not in recycle_bin_status:
+                shares_unknown.add(share_name)
                 continue
             try:
                 enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
