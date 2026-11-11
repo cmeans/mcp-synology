@@ -89,6 +89,7 @@ def isolated_logging(tmp_path: Path, stderr: io.StringIO) -> Iterator[Path]:
         for h in handlers:
             root.addHandler(h)
         root.setLevel(level)
+        logging.captureWarnings(False)
         logging_._take_early_records()
 
 

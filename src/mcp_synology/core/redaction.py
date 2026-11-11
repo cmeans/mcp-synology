@@ -147,20 +147,28 @@ _COOKIE = re.compile(
 _COOKIE_ITEM = re.compile(
     rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s]*)"""
 )
+# A JSON or repr number: a dot is part of it only with a digit after (`'token': 5.txt` is a name).
+_NUMBER = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
 # A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`): a quoted
 # value, or a number.
 _CREDENTIAL_JSON_ESCAPED = re.compile(
-    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})(\\"(?:[^"\\\n]|\\[^"\n])*|-?\d[\d.eE+-]*)"""
+    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})(\\"(?:[^"\\\n]|\\[^"\n])*|(?>{_NUMBER}))"""
 )
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
 # A number is masked too (`{"otp_code": 123456}`). Not a bare `key: value` in YAML or prose:
 # `password: try again` is a sentence as often as a secret.
+# A member's value ends its member: a separator, a closing bracket or the line's end follows.
+# `"password": "draft".txt` is a file name, not a member (QA round 1 on #681).
+_MEMBER_END = r"(?=\s{0,64}(?:[,;}\])\r\n]|$))"
 _CREDENTIAL_JSON = re.compile(
-    rf"""(?i)("{_KEY}"\s{{0,64}}:\s{{0,64}})("(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+    rf"""(?i)("{_KEY}"\s{{0,64}}:\s{{0,64}})"""
+    rf"""("(?:[^"\\\n]|\\.)*+(?:"|(?=[\r\n])|$)|(?>{_NUMBER})){_MEMBER_END}"""
 )
 _CREDENTIAL_REPR = re.compile(
-    rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)('(?:[^'\\\n]|\\.)*'?|"(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+    rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)"""
+    rf"""('(?:[^'\\\n]|\\.)*+(?:'|(?=[\r\n])|$)|"(?:[^"\\\n]|\\.)*+(?:"|(?=[\r\n])|$)"""
+    rf"""|(?>{_NUMBER})){_MEMBER_END}"""
 )
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
@@ -286,8 +294,9 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
     ``names``: the text may hold file and folder names (a tool's reply, error or progress), so a
     ``key=value`` item is masked only inside a URL (``scheme://…?token=…``), never in bare text,
     where ``download.php?id=7&token=a1b2c3.zip`` is a name the model must be able to repeat
-    (maintainer, 2026-11-10). Userinfo, wrapped links, JSON, repr, header and cookie forms are
-    masked either way.
+    (maintainer, 2026-11-10); a header or cookie only where it reads as one (`_header_context`).
+    Userinfo, wrapped links, JSON and repr members are masked either way; a member only when a
+    separator, a closing bracket or the line's end follows its value.
 
     URL userinfo (``scheme://***@host``), the value of a credential parameter (``passwd``,
     ``_sid``, ``SynoToken``, ``otp_code``, ``device_id``, a tracker passkey; as ``key=value`` or
@@ -306,9 +315,13 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
         )
 
     text = _URL_IN_TEXT.sub(lambda m: params(m.group(0)), text) if names else params(text)
-    text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
+    text = _CREDENTIAL_HEADER.sub(
+        lambda m: f"{m.group(1)}{MASK}" if not names or _header_context(m) else m.group(0), text
+    )
 
     def cookie(m: re.Match[str]) -> str:
+        if names and not _header_context(m):
+            return m.group(0)
         opener = m.group(2) or m.group(4) or m.group(6) or ""
         value = next(v for v in (m.group(3), m.group(5), m.group(7), m.group(8)) if v is not None)
 
@@ -330,6 +343,15 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
     return _CREDENTIAL_REPR.sub(
         lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
     )
+
+
+def _header_context(m: re.Match[str]) -> bool:
+    """Whether a header or cookie match reads as one, not as a file name (`Cookie: id=42
+    recipe.txt`): it starts its line, after whitespace, or follows a quote or a bracket (a
+    dict, a JSON object, httpcore's header tuples). In names mode only (QA round 1 on #681)."""
+    text, start = m.string, m.start()
+    before = text[text.rfind("\n", 0, start) + 1 : start].rstrip()
+    return not before or before[-1] in "'\"([{,"
 
 
 def _mask_authority(url: str) -> str:

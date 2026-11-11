@@ -19,6 +19,7 @@ import ast
 import json
 import logging
 import sys
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,7 +30,8 @@ from click.testing import CliRunner
 from mcp.client import Client
 from mcp.server.mcpserver import Context  # noqa: TC002 - the SDK reads the annotation at runtime
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import TextContent
+from mcp.shared.exceptions import MCPError
+from mcp.types import EmbeddedResource, ResourceLink, TextContent, TextResourceContents
 
 from mcp_synology.cli import logging_, main
 from mcp_synology.cli.output import say, visible
@@ -102,6 +104,41 @@ async def test_a_structured_reply_is_scrubbed(caplog: pytest.LogCaptureFixture) 
     assert CANARY not in _text(result)
     assert CANARY not in json.dumps(result.structured_content)
     assert "The structured reply of structured" in caplog.text
+
+
+async def test_other_content_blocks_and_protocol_errors_are_scrubbed() -> None:
+    """No tool sends an embedded resource or a resource link, or raises an `MCPError`, today;
+    one that does is scrubbed like a text reply (QA round 1 on #681)."""
+    server = _SynologyServer("canary")
+
+    @server.tool(name="blocks")
+    async def blocks() -> list[Any]:
+        return [
+            EmbeddedResource(
+                type="resource",
+                resource=TextResourceContents(uri="file:///x.txt", text=f"see {LEAKS[0]}"),
+            ),
+            ResourceLink(
+                type="resource_link",
+                uri=LEAKS[1],
+                name="link",
+                description=f"from {LEAKS[0]}",
+            ),
+        ]
+
+    @server.tool(name="protocol")
+    async def protocol() -> str:
+        raise MCPError(-32603, f"failed {LEAKS[0]}", {"url": LEAKS[1]})
+
+    async with Client(server) as client:
+        result = await client.call_tool("blocks", {})
+        dumped = json.dumps([c.model_dump(mode="json") for c in result.content])
+        assert "see https://***@nas.example" in dumped
+        assert CANARY not in dumped
+        with pytest.raises(MCPError) as raised:
+            await client.call_tool("protocol", {})
+    assert CANARY not in str(raised.value)
+    assert CANARY not in json.dumps(raised.value.error.model_dump(mode="json"))
 
 
 # File and folder names that look like query items: the model must be able to repeat them, so a
@@ -306,6 +343,9 @@ def fresh_root_logging() -> Iterator[None]:
     handlers, level = list(root.handlers), root.level
     for h in handlers:
         root.removeHandler(h)
+    # An earlier test's CLI setup may have left warnings captured while pytest put its own
+    # handler back: `captureWarnings(True)` would then change nothing.
+    logging.captureWarnings(False)
     try:
         yield
     finally:
@@ -315,6 +355,7 @@ def fresh_root_logging() -> Iterator[None]:
         for h in handlers:
             root.addHandler(h)
         root.setLevel(level)
+        logging.captureWarnings(False)
         logging_._take_early_records()
 
 
@@ -333,15 +374,24 @@ def test_logs_never_carry_a_credential(
     logging_._configure_logging("debug", str(log_file))
     for leak in LEAKS:
         log.warning("request failed: %s", leak)
+    # A form body outside any URL: only the full pass masks it, names mode keeps it as a name.
+    # Logs get the full pass (QA round 1 on #681: a names-mode formatter passed every test).
+    log.debug("form body: account=admin&passwd=%s&otp_code=123456", CANARY)
     try:
         raise RuntimeError(f"connection to {LEAKS[0]} refused")
     except RuntimeError:
         log.exception("a traceback")
+    # A Python warning goes through the redacting handlers, not to stderr as it is.
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn(f"deprecated, see {LEAKS[0]}", UserWarning, stacklevel=1)
     for h in logging.getLogger().handlers:
         h.flush()
     written = log_file.read_text(encoding="utf-8")
+    assert "deprecated, see https://***@nas.example" in written
     assert "a traceback" in written and "RuntimeError" in written
     assert "before the file opens" in written
+    assert "form body: account=admin&passwd=***&otp_code=***" in written
     assert CANARY not in written
     assert CANARY not in capsys.readouterr().err
 
@@ -455,6 +505,7 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
 
 # What writes to the terminal without `say`, by name: a stream held in a variable
 # (`out = sys.stderr; out.write(...)`) can't be told apart from any other object's `write`.
+# Python's warnings go through logging (`logging.captureWarnings` in `cli/logging_.py`).
 _WRITERS = {
     "click.echo",
     "click.secho",
@@ -469,50 +520,145 @@ _WRITERS = {
     "traceback.print_last",
     "warnings.showwarning",
 } | {
-    f"sys.{stream}{part}.write"
+    f"sys.{stream}{part}.{method}"
     for stream in ("stdout", "stderr", "__stdout__", "__stderr__")
     for part in ("", ".buffer")
+    for method in ("write", "writelines")
 }
 _LOG_SETUP = {"basicConfig", "dictConfig", "fileConfig", "Formatter"}
+# What sends text to the MCP client without a sink: the session's senders, and the context's
+# log methods (QA round 1 on #681). Progress goes through `core.formatting.report_progress`.
+_MCP_SENDERS = {
+    "send_log_message",
+    "send_progress_notification",
+    "send_notification",
+    "elicit",
+    "elicit_url",
+}
+_CONTEXT_LOG = {"debug", "info", "warning", "error", "log"}
+# click's exceptions print their own message, not through `say`. Each one raised on purpose is
+# listed, with what its message holds.
+_CLICK_ERRORS = {"ClickException", "UsageError", "BadParameter", "FileError", "BadOptionUsage"}
+_KNOWN_CLICK_ERRORS = {
+    # A version string the user typed, quoted with `!r`.
+    ("mcp_synology/cli/version.py", "ClickException"),
+}
+
+
+def _output_paths(rel: str, tree: ast.Module) -> list[str]:
+    """Every place in one module that writes text out other than through its sink."""
+    aliases = _aliases(tree)
+    found: list[str] = []
+
+    def resolve(name: str) -> str:
+        head, _, tail = name.partition(".")
+        return f"{aliases[head]}.{tail}".rstrip(".") if head in aliases else name
+
+    for node in ast.walk(tree):
+        # A reference counts as much as a call: `rp = ctx.report_progress` is a way around too.
+        if isinstance(node, ast.Attribute | ast.Name) and not isinstance(
+            getattr(node, "ctx", None), ast.Store
+        ):
+            name = _dotted(node)
+            resolved = resolve(name)
+            last = resolved.rsplit(".", 1)[-1]
+            here = f"{rel}:{node.lineno} {name}"
+            if (resolved in _WRITERS or name in _WRITERS) and rel != _TERMINAL:
+                found.append(here)
+            if (
+                isinstance(node, ast.Attribute)
+                and last == "report_progress"
+                and resolved != "mcp_synology.core.formatting.report_progress"
+                and rel != _PROGRESS
+            ):
+                found.append(f"{here} (use core.formatting.report_progress)")
+            if isinstance(node, ast.Attribute) and node.attr in _MCP_SENDERS:
+                found.append(here)
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in _CONTEXT_LOG
+                and isinstance(node.value, ast.Name)
+                and node.value.id in ("ctx", "context")
+            ):
+                found.append(here)
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func)
+        resolved = resolve(name)
+        last = resolved.rsplit(".", 1)[-1]
+        here = f"{rel}:{node.lineno} {name}("
+        if last in ("ToolError", "MCPError") and rel not in _ERRORS:
+            found.append(here)
+        if (
+            (last.endswith("Handler") or last in _LOG_SETUP)
+            and rel != _LOGGING
+            and last != "VersionedHandler"
+        ):
+            found.append(here)
+        if (
+            name == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in ("report_progress", "echo", "secho", "write", "writelines")
+        ):
+            found.append(f"{here} getattr {node.args[1].value}")
+        # An exit with a message prints it to stderr as it is.
+        if resolved in ("sys.exit", "SystemExit") and any(
+            isinstance(a, ast.JoinedStr)
+            or (isinstance(a, ast.Constant) and isinstance(a.value, str))
+            for a in node.args
+        ):
+            found.append(f"{here} with a message")
+        if (
+            last in _CLICK_ERRORS
+            and resolved.startswith("click.")
+            and (rel, last) not in _KNOWN_CLICK_ERRORS
+        ):
+            found.append(f"{here} (click prints it, not say())")
+    return found
 
 
 def test_every_output_goes_through_its_sink() -> None:
     found: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
         rel = path.relative_to(SRC).as_posix()
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        aliases = _aliases(tree)
-        for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
-            name = _dotted(call.func)
-            head, _, tail = name.partition(".")
-            resolved = f"{aliases[head]}.{tail}".rstrip(".") if head in aliases else name
-            last = resolved.rsplit(".", 1)[-1]
-            here = f"{rel}:{call.lineno} {name}("
-            if (resolved in _WRITERS or name in _WRITERS) and rel != _TERMINAL:
-                found.append(here)
-            if last == "ToolError" and rel not in _ERRORS:
-                found.append(here)
-            if (
-                last == "report_progress"
-                and resolved != "mcp_synology.core.formatting.report_progress"
-                and name != "report_progress"
-                and rel != _PROGRESS
-            ):
-                found.append(f"{here} (use core.formatting.report_progress)")
-            if (
-                (last.endswith("Handler") or last in _LOG_SETUP)
-                and rel != _LOGGING
-                and last != "VersionedHandler"
-            ):
-                found.append(here)
-            if (
-                name == "getattr"
-                and len(call.args) >= 2
-                and isinstance(call.args[1], ast.Constant)
-                and call.args[1].value in ("report_progress", "echo", "secho", "write")
-            ):
-                found.append(f"{here} getattr {call.args[1].value}")
+        found += _output_paths(rel, ast.parse(path.read_text(encoding="utf-8")))
     assert found == [], "\n".join(found)
+
+
+# Each way around a sink QA's reviewer planted in a synthetic module (round 1 on #681), and
+# the earlier rounds' forms: the guard must name every one.
+_BYPASSES = """
+import sys, warnings, traceback, os
+import click
+from click import echo as e
+async def tool(ctx):
+    await ctx.info("x")
+    await ctx.log("info", "x")
+    await ctx.session.send_log_message("info", "x")
+    await ctx.session.send_progress_notification("t", 1)
+    await ctx.elicit("x", dict)
+    rp = ctx.report_progress
+    await rp(1, 2, "x")
+    raise MCPError(1, "x")
+def cli():
+    e("x")
+    print("x")
+    sys.stderr.writelines(["x"])
+    sys.__stderr__.buffer.write(b"x")
+    os.write(2, b"x")
+    traceback.print_exc()
+    sys.exit("x")
+    raise SystemExit(f"x {1}")
+    raise click.UsageError("x")
+    getattr(sys.stdout, "write")("x")
+"""
+
+
+def test_the_guard_names_every_way_around_a_sink() -> None:
+    found = _output_paths("mcp_synology/modules/fake.py", ast.parse(_BYPASSES))
+    expected_lines = {6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
+    assert {int(f.split(":")[1].split()[0]) for f in found} == expected_lines, "\n".join(found)
 
 
 def test_every_log_handler_uses_the_redacting_formatter() -> None:

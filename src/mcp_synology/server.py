@@ -19,6 +19,7 @@ import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, Icon, TextContent
 from pydantic import ValidationError
 
@@ -473,6 +474,14 @@ class _SynologyServer(MCPServer):
             notice = await self._take_update_notice()
             text = _scrubbed(str(exc), "error", name) + _scrubbed(notice, "error", name)
             raise type(exc)(f"{REPLY_LABEL}\n{text}") from exc.__cause__
+        except MCPError as exc:
+            # A protocol error a tool raised goes to the client as it is: its message and data
+            # are scrubbed here (QA round 1 on #681). No tool raises one today.
+            message = _scrubbed(exc.error.message, "error", name)
+            data = _redacted_strings(exc.error.data)
+            exc.error = exc.error.model_copy(update={"message": message, "data": data})
+            exc.args = (exc.error.code, message, data)
+            raise
         if not isinstance(result, CallToolResult):
             return result
         notice = await self._take_update_notice()
@@ -718,20 +727,55 @@ def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
     content = [
         c.model_copy(update={"text": _scrubbed(c.text, "reply", name)})
         if isinstance(c, TextContent)
-        else c
+        else _scrubbed_block(c, name)
         for c in result.content
     ]
     update: dict[str, Any] = {"content": content}
     if result.structured_content is not None:
         structured = _redacted_strings(result.structured_content)
         if structured != result.structured_content:
-            logger.warning(
-                "The structured reply of %s held text that looked like a credential, masked "
-                "there (#514); if it was one, a call site let it through.",
-                name,
-            )
+            _warn_masked("structured reply", name)
         update["structured_content"] = structured
+    if result.meta is not None:
+        update["meta"] = _redacted_strings(result.meta)
     return result.model_copy(update=update)
+
+
+# Fields that hold base64 data, never text: left as they are.
+_BINARY_FIELDS = frozenset({"data", "blob"})
+
+
+def _scrubbed_block(block: Any, name: str) -> Any:
+    """A content block other than text (an embedded resource, a resource link, an image or
+    audio block) with every text field masked: an embedded resource's text, a link's URI, name
+    and description, any `_meta`. None is sent today (QA round 1 on #681)."""
+    raw = block.model_dump(by_alias=True, exclude_none=True)
+
+    def walk(value: Any, key: str = "") -> Any:
+        if key in _BINARY_FIELDS:
+            return value
+        if isinstance(value, dict):
+            return {k: walk(v, k) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        if isinstance(value, str):
+            return redact_secrets(value, names=True)
+        return value
+
+    redacted = walk(raw)
+    if redacted == raw:
+        return block
+    _warn_masked(f"{raw.get('type', 'content')} block", name)
+    return type(block).model_validate(redacted)
+
+
+def _warn_masked(sink: str, name: str) -> None:
+    logger.warning(
+        "The %s of %s held text that looked like a credential, masked there (#514); if it "
+        "was one, a call site let it through.",
+        sink,
+        name,
+    )
 
 
 def _labeled(result: CallToolResult) -> CallToolResult:

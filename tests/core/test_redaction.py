@@ -569,6 +569,11 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         # A number, decimals and exponents too.
         ('{"otp_code": 123456}', '{"otp_code": ***}'),
         ('{"passwd": 1.5e3}', '{"passwd": ***}'),
+        # A member's value ends its member, in any mode: these are names (QA r1 on #681).
+        ("'token': 5.txt", "'token': 5.txt"),
+        ('"password": "draft".txt', '"password": "draft".txt'),
+        ("{'token': 5, 'a': 1}", "{'token': ***, 'a': 1}"),
+        ('{"passwd": "x" }', '{"passwd": "***" }'),
         # An unterminated value ending in an escaped quote keeps one quote.
         ('{"passwd": "a\\"', '{"passwd": "***'),
         # DSM's 2FA device token in a login reply, and the session as its `id` cookie.
@@ -683,6 +688,15 @@ def test_a_nested_url_with_long_userinfo_is_masked() -> None:
         # JSON, cookies and headers aren't names: masked either way.
         ('{"passwd": "SEC"}', '{"passwd": "***"}'),
         ("Cookie: id=SEC", "Cookie: id=***"),
+        ("  X-SYNO-Token: SEC", "  X-SYNO-Token: ***"),
+        ("{'Cookie': 'id=SEC'}", "{'Cookie': 'id=***'}"),
+        ("[(b'X-SYNO-Token', b'SEC')]", "[(b'X-SYNO-Token', b'***')]"),
+        # A file name that only looks like one, in a listing row (QA round 1 on #681).
+        ("📄 Cookie: id=42 recipe.txt", "📄 Cookie: id=42 recipe.txt"),
+        ("📄 x-syno-token = notes.txt", "📄 x-syno-token = notes.txt"),
+        ('📄 "password": "draft".txt', '📄 "password": "draft".txt'),
+        ("📄 'token': 5.txt", "📄 'token': 5.txt"),
+        ('📄 "passwd": "a, b".x', '📄 "passwd": "a, b".x'),
     ],
 )
 def test_names_mode_masks_query_items_only_inside_urls(text: str, expected: str) -> None:

@@ -95,6 +95,9 @@ def _init_early_logging(*, verbose: bool = False) -> None:
     stderr = logging.StreamHandler(sys.stderr)
     stderr.setFormatter(RedactingFormatter(_LOG_FORMAT))
     logging.basicConfig(level=level, handlers=[stderr])
+    # Python's warnings (the SDK's deprecation warnings among them) go through logging too, so
+    # they're redacted like every record, not written to stderr as they are (QA r1 on #681).
+    logging.captureWarnings(True)
     _start_early_records()
 
 
