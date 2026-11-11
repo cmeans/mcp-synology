@@ -3757,8 +3757,9 @@ class TestDeleteFailurePartway:
         )
         # Its own advice, then the retry note (QA round 3 on #480).
         assert error["suggestion"] == (
-            f"Check with list_files, or file_task with no handle, before deleting again. "
-            f"{_SHORT_RETRY_NOTE}"
+            # The path named, as copy names where to look (pre-QA r5 on #687).
+            f"Check /video/b with list_files, or file_task with no handle, before deleting "
+            f"again. {_SHORT_RETRY_NOTE}"
         )
 
     @respx.mock
@@ -4072,22 +4073,38 @@ async def test_an_unanswered_start_on_the_last_path_names_what_was_done(
 
 @respx.mock
 @pytest.mark.parametrize(
-    ("tool", "where"),
-    [(copy_files, "/Media/Dst"), (move_files, "/Media/Movies/A.mkv and /Media/Dst")],
-    ids=["copy", "move"],
+    ("tool", "where", "then"),
+    [
+        ("copy", "/Media/Dst", "running it again"),
+        ("move", "/Media/Movies/A.mkv and /Media/Dst", "running it again"),
+        ("restore", "/Media/#recycle/Movies/A.mkv and /Media/Movies", "running it again"),
+        ("delete", "/Media/Movies/A.mkv", "deleting again"),
+    ],
+    ids=["copy", "move", "restore", "delete"],
 )
 async def test_an_unanswered_starts_advice_keeps_the_paths_case(
-    mock_client: DsmClient, no_poll_wait: None, tool: Any, where: str
+    mock_client: DsmClient, no_poll_wait: None, tool: str, where: str, then: str
 ) -> None:
-    """QA round 2 on #687: str.capitalize() lower-cased the paths in the advice."""
+    """QA round 2 on #687: str.capitalize() lower-cased the paths in the advice. Every tool
+    names where to look, as written (pre-QA r5)."""
     calls: list[dict[str, str]] = []
-    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-        side_effect=_unanswered_start(calls, "/Media/Movies/A.mkv")
-    )
+    source = "/Media/#recycle/Movies/A.mkv" if tool == "restore" else "/Media/Movies/A.mkv"
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, source))
     with pytest.raises(ToolError) as refused:
-        await tool(mock_client, paths=["/Media/Movies/A.mkv"], dest_folder="/Media/Dst")
+        if tool == "copy":
+            await copy_files(mock_client, paths=[source], dest_folder="/Media/Dst")
+        elif tool == "move":
+            await move_files(mock_client, paths=[source], dest_folder="/Media/Dst")
+        elif tool == "restore":
+            await restore_from_recycle_bin(
+                mock_client,
+                share="/Media",  # type: ignore[arg-type]
+                paths=["#recycle/Movies/A.mkv"],
+            )
+        else:
+            await delete_files(mock_client, paths=[source])  # type: ignore[list-item]
     assert json.loads(str(refused.value))["error"]["suggestion"] == (
-        f"Check {where} with list_files, or file_task with no handle, before running it again."
+        f"Check {where} with list_files, or file_task with no handle, before {then}."
     )
 
 

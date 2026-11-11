@@ -1538,8 +1538,9 @@ class DeleteAdapter:
                 retryable=False,
                 param="paths",
                 value=p,
-                suggestion="Check with list_files, or file_task with no handle, "
-                "before deleting again.",
+                # Named, as copy's names where to look (pre-QA r5 on #687).
+                suggestion=f"{_upper_first(self.check_clause(outcome.item))}, or file_task with "
+                "no handle, before deleting again.",
             )
         if isinstance(e, ToolError):
             raise e
