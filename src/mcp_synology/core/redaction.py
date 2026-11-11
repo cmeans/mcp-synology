@@ -114,22 +114,28 @@ _CREDENTIAL_KEYS = (
 # alone (`insid`, `passwordless` are other words).
 # A paging cursor (`page_token`, `next_token`) is no credential: a model told it's `***` would
 # page wrongly (QA round 1 on #680).
-_PAGING = r"(?!(?:page|next|continuation|cursor)[_-])"
+_PAGING = r"(?!(?:next[_-])?(?:page|next|continuation|cursor)[_-]token\b)"
 _KEY = rf"{_PAGING}(?:[A-Za-z0-9]{{1,32}}[_-]){{0,3}}(?:{_CREDENTIAL_KEYS})"
 # Only where query or form syntax puts an item: after `?`, `&` or `;`. A bare `sid=1.pdf` or
 # `/share/token=abc/file.txt` is a name (decided in pre-QA r6 on #514); a logged form body is
 # masked by parameter name (`client._log_safe`). A prefix joins with `_` or `-` (`access-token`).
 _CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<=[?&;])({_KEY}=)("[^"\n]*"?|'[^'\n]*'?|[^\s&;#"'<>]+)""")
 # DSM's CSRF header, as a log line or an error quotes it.
-_CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,64})\S+")
+# The header's name, then `:`, `=` or a tuple's `,` (httpcore's DEBUG log writes headers as
+# `(b'Name', b'value')`), with any quote, `b` prefix or JSON escape around the value.
+_HEADER_GAP = r"""\\?['"]?\s{0,64}[:=,]\s{0,64}b?\\?['"]?"""
+_CREDENTIAL_HEADER = re.compile(
+    rf"""(?i)(?<![A-Za-z0-9_-])(x-syno-token{_HEADER_GAP})[^\s'"\\,)]+"""
+)
 # A cookie header, as a log line, a dict repr or JSON writes it (`Cookie: …`, `{'Cookie': '…'}`,
 # `"cookie": "…"`): DSM's session is its `id` cookie (#176), and every credential key among the
 # `;`-separated items is masked (QA round 1 on #680).
-_COOKIE = re.compile(r"""(?i)(cookie['"]?\s{0,64}[:=]\s{0,64}['"]?)([^\n'"]{0,4096})""")
+_COOKIE = re.compile(rf"""(?i)((?:set-)?cookie{_HEADER_GAP})([^\n'"\\]{{0,4096}})""")
 _COOKIE_ITEM = re.compile(rf"(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)([^;\s]*)")
-# A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`).
+# A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`): a quoted
+# value, or a number.
 _CREDENTIAL_JSON_ESCAPED = re.compile(
-    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}}\\")((?:[^"\\\n]|\\[^"\n])*)"""
+    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})(\\"(?:[^"\\\n]|\\[^"\n])*|-?\d[\d.eE+-]*)"""
 )
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
@@ -282,7 +288,9 @@ def redact_secrets(text: str) -> str:
         ),
         text,
     )
-    text = _CREDENTIAL_JSON_ESCAPED.sub(lambda m: f"{m.group(1)}{MASK}", text)
+    text = _CREDENTIAL_JSON_ESCAPED.sub(
+        lambda m: m.group(1) + (f'\\"{MASK}' if m.group(2).startswith('\\"') else MASK), text
+    )
     text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
     return _CREDENTIAL_REPR.sub(
         lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
