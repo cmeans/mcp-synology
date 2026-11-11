@@ -418,6 +418,8 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
         ("https://evil.com:443\\@nas.local/", "https://***/"),
         ("https://evil.com:\\@nas.local/", "https://***/"),
         ("file://C:\\Users\\me@corp\\x", "file://***"),
+        # An escaped backslash (`\\\\`) is a JSON escape too: one character of the user name.
+        ('"https://CORP\\\\j:pw@h.example/x"', '"https://***@h.example/x"'),
         ("ftp://CORP\\jdoe:S3cr3tPw@ftp.example/x", "ftp://***/x"),
         # A JSON escape is one character of the user name (`json.dumps` of a URI list).
         (
@@ -505,6 +507,7 @@ def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
         "x-api-key=S",
         # A paging cursor and Dev's fixed device label aren't credentials (QA round 1 on #680).
         "?page_token=abc&next_token=d",
+        "?next_page_token=b&cursor_token=c&continuation_token=d",
         "?device_name=MCPSynology",
         # ed2k without `//` is a link only right after a comma (pre-QA r7 on #514).
         "Not found: /music/My ed2k:Song#1.mp3",
@@ -573,6 +576,26 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ("{'Cookie': 'id=SEC'}", "{'Cookie': 'id=***'}"),
         ('{"Cookie": "id=SEC; did=D1d"}', '{"Cookie": "id=***; did=***"}'),
         ("Headers({'cookie': 'id=SEC'})", "Headers({'cookie': 'id=***'})"),
+        # httpcore's DEBUG header tuples, httpx's repr of a repeated header, escaped JSON, wide
+        # spacing, and a credential key other than id (pre-QA on #680's QA round 1 fix).
+        (
+            "[(b'Set-Cookie', b'id=SEC;path=/')]",
+            "[(b'Set-Cookie', b'id=***;path=/')]",
+        ),
+        (
+            "Headers([('cookie','id=SEC'),('cookie','did=D1')])",
+            "Headers([('cookie','id=***'),('cookie','did=***')])",
+        ),
+        ('{\\"cookie\\": \\"id=SEC; did=D1\\"}', '{\\"cookie\\": \\"id=***; did=***\\"}'),
+        ("Cookie:     id=SEC", "Cookie:     id=***"),
+        ("Cookie: a=1;   id=SEC", "Cookie: a=1;   id=***"),
+        ("Cookie: SynoToken=SEC", "Cookie: SynoToken=***"),
+        ("[(b'X-SYNO-Token', b'SEC')]", "[(b'X-SYNO-Token', b'***')]"),
+        ('{\\"otp_code\\": 123456}', '{\\"otp_code\\": ***}'),
+        ('\\"passwd\\":      \\"SEC\\"', '\\"passwd\\":      \\"***\\"'),
+        # A key that only starts like a paging cursor is still a credential.
+        ("?next_access_token=SEC", "?next_access_token=***"),
+        ('{"next_password": "SEC"}', '{"next_password": "***"}'),
         # A quoted value however long, escaped JSON, wide spacing.
         ('?passwd="' + "a" * 5000 + 'TAIL"', '?passwd="***"'),
         ('{\\"passwd\\":\\"SEC\\"}', '{\\"passwd\\":\\"***\\"}'),

@@ -2283,6 +2283,7 @@ def test_log_safe_redacts_list_items() -> None:
     )
     assert "CANARY" not in str(nested)
     assert nested["Passwd"] == "***"
+    assert _log_safe({"s": {"https://u:CANARY@h/x"}})["s"] == ["https://***@h/x"]
 
 
 def test_log_safe_keeps_a_uri_list_with_an_at_in_a_name() -> None:
