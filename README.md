@@ -110,6 +110,8 @@ claude mcp add synology -- uvx mcp-synology serve --config ~/.config/mcp-synolog
 
 **Other clients:** any client that starts a local (stdio) server: the command is `uvx` (its full path, which `which uvx` prints, for an app started outside a shell), with the arguments `mcp-synology serve --config <your config file>`.
 
+**Keep the server's name short.** Claude's API refuses a tool whose full name is over 64 characters, and the client builds that name from the server's name and the tool's: `mcp__<server>__<tool>` in Claude Code, and `mcp__remote-devices__<server>__<tool>` when the Claude app reaches a local server on your computer. The longest tool name is `restore_from_recycle_bin` (24 characters), so the server's name can be at most 17 characters in the Claude app (`synology-` plus an alias of up to 8: `synology-HomeNAS` fits) and 33 in Claude Code. With a longer one, every message fails with an API error saying a string "should have at most 64 characters".
+
 On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
 ### 3. Verify
