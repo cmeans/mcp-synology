@@ -405,8 +405,8 @@ class TestPollTask:
         ("stop_reply", "expected"),
         [
             (httpx.Response(200, json={"success": False, "error": {"code": 400}}), "refused"),
-            (httpx.Response(200, json={"success": False, "error": {"code": 401}}), "no_such_task"),
-            (httpx.Response(200, json={"success": False, "error": {"code": 599}}), "no_such_task"),
+            (httpx.Response(200, json={"success": False, "error": {"code": 401}}), "refused"),
+            (httpx.Response(200, json={"success": False, "error": {"code": 599}}), "refused"),
             (httpx.ReadTimeout(""), "unanswered"),
             (httpx.ConnectError("refused"), "not_sent"),
             (httpx.Response(502), "unanswered"),

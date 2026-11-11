@@ -281,9 +281,6 @@ class StopResult(Enum):
     UNANSWERED = "unanswered"
     REFUSED = "refused"
     NOT_SENT = "not_sent"
-    # DSM has no such task to stop (401, 599): a Delete answers that once it has released a
-    # finished task (#162), so it most likely ended (as `file_task`'s stop reads them).
-    NO_SUCH_TASK = "no_such_task"
 
 
 async def _stop_background_task(
@@ -311,7 +308,8 @@ async def _stop_background_task(
         return StopResult.UNANSWERED
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
-        return StopResult.NO_SUCH_TASK if e.code in (401, 599) else StopResult.REFUSED
+        # 401 and 599 included: neither shows the task ended (#521; spec), so it may still run.
+        return StopResult.REFUSED
     except httpx.TransportError as e:
         task_logger.warning(
             "%s task cleanup %s for %s: %s",

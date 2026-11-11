@@ -298,7 +298,7 @@ async def _run_item(
 
     def canceled(stop: StopResult) -> None:
         # A canceled call's stop that DSM didn't confirm: the task may still run (#497).
-        if stop not in (StopResult.CONFIRMED, StopResult.NO_SUCH_TASK):
+        if stop not in (StopResult.CONFIRMED,):
             outcome = ItemOutcome(
                 item, "failed", stop=stop, handoff=Handoff(Handle(adapter.kind, taskid), {})
             )
@@ -317,7 +317,7 @@ async def _run_item(
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         outcome = ItemOutcome(item, "failed", error=result.error, stop=result.stop)
-        if result.stop not in (StopResult.CONFIRMED, StopResult.NO_SUCH_TASK):
+        if result.stop not in (StopResult.CONFIRMED,):
             # DSM didn't confirm the stop: the task may still run, so the reply gives its handle
             # and file_task knows it; a stop that may have reached DSM is noted (#497, #660).
             outcome.handoff = Handoff(Handle(adapter.kind, taskid), result.status)
@@ -328,7 +328,7 @@ async def _run_item(
                 stop_sent=result.stop is StopResult.UNANSWERED,
             )
         return outcome
-    if result.outcome == "lost" and await _gone(client, adapter, item, taskid):
+    if result.outcome == "lost" and await _gone(client, adapter, item, taskid, records):
         # DSM can't say how it ended, but the item can: gone is what was asked for (#521).
         return ItemOutcome(item, "done")
     if result.outcome in ("handoff", "stalled", "lost"):
@@ -400,14 +400,20 @@ async def _stop_what_started(
         item.source,
         stop.value,
     )
-    if stop not in (StopResult.CONFIRMED, StopResult.NO_SUCH_TASK):
+    if stop not in (StopResult.CONFIRMED,):
         outcome = ItemOutcome(
             item, "failed", stop=stop, handoff=Handoff(Handle(adapter.kind, taskid), {})
         )
         _record(adapter, outcome, records, stop_sent=stop is StopResult.UNANSWERED)
 
 
-async def _gone(client: DsmClient, adapter: TaskAdapter, item: Item, taskid: str) -> bool:
+async def _gone(
+    client: DsmClient,
+    adapter: TaskAdapter,
+    item: Item,
+    taskid: str,
+    records: TaskRecords | None = None,
+) -> bool:
     """Whether a lost task's item is gone, by the adapter's bounded check (a stalled DSM mustn't
     hold the reply and its handle, #245)."""
     check = adapter.lost_check(item)
@@ -416,11 +422,17 @@ async def _gone(client: DsmClient, adapter: TaskAdapter, item: Item, taskid: str
     try:
         exists = await check
     except asyncio.CancelledError:
-        # A canceled call stops its task, as `poll_task` does: this one may be running.
+        # A canceled call stops its task, as `poll_task` does: this one may be running; one DSM
+        # didn't confirm is recorded, as at the other cancel points (pre-QA r2 on #512 PR 2).
         with anyio.CancelScope(shield=True):
-            await _stop_background_task(
+            stop = await _stop_background_task(
                 client, adapter.api, dsm_str(taskid), adapter.version, logger
             )
+            if stop is not StopResult.CONFIRMED:
+                outcome = ItemOutcome(
+                    item, "failed", stop=stop, handoff=Handoff(Handle(adapter.kind, taskid), {})
+                )
+                _record(adapter, outcome, records, stop_sent=stop is StopResult.UNANSWERED)
         raise
     except Exception as e:
         # Any answer that doesn't say it's gone leaves the outcome unknown.
@@ -472,10 +484,16 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
         text = await adapter.summary(batch)
         rest = batch.not_started()
         if rest and batch.out_of_time is not None:
-            # Done before the call's wait ran out; nothing is running (#496).
-            text += (
-                f"\nNot started: {', '.join(shown(x.source) for x in rest)}. This call's wait "
-                f"({batch.out_of_time:g} s) ran out before them: run them in another call."
+            # Done before the call's wait ran out; nothing is running (#496). The first line is
+            # what gets read, so it says the call is partial (pre-QA r2).
+            ran = len(batch.items) - len(rest)
+            them = "it" if len(rest) == 1 else "them"
+            text = (
+                f"[!] This call's wait ({batch.out_of_time:g} s) ran out after {ran:,} of "
+                f"{len(batch.items):,} item(s); the rest weren't started (listed last).\n"
+                + text
+                + f"\nNot started: {', '.join(shown(x.source) for x in rest)}. Run {them} in "
+                "another call."
             )
         return text
     if last.state == "handed_off":
@@ -493,7 +511,6 @@ _STOP_SAYS = {
     StopResult.UNANSWERED: "a stop was sent for {}'s task, and DSM hasn't confirmed it",
     StopResult.REFUSED: "DSM refused the stop of {}'s task, so it may still be running",
     StopResult.NOT_SENT: "the stop for {}'s task couldn't be sent, so it may still be running",
-    StopResult.NO_SUCH_TASK: "DSM had no task for {} to stop: it most likely ended",
 }
 
 

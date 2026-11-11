@@ -1247,6 +1247,7 @@ class CopyMoveAdapter:
         # ``items``: the group's items that ran, all of them unless the call's wait ran out
         # partway (#496), so a summary never names one that wasn't started.
         ran = [x.source for x in items]
+        cut_short = len(ran) < len(self.group)
         self.group = [p for p in self.group if p in ran]
         text = await _copy_move_summary(
             self.client,
@@ -1255,7 +1256,8 @@ class CopyMoveAdapter:
             self.remove_src,
             self.total,
             self.skipped_paths,
-            only_named_sources_removed=self.multi,
+            # Cut short by the call's wait: only the named sources went (pre-QA r2).
+            only_named_sources_removed=self.multi or cut_short,
             # A restore's earlier items at this destination; for any other call, none.
             earlier=[
                 q

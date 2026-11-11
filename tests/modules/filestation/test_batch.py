@@ -178,7 +178,8 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
         lambda t, i, s: (setattr(s, "statuses", [RUNNING, 400]), setattr(s, "stop", 400)),
         "failed",
     ),
-    # DSM has no such task to stop (401): it most likely ended, so no handle is given.
+    # DSM answers the stop that it has no such task (401): that doesn't show it ended (#521), so
+    # it's refused like any other, with a handle.
     "poll_dsm_error_stop_gone": (
         lambda t, i, s: (setattr(s, "statuses", [RUNNING, 400]), setattr(s, "stop", 401)),
         "failed",
@@ -267,6 +268,7 @@ _MAY_RUN = (
     "poll_dsm_error_stop_unanswered",
     "poll_dsm_error_stop_refused",
     "poll_dsm_error_stop_not_sent",
+    "poll_dsm_error_stop_gone",
 )
 
 
@@ -545,8 +547,8 @@ async def test_a_call_canceled_during_a_start_stops_what_it_started(
     assert len(stops) == 1, dsm.methods()
     taskid = stops[0].params["taskid"].strip('"')
     record = records.get(parse_handle(f"{tool.kind}:{taskid}"))
-    if stop in ("ok", 401):
-        assert record is None  # stopped, or DSM had no such task: nothing to follow up
+    if stop == "ok":
+        assert record is None  # stopped, as DSM confirmed: nothing to follow up
     else:
         assert record is not None and record.paths == [tool.sources[1]]
         assert (record.stop is not None) == isinstance(stop, httpx.ReadTimeout)
@@ -562,7 +564,7 @@ async def test_a_call_canceled_during_a_start_stops_what_it_started(
             True,
         ),
         (400, "DSM refused the stop of /s/d0's task, so it may still be running", True),
-        (401, "DSM had no task for /s/d0 to stop: it most likely ended", False),
+        (401, "DSM refused the stop of /s/d0's task, so it may still be running", True),
         (httpx.ConnectError("x"), "the stop for /s/d0's task couldn't be sent", True),
     ],
 )
@@ -607,8 +609,13 @@ async def test_no_item_starts_once_the_calls_wait_is_over(
     text = await tool.call(mock_client, TaskRecords())
     assert len(dsm.starts()) == 2, dsm.methods()
     assert clock.now <= WAIT + batch.MIN_ITEM_WAIT, clock.now
-    assert f"Not started: {shown(tool.sources[2])}. This call's wait" in text, text
+    assert text.startswith("[!] This call's wait (2 s) ran out after 2 of 3 item(s)"), text
+    assert text.endswith(f"Not started: {shown(tool.sources[2])}. Run it in another call."), text
     assert "Handle: `" not in text  # nothing is running
+    # What wasn't started isn't named as done, nor its folder as emptied.
+    done_part = text[: text.index("Not started:")]
+    assert tool.sources[2].rsplit("/", 1)[-1] not in done_part, text
+    assert "have been removed from" not in text, text
 
 
 async def test_an_item_started_near_the_end_still_gets_its_least_wait(
@@ -691,7 +698,7 @@ async def test_a_cancel_mid_poll_records_a_task_that_may_still_run(
         await tool.call(mock_client, records)
     taskid = dsm.stops()[0].params["taskid"].strip('"')
     record = records.get(parse_handle(f"delete:{taskid}"))
-    if stop in ("ok", 401):
+    if stop == "ok":
         assert record is None
     else:
         assert record is not None
