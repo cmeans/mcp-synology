@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     from mcp_synology.core.client import DsmClient
+    from mcp_synology.modules.filestation.paths import Plan
 
 logger = logging.getLogger(__name__)
 
@@ -270,13 +271,19 @@ class TaskAdapter(Protocol):
 async def run_batch(
     client: DsmClient,
     adapter: TaskAdapter,
+    plan: Plan,
     items: Sequence[Item],
     *,
     budget: Budget,
     records: TaskRecords | None,
     on_progress: ProgressCallback | None = None,
 ) -> BatchOutcome:
-    """Run ``items`` one task at a time, stopping at the first that doesn't finish."""
+    """Run ``items`` one task at a time, stopping at the first that doesn't finish. ``plan``:
+    the landing checks' result (`paths.plan_landings`, #684); every item's source must be one
+    it checked, so no batch runs a source that skipped them."""
+    unchecked = [item.source for item in items if item.source not in plan.sources]
+    if unchecked:
+        raise RuntimeError(f"run_batch: sources the plan didn't check: {unchecked!r}")
     # One progress token per tool call: keep its values increasing across items (#245).
     progress = MonotonicProgress.wrap(on_progress)
     batch = BatchOutcome(budget=budget)

@@ -63,6 +63,43 @@ class ResolvedPath(str):
     __slots__ = ()
 
 
+_PLAN_TOKEN = object()
+
+
+class Plan:
+    """The sources a batch may run (#512's Q2b, #684): built only by `plan_landings`, after the
+    landing checks (`refuse_planted_bin`, `refuse_same_names`) passed, and the only thing
+    `batch.run_batch` takes, so no batch runs a source that skipped them. ``sources``: the
+    checked paths, as `resolve_paths` or `resolve_bin_items` gave them."""
+
+    __slots__ = ("sources",)
+
+    def __init__(self, sources: frozenset[str], token: object) -> None:
+        if token is not _PLAN_TOKEN:
+            raise TypeError("A Plan is built only by paths.plan_landings")
+        self.sources = sources
+
+
+def plan_landings(
+    tool: str,
+    given: Sequence[str],
+    resolved: Sequence[str],
+    landings: Sequence[str] | None,
+    *,
+    overwrite: bool,
+    dest_given: bool = True,
+) -> Plan:
+    """Check where each of ``resolved`` lands (``landings``, one per source; None for a delete,
+    which lands nowhere) and return the `Plan` a batch runs. Run before any DSM request, so a
+    refusal comes where it always did: ``given`` are the caller's own values, quoted in it."""
+    if landings is not None:
+        refuse_planted_bin(tool, given, resolved, landings)
+        refuse_same_names(
+            tool, given, resolved, landings, overwrite=overwrite, dest_given=dest_given
+        )
+    return Plan(frozenset(resolved), _PLAN_TOKEN)
+
+
 class PathRole(enum.Enum):
     """What a path argument may name. The structural rules live here, not in each tool."""
 

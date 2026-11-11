@@ -10,9 +10,11 @@ Three layers:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
 import json
+from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin
 from unittest.mock import AsyncMock
 
@@ -2320,3 +2322,55 @@ def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
     with pytest.raises(ToolError) as exc:
         resolve_bin_items("video", ["Shows/a\nb"], "paths")
     assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]
+
+
+class TestPlanIsTheOnlyWayIntoABatch:
+    """#684 (#512's Q2b): `run_batch` takes a `Plan`, which only `plan_landings` builds, after
+    `refuse_planted_bin` and `refuse_same_names` passed. Only a delete, which lands nowhere,
+    plans without landings."""
+
+    SRC = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
+
+    def _calls(self, name: str) -> list[tuple[Path, ast.Call]]:
+        found = []
+        for file in self.SRC.rglob("*.py"):
+            for node in ast.walk(ast.parse(file.read_text())):
+                if isinstance(node, ast.Call):
+                    func = node.func
+                    called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+                    if called == name:
+                        found.append((file, node))
+        return found
+
+    def test_a_plan_is_built_only_in_paths_py(self) -> None:
+        files = {file.name for file, _ in self._calls("Plan")}
+        assert files <= {"paths.py"}, files
+
+    def test_only_a_delete_plans_without_landings(self) -> None:
+        unchecked = []
+        for file, call in self._calls("plan_landings"):
+            tool, landings = call.args[0], call.args[3] if len(call.args) > 3 else None
+            if isinstance(landings, ast.Constant) and landings.value is None:
+                unchecked.append((file.name, getattr(tool, "value", None)))
+        assert unchecked == [("operations.py", "delete_files")], unchecked
+
+    def test_a_plan_cant_be_built_by_hand(self) -> None:
+        from mcp_synology.modules.filestation.paths import Plan
+
+        with pytest.raises(TypeError, match="only by paths.plan_landings"):
+            Plan(frozenset({"/s/a"}), object())
+
+    async def test_run_batch_refuses_an_item_the_plan_didnt_check(self) -> None:
+        from mcp_synology.modules.filestation.batch import Budget, Item, run_batch
+        from mcp_synology.modules.filestation.paths import plan_landings
+
+        plan = plan_landings("delete_files", ["/s/a"], ["/s/a"], None, overwrite=False)
+        with pytest.raises(RuntimeError, match="didn't check"):
+            await run_batch(
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+                plan,
+                [Item("/s/a", None), Item("/s/b", None)],
+                budget=Budget(1.0),
+                records=None,
+            )

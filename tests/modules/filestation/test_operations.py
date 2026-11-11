@@ -6458,9 +6458,22 @@ async def test_a_calls_own_finished_task_isnt_a_clash_for_its_next_source(
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
         side_effect=_dsm_with_running(_a_task_landing("/none"), calls)
     )
-    # The operation itself, as vdsm's probes call it: refuse_same_names runs before it, in the
-    # tool's path check, and isn't this check's job.
-    await move_files(mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", overwrite=True)
+    # The record check alone: refuse_same_names (in the operation's plan since #684) refuses
+    # this call first, so the plan here skips the landing checks to reach the record.
+    from mcp_synology.modules.filestation.operations import _copy_move
+    from mcp_synology.modules.filestation.paths import plan_landings
+
+    await _copy_move(
+        mock_client,
+        tool="move_files",
+        given=["/a/n", "/b/n"],
+        plan=plan_landings("move_files", ["/a/n", "/b/n"], ["/a/n", "/b/n"], None, overwrite=True),
+        paths=["/a/n", "/b/n"],
+        dest_folder="/d",
+        overwrite=True,
+        remove_src=True,
+        operation="Move",
+    )
     assert [c["path"] for c in calls if c.get("method") == "start"] == ["/a/n", "/b/n"]
 
 
@@ -6943,6 +6956,8 @@ class TestOverwriteNoteEdges:
         )
         text, _ = await _copy_move(
             mock_client,
+            tool="restore_from_recycle_bin",
+            given=["/w/src/f"],
             paths=["/w/src/f"],
             dest_folder="/w/dst",
             overwrite=True,
