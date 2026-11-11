@@ -39,7 +39,7 @@ from mcp_synology.core.config import (
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, forges, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
-from mcp_synology.core.redaction import redact_urls
+from mcp_synology.core.redaction import redact_secrets, redact_urls
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
@@ -471,9 +471,11 @@ class _SynologyServer(MCPServer):
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()
-            raise type(exc)(f"{REPLY_LABEL}\n{exc}{notice}") from exc.__cause__
+            text = _scrubbed(str(exc), "error", name)
+            raise type(exc)(f"{REPLY_LABEL}\n{text}{notice}") from exc.__cause__
         if not isinstance(result, CallToolResult):
             return result
+        result = _scrubbed_result(result, name)
         notice = await self._take_update_notice()
         if notice:
             texts = [i for i, c in enumerate(result.content) if isinstance(c, TextContent)]
@@ -639,6 +641,32 @@ _VALIDATION_MESSAGES = {
     "float_parsing": "must be a number",
     "value_error": "has a value it doesn't take",
 }
+
+
+def _scrubbed(text: str, sink: str, where: str) -> str:
+    """``text`` as it may leave the server: credentials masked by `redact_secrets` (#514). A
+    credential reaching here means a call site let it through, so that's logged once per text
+    at WARNING, naming the sink and the tool, never the text (#514 Q2)."""
+    out = redact_secrets(text)
+    if out != text:
+        logger.warning(
+            "A credential reached the %s of %s and was masked there (#514): a call site let "
+            "it through.",
+            sink,
+            where,
+        )
+    return out
+
+
+def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
+    """``result`` with each text block's credentials masked (`_scrubbed`)."""
+    content = [
+        c.model_copy(update={"text": _scrubbed(c.text, "reply", name)})
+        if isinstance(c, TextContent)
+        else c
+        for c in result.content
+    ]
+    return result.model_copy(update={"content": content})
 
 
 def _labeled(result: CallToolResult) -> CallToolResult:
@@ -1453,7 +1481,9 @@ def create_server(config: AppConfig) -> MCPServer:
     else:
         instructions = builtin
 
-    instructions = _fill_template(instructions, template_vars)
+    instructions = _scrubbed(
+        _fill_template(instructions, template_vars), "instructions", "the server"
+    )
 
     if replacement is None:
         # A full replacement file is the user's own; everything else gets the notices.

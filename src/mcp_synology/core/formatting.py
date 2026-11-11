@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver.exceptions import ToolError
+
     from mcp_synology.core.errors import ErrorCode, SynologyError
 
 
@@ -439,6 +442,26 @@ def error_response(
     # by passing a non-JSON-serializable ``value`` (bytes, a custom object,
     # etc.). All current callers pass strings, so this is a safety net.
     raise ToolError(json.dumps({"status": "error", "error": error}, default=str))
+
+
+def rewrapped_error(body: dict[str, Any]) -> ToolError:
+    """A structured error rebuilt from an earlier one's parsed ``body`` (a partial-failure note
+    added to it): the one place besides `error_response` that builds a tool's error (#514)."""
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    return ToolError(json.dumps(body))
+
+
+async def report_progress(
+    ctx: Context[Any, Any], progress: float, total: float | None, message: str | None = None
+) -> None:
+    """Send a progress notification, its message redacted (#514): every tool's progress goes
+    through here, as its replies go through the server's `call_tool`."""
+    from mcp_synology.core.redaction import redact_secrets
+
+    await ctx.report_progress(
+        progress, total, redact_secrets(message) if message is not None else None
+    )
 
 
 def synology_error_response(operation: str, exc: SynologyError) -> NoReturn:
