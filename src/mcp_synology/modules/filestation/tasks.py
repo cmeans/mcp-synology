@@ -767,11 +767,14 @@ def handoff_reply(
         )
     if not_started:
         # A lost task never reports finishing, so "once this one finishes" couldn't be met.
-        then = "Run them again once this one finishes."
+        # Named, not "this one": right after the not-started list, that reads as one of them;
+        # and they never ran, so not "again" (#679).
+        them = "it" if len(not_started) == 1 else "them"
+        then = f"Run {them} once the task of {shown(path)} finishes."
         if lost and dest:
-            then = f"First: {_where_to_look(gerund, dest, [path])} Then run them."
+            then = f"First: {_where_to_look(gerund, dest, [path])} Then run {them}."
         elif lost:
-            then = "Check this one first by listing its path, then run them."
+            then = f"Check {shown(path)} first by listing it, then run {them}."
         lines.append(f"Not started: {', '.join(map(shown, not_started))}. {then}")
     return "\n".join(lines)
 

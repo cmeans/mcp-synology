@@ -792,7 +792,7 @@ When the same call also deletes paths outside the bin, the header says `Deleted`
 Still deleting on the NAS: /Backups/X (8 of 342 items, 2%). This operation keeps running after this reply, so nothing more needs to be done to finish it.
 Handle: `delete:FileStation_179219158016597225`
 To check on it, call file_task with this handle. To stop it, call file_task with action="stop" (it may then be partly done).
-Not started: /Backups/Y, /Backups/Z. Run them again once this one finishes.
+Not started: /Backups/Y, /Backups/Z. Run them once the task of /Backups/X finishes.
 ```
 
 A copy, move or restore also lists any source DSM skipped before this one, on a line of its own, never under `Already moved` (#585): `Skipped in whole or in part, as an item of that name is already at the destination (not compared): /v/b/x.` A move or restore adds that a skipped file is still at the source and a skipped folder keeps the items skipped, since DSM's skip on a folder means only some of its items. The task record keeps the list, so the final result (after `Before this task:`), a failed task and the status, stop and no-such-task replies say it too, with what was already done.

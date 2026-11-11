@@ -2454,7 +2454,8 @@ class TestStallHandoff:
         assert not self._stops(calls)
         assert result.startswith("The NAS stopped answering while deleting /s/b (ReadTimeout)")
         assert "Already deleted: /s/a." in result
-        assert "Not started: /s/c. Run them again once this one finishes." in result
+        # Named, singular, and not "again": it never ran (#679).
+        assert "Not started: /s/c. Run it once the task of /s/b finishes." in result
         assert [c["path"] for c in calls if c.get("method") == "start"] == ["/s/a", "/s/b"]
 
     @respx.mock
@@ -4463,7 +4464,8 @@ async def test_a_lost_delete_partway_says_whats_done_and_not_started(
         mock_client, paths=["/s/a", "/s/b", "/s/c"], recycle_bin_status={"s": True}
     )
     assert "Already deleted: /s/a." in result
-    assert "Not started: /s/c. Check this one first by listing its path, then run them." in result
+    # The lost one, named: right after the list, "this one" read as /s/c (#679).
+    assert "Not started: /s/c. Check /s/b first by listing it, then run it." in result
     assert "Call file_task with no handle to see what's running." in result
 
 
@@ -4486,7 +4488,7 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
     assert "Already copied: /s/a." in result
     assert (
         "Not started: /s/c. First: List /s/dst to see what's there; a folder there may be only "
-        "partly copied. Then run them." in result
+        "partly copied. Then run it." in result
     )
     assert records.get(Handle("copy", "T_b")) is not None
     assert not [call for call in calls if call.get("method") == "stop"]
