@@ -767,11 +767,14 @@ def handoff_reply(
         )
     if not_started:
         # A lost task never reports finishing, so "once this one finishes" couldn't be met.
-        then = "Run them again once this one finishes."
+        # Named, not "this one": right after the not-started list, that reads as one of them;
+        # and they never ran, so not "again" (#679).
+        them = "it" if len(not_started) == 1 else "them"
+        then = f"Run {them} once the task of {shown(path)} finishes."
         if lost and dest:
-            then = f"First: {_where_to_look(gerund, dest, [path])} Then run them."
+            then = f"First: {_where_to_look(gerund, dest, [path])} Then run {them}."
         elif lost:
-            then = "Check this one first by listing its path, then run them."
+            then = f"Check {shown(path)} first by listing it, then run {them}."
         lines.append(f"Not started: {', '.join(map(shown, not_started))}. {then}")
     return "\n".join(lines)
 
@@ -828,14 +831,18 @@ def _task_kind(api: Any, params: dict[str, Any], paths: list[str]) -> HandleKind
     return "restore" if any(_in_recycle_bin(p) for p in paths) else "move"
 
 
-async def _list_running(client: DsmClient) -> list[RunningTask]:
+async def _list_running(
+    client: DsmClient, *, read_timeout: float | None = None
+) -> list[RunningTask]:
     """This user's running Delete/CopyMove tasks, from ``SYNO.FileStation.BackgroundTask``
     ``list`` v2, which shows each task's start ``params`` (``path`` as a list; CopyMove
     also ``dest_folder_path``, ``overwrite``, ``remove_src`` as JSON booleans; vdsm 7.1, 7.2.2,
     7.3.2 and 7.4.1). An unexpected reply shape counts as nothing running. Raises DSM and transport
-    errors.
+    errors. ``read_timeout``: what's left of a batch call's wait (#512 PR 3).
     """
-    data = await client.request("SYNO.FileStation.BackgroundTask", "list", version=2)
+    data = await client.request(
+        "SYNO.FileStation.BackgroundTask", "list", version=2, read_timeout=read_timeout
+    )
     tasks = data.get("tasks") if isinstance(data, dict) else None
     if not isinstance(tasks, list):
         logger.debug("BackgroundTask list reply has no task list: %r", data)
@@ -873,17 +880,24 @@ async def running_task(
     api: str,
     path: str,
     params: dict[str, Any] | None = None,
+    read_timeout: float | None = None,
 ) -> dict[str, Any] | None:
     """This user's running (unfinished) task of ``api`` on ``path``, as DSM lists it.
 
     ``params``, if given, must match the task's start params too. None if there is
-    none, or if ``list`` fails: the check is a guard, never a reason to refuse an
-    operation.
+    none, or if ``list`` fails (a read past ``read_timeout`` included): the check is a guard,
+    never a reason to refuse an operation.
     """
     try:
-        tasks = await _list_running(client)
+        tasks = await _list_running(client, read_timeout=read_timeout)
     except (SynologyError, httpx.TransportError) as e:
-        logger.debug("BackgroundTask list failed, skipping the running-task check: %s", e)
+        # The duplicate-task guard (#245) is down for this call: a WARNING, as for copy's.
+        # The type too: an httpx timeout's text is empty (pre-QA r4 on #687).
+        logger.warning(
+            "BackgroundTask list failed, skipping the running-task check: %s: %s",
+            type(e).__name__,
+            e,
+        )
         return None
     return find_running(tasks, api=api, path=path, params=params)
 
@@ -974,7 +988,9 @@ def pending_landing(
     )
 
 
-async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask], list[RunningTask]]:
+async def tasks_for_landing_check(
+    client: DsmClient, *, read_timeout: float | None = None
+) -> tuple[list[RunningTask], list[RunningTask]]:
     """This user's running tasks as DSM lists them, and every task the check should look at: those
     plus the ones parallel calls on this client have started. If ``list`` fails DSM's part is
     empty: a guard never refuses the call (#587), but it did not run on them, so this logs a
@@ -985,11 +1001,12 @@ async def tasks_for_landing_check(client: DsmClient) -> tuple[list[RunningTask],
     own = set(current[1]) if current is not None else set()
     local = [t for t in _LANDINGS.get(client, {}).values() if t.handle.taskid not in own]
     try:
-        listed = await _list_running(client)
+        listed = await _list_running(client, read_timeout=read_timeout)
     except (SynologyError, httpx.TransportError) as e:
         logger.warning(
             "BackgroundTask list failed, leaving DSM's tasks out of the same-landing check "
-            "(this server's own calls are still checked): %s",
+            "(this server's own calls are still checked): %s: %s",
+            type(e).__name__,
             e,
         )
         listed = []

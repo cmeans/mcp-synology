@@ -438,10 +438,11 @@ Fix:
    Quota**. Quotas can fill long before the underlying volume does, and the
    error looks the same.
 3. For local downloads: `df -h` on the destination filesystem.
-4. After freeing space, the operation can be retried (`disk_full` is marked
-   `retryable=true`), but first delete what a failed copy or move left at the
-   destination, or retry with `overwrite=true`: with `overwrite=false` the retry skips
-   files already there, a half-written one included.
+4. `disk_full` is marked `retryable=false`: the same call fails again until space is
+   freed (#490). After freeing space, the operation can be run again, but first delete
+   what a failed copy or move left at the destination, or retry with `overwrite=true`:
+   with `overwrite=false` the retry skips files already there, a half-written one
+   included.
 
 ## timeout
 
@@ -599,8 +600,8 @@ Otherwise:
 6. `timeout` is marked `retryable=true`, but only retry after addressing the
    root cause. Blind retry on an overloaded NAS makes the situation worse.
    The exceptions are marked `retryable=false`, because DSM may already have
-   started the work: a `create_download` timeout, and a path's start in a
-   multi-path copy, move, restore or delete.
+   started the work: a `create_download` timeout, and the start of a copy, move,
+   restore or delete, one path or several (#452).
 
 ## unavailable
 
@@ -713,8 +714,11 @@ Fix:
 2. Cross-reference against the
    [Synology File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf)
    for that specific code.
-3. **Code 402 ("System too busy"):** wait and retry. This is genuinely
-   transient and often resolves on its own within a minute.
+3. **Code 402 ("System too busy") and 421 (file in use):** wait and retry. These
+   are transient, often resolving on their own within a minute, so they're marked
+   `retryable=true` (#490). Code 401 ("Unknown error") isn't: check **Log Center**.
+   A failure partway through a multi-path copy, move, restore or delete is never
+   retryable once something ran: retry only what the message lists as not done.
 4. **Code 900 ("Unexpected server error"):** check **Log Center** in DSM for
    matching events. This usually indicates an internal DSM fault and may
    require a package restart or reboot.

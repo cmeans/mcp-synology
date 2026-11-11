@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import re
 from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -35,9 +34,11 @@ from mcp_synology.modules.filestation.batch import (
     Item,
     ItemOutcome,
     batch_reply,
+    bounded_summary,
     no_scope,
     run_batch,
 )
+from mcp_synology.modules.filestation.batch import unstop as _unstop
 from mcp_synology.modules.filestation.helpers import (
     _escaped_repr,
     _is_dot,
@@ -317,83 +318,6 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     return out
 
 
-def _unstop(message: str) -> str:
-    """``message`` without its final period, and only that one: a path can end in dots."""
-    return message[:-1] if message.endswith(".") else message
-
-
-# Advice that already says to check with list_files (a start with no answer, a path not
-# found when the delete ran),
-# not advice that only mentions it (408's "Use list_files or search_files to find …").
-_CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
-
-
-def _names_path(message: str, path: str) -> bool:
-    """Whether ``message`` names ``path`` itself: after the start, a space, ":" or "(",
-    and followed by the end, a sentence's period, or " (" (as in
-    ``/video/b (DSM error 900)``); not a path ending in it (``/video/b/x/video/b``)."""
-    # As messages show it: quoted when padded (`shown`, #489).
-    pattern = r"(?<![^\s:(])" + re.escape(shown(path)) + r"(?=$|\.$|\.\s|\s\()"
-    return re.search(pattern, message) is not None
-
-
-def _with_progress_so_far(
-    error: ToolError, failed: str, done: list[str], rest: list[str]
-) -> ToolError:
-    """A delete's error, saying which path failed, what was already deleted and what
-    wasn't started, so the user can tell what's left after a failure partway (QA round 1
-    on #480)."""
-    if not done and not rest:
-        return error
-    try:
-        body = json.loads(str(error))
-        message = body["error"]["message"]
-    except (ValueError, KeyError, TypeError):
-        return error
-    # A DSM error on a start or a status request names no path (QA round 5 on #480); one
-    # that names a path inside the item, or a sibling starting with the same characters
-    # (/video/a.txt, /video/a b), doesn't name the item either.
-    if not _names_path(message, failed):
-        message = _unstop(message) + f". Failed on: {shown(failed)}."
-    body["error"]["param"] = "paths"
-    body["error"]["value"] = failed
-    # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
-    # #480; a check for the words in the message missed a path containing them).
-    if done:
-        message = _unstop(message) + _already_done("Delete", done) + "."
-        # The same call again is refused (the deleted paths are missing): only the items not
-        # deleted can be retried (QA round 2 on #480).
-        body["error"]["retryable"] = False
-        # Added to the cause's own advice (free space, permissions, check before deleting
-        # again), never in place of it (QA round 3 on #480).
-        # A note that reads after any advice, or alone (QA round 4): no "Then", no second
-        # "retry", and a check first, since the failed path may be gone already,
-        # unless the advice already says to check with list_files (QA round 5).
-        original = str(body["error"].get("suggestion") or "").strip()
-        if _CHECKS_WITH_LIST_FILES.search(original):
-            retry = (
-                "When retrying, leave out the paths already deleted (the same call would be "
-                "refused)."
-            )
-        else:
-            retry = (
-                "When retrying, leave out the paths already deleted (the same call would be "
-                f"refused), and check {shown(failed)} with list_files first."
-            )
-        if not original:
-            body["error"]["suggestion"] = retry
-        elif original[-1] in ".!?)":
-            body["error"]["suggestion"] = f"{original} {retry}"
-        else:
-            # Advice that ends in a list (418's characters to avoid) goes last, so no
-            # punctuation is read as part of it.
-            body["error"]["suggestion"] = f"{retry} {original}"
-    if rest:
-        message = _unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
-    body["error"]["message"] = message
-    return rewrapped_error(body)
-
-
 def _already_done(
     operation: str,
     done: list[str] | None,
@@ -455,38 +379,27 @@ def _refuse_landing_on_a_running_task(
     *,
     overwrite: bool,
     remove_src: bool,
-    done: list[str],
-    skipped: list[str],
-    later: list[str] | None,
-    dest_of: dict[str, str] | None = None,
+    anything_done: bool,
 ) -> None:
     """Refuse if a running task would land in ``dest`` under one of ``remaining``'s names, and
     either replaces (#587). Checked before each path: a task can start during an earlier path's
-    wait. Earlier paths may be done, or a restore's earlier items, so it says what was done and
-    what wasn't started. Names are quoted, since a task's path may be anyone's text, and only the
-    path that clashes is named, since a task can hold thousands."""
+    wait. Earlier paths may be done, or a restore's earlier items: then the batch's failure
+    formatter says what was done and what wasn't started (#482); else it says nothing was.
+    Names are quoted, since a task's path may be anyone's text, and only the path that clashes
+    is named, since a task can hold thousands."""
     found = running_landing(
         tasks, sources=remaining, dest=dest, overwrite=overwrite, remove_src=remove_src
     )
     if found is None:
         return
     source, clash, task = found
-    rest = [p for p in remaining if p != source] + list(later or [])
-    outcome = f" Nothing was {_PAST_TENSE.get(operation, 'changed')}."
-    if done or skipped:
-        outcome = (
-            _already_done(operation, done, skipped, dest_of=dest_of, dest=dest).removeprefix(".")
-            + "."
-        )
-        if rest:
-            outcome += f" Not started: {', '.join(map(_escaped_repr, rest))}."
+    outcome = "" if anything_done else f" Nothing was {_PAST_TENSE.get(operation, 'changed')}."
     same = clash.rsplit("/", 1)[-1] == source.rsplit("/", 1)[-1]
     names = (
         "the same name"
         if same
         else "a name that matches ignoring case, which some file systems treat as one,"
     )
-    leave_out = " Leave out what's already done." if done else ""
     keep = "" if not overwrite else " Once it's done, overwrite=false keeps what's there."
     if task.task.get("local"):
         # Another call through this server, started or about to start: it counts until that
@@ -499,7 +412,7 @@ def _refuse_landing_on_a_running_task(
         )
         advice = (
             "Once that call has returned, check what's there (list_files) before "
-            f"running this again, or use another destination.{keep}{leave_out}"
+            f"running this again, or use another destination.{keep}"
         )
     else:
         what = (
@@ -509,7 +422,7 @@ def _refuse_landing_on_a_running_task(
         advice = (
             f"Check on it with file_task and the handle `{task.handle}`, and when it's done, "
             "check what's there (list_files) before running this again, or use another "
-            f"destination.{keep}{leave_out}"
+            f"destination.{keep}"
         )
     error_response(
         ErrorCode.INVALID_PARAMETER,
@@ -552,11 +465,12 @@ async def _refuse_missing_destination(
         )
         return
     codes = {code for _, code in found}
-    nothing = f"Nothing was {_PAST_TENSE.get(operation, 'processed')}."
+    # After earlier items finished, the batch's failure formatter says what was done (#482).
+    nothing = "" if anything_done else f" Nothing was {_PAST_TENSE.get(operation, 'processed')}."
     if 408 in codes:
         error_response(
             ErrorCode.NOT_FOUND,
-            f"{operation} files refused: the destination folder {shown(dest)} doesn't exist. "
+            f"{operation} files refused: the destination folder {shown(dest)} doesn't exist."
             f"{nothing}",
             retryable=False,
             param="dest_folder",
@@ -574,7 +488,7 @@ async def _refuse_missing_destination(
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"{operation} files refused: no permission to use the destination folder {shown(dest)}."
-            f" {nothing}",
+            f"{nothing}",
             retryable=False,
             param="dest_folder",
             value=dest,
@@ -583,6 +497,11 @@ async def _refuse_missing_destination(
                 "changed in DSM."
             ),
         )
+
+
+def _upper_first(text: str) -> str:
+    """``text`` with its first character upper-cased and the rest as written."""
+    return text[:1].upper() + text[1:]
 
 
 def _code_text(code: object) -> str:
@@ -656,7 +575,8 @@ def _copy_move_result(
                 dest=dest,
                 failing=path,
                 landed=landed,
-            ),
+            )
+            + ".",
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -687,7 +607,8 @@ def _copy_move_result(
                 dest=dest,
                 failing=path,
                 landed=landed,
-            ),
+            )
+            + ".",
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -720,6 +641,8 @@ async def _skip_report(
     skipped_paths: list[str],
     remove_src: bool,
     earlier: Sequence[str] = (),
+    *,
+    probe: bool = True,
 ) -> list[str]:
     """Lines for a copy/move/restore result where DSM skipped something (#171, #189).
 
@@ -731,7 +654,9 @@ async def _skip_report(
     places split it up.
     """
     try:
-        kinds = await paths_isdir(client, skipped_paths)
+        # Out of time (`bounded_summary`), the kinds aren't read: the hedged wording, as for a
+        # lookup DSM didn't answer.
+        kinds = await paths_isdir(client, skipped_paths) if probe else {}
     except Exception as e:
         # The copy already happened; report it with the hedged wording, never as an error,
         # whatever the lookup met: right after a large task, DSM may not answer at all (#588).
@@ -773,7 +698,7 @@ async def _skip_report(
     in_full = " in full" if folders or unknown else ""
     lines = [
         format_status(
-            f"{verb} {len(ok):,} of {len(normalized):,} item(s){in_full} to {dest}/; "
+            f"{verb} {len(ok):,} of {len(normalized):,} item(s){in_full} to {shown(dest)}/; "
             f"{', '.join(parts)} (that name is already at the destination, overwrite=false):",
             success=False,
         )
@@ -782,14 +707,14 @@ async def _skip_report(
     def entry(p: str, folder: bool = False) -> str:
         # A skipped folder's leftovers are its own children; a file stays in its parent.
         src_dir = p if folder else "/".join(p.split("/")[:-1]) or ""
-        where = f" (skipped items are still in {src_dir}/)"
+        where = f" (skipped items are still in {shown(src_dir)}/)"
         if p in unknown:
             where = " (skipped items are still at this path or under it)"
-        return f"  {p}" + (where if remove_src else "")
+        return f"  {shown(p)}" + (where if remove_src else "")
 
     if ok:
         lines.append(f"{verb}:")
-        lines.extend(f"  {p.split('/')[-1]}" for p in ok)
+        lines.extend(f"  {shown(p.split('/')[-1])}" for p in ok)
     if files:
         lines.append("Skipped:")
         lines.extend(entry(p) for p in files)
@@ -1056,10 +981,6 @@ class CopyMoveAdapter:
         assert self._track is not None
         self._track(task)
 
-    def _later(self, item: Item) -> list[str]:
-        """The sources of the groups after ``item``'s."""
-        return [x.source for x in self.items if x.group > item.group]
-
     async def begin_group(self, items: Sequence[Item]) -> None:
         client, operation = self.client, self.operation
         normalized = [x.source for x in items]
@@ -1137,7 +1058,7 @@ class CopyMoveAdapter:
         # at a time, so calls can't deadlock.
         return self.client.destination_lock(self.dest)
 
-    async def before_start(self, item: Item) -> dict[str, Any] | None:
+    async def before_start(self, item: Item, read_timeout: float) -> dict[str, Any] | None:
         p = item.source
         at = self.group.index(p)
         # A copy of the same source to another destination is a different operation; a
@@ -1145,7 +1066,7 @@ class CopyMoveAdapter:
         match: dict[str, Any] = {"remove_src": self.remove_src}
         if not self.remove_src:
             match["dest_folder_path"] = self.dest
-        listed, tasks = await tasks_for_landing_check(self.client)
+        listed, tasks = await tasks_for_landing_check(self.client, read_timeout=read_timeout)
         _refuse_landing_on_a_running_task(
             tasks,
             self.operation,
@@ -1153,10 +1074,7 @@ class CopyMoveAdapter:
             self.dest,
             overwrite=self.overwrite,
             remove_src=self.remove_src,
-            done=self.done,
-            skipped=self.skipped,
-            later=self._later(item),
-            dest_of=self.went,
+            anything_done=bool(self.done or self.skipped),
         )
         # DSM's list only: a parallel call's finished task is nothing to hand back.
         return find_running(listed, api=self.api, path=p, params=match)
@@ -1187,15 +1105,8 @@ class CopyMoveAdapter:
         return f"{_PRESENT[self.operation]} {item.source}"
 
     def read_finished(self, item: Item, status: dict[str, Any]) -> tuple[int, bool]:
-        return _copy_move_result(
-            status,
-            item.source,
-            self.operation,
-            self.done,
-            dest=self.dest,
-            skipped_so_far=self.skipped,
-            dest_of=self.went,
-        )
+        # What the call did before is the failure formatter's to add (#482).
+        return _copy_move_result(status, item.source, self.operation, dest=self.dest)
 
     def lost_check(self, item: Item) -> None:
         return None
@@ -1243,29 +1154,36 @@ class CopyMoveAdapter:
             "dest_of": dict(self.went),
         }
 
-    async def end_group(self, items: Sequence[Item]) -> None:
+    async def end_group(self, items: Sequence[Item], wait: float) -> None:
         # ``items``: the group's items that ran, all of them unless the call's wait ran out
         # partway (#496), so a summary never names one that wasn't started.
         ran = [x.source for x in items]
         cut_short = len(ran) < len(self.group)
         self.group = [p for p in self.group if p in ran]
-        text = await _copy_move_summary(
-            self.client,
-            self.group,
-            self.dest,
-            self.remove_src,
-            self.total,
-            self.skipped_paths,
-            # Cut short by the call's wait: only the named sources went (pre-QA r2).
-            only_named_sources_removed=self.multi or cut_short,
-            # A restore's earlier items at this destination; for any other call, none.
-            earlier=[
-                q
-                for q in [*self.done, *self.skipped]
-                if q not in self.group and self.went.get(q) == self.dest
-            ],
-            replaced=self.replaced,
-        )
+        group = list(self.group)
+        # A restore's earlier items at this destination; for any other call, none.
+        earlier = [
+            q
+            for q in [*self.done, *self.skipped]
+            if q not in group and self.went.get(q) == self.dest
+        ]
+
+        def make(probe: bool) -> Awaitable[str]:
+            return _copy_move_summary(
+                self.client,
+                group,
+                self.dest,
+                self.remove_src,
+                self.total,
+                self.skipped_paths,
+                # Cut short by the call's wait: only the named sources went (pre-QA r2).
+                only_named_sources_removed=self.multi or cut_short,
+                earlier=earlier,
+                replaced=self.replaced,
+                probe=probe,
+            )
+
+        text = await bounded_summary(make, wait, f"{self.operation} to {self.dest}")
         if self.operation == "Restore" and self.share_name:
             # Rephrase from "Moved" to "Restored"
             text = _as_restore(text, self.share_name)
@@ -1313,7 +1231,7 @@ class CopyMoveAdapter:
         ran = {name_key(path) for path in [*placed, *self.skipped]}
         alike = [q for q in self.group[self.group.index(p) + 1 :] if name_key(q) in ran]
         if alike:
-            # #580: "Run them again" with overwrite=true would replace what it placed.
+            # #580: running them with overwrite=true would replace what it placed.
             named = ", ".join(map(_escaped_repr, alike))
             reply += (
                 f"\nNamed like one this call already ran: {named}. "
@@ -1340,49 +1258,63 @@ class CopyMoveAdapter:
         results.append(reply)
         return "\n".join(results)
 
-    def failure(self, outcome: ItemOutcome, batch: BatchOutcome) -> NoReturn:
+    def cause(self, outcome: ItemOutcome) -> NoReturn:
         operation, p = self.operation, outcome.item.source
-        rest = [x.source for x in batch.not_started()]
-        try:
-            e = outcome.error
-            if outcome.state == "may_have_started":
-                assert isinstance(e, httpx.TransportError)
-                if not self.done and not self.skipped and not rest:
-                    raise e  # nothing to add: the server's usual timeout or connection error
-                # The start got no answer: it may have started. Say so, with what was done and
-                # what wasn't started, as delete_files does (#588).
-                not_started = f". Not started: {', '.join(map(shown, rest))}" if rest else ""
-                error_response(
-                    ErrorCode.TIMEOUT
-                    if isinstance(e, httpx.TimeoutException)
-                    else ErrorCode.UNAVAILABLE,
-                    f"{operation} files failed: DSM didn't answer for {shown(p)} "
-                    f"({describe_transport_error(e)}); its {operation.lower()} may have started"
-                    + _already_done(
-                        operation,
-                        self.done,
-                        self.skipped,
-                        dest_of=self.went,
-                        dest=self.dest,
-                        failing=p,
-                    )
-                    + f"{not_started}.",
-                    retryable=False,
-                    param="paths",
-                    value=p,
-                    suggestion="Check with list_files, or file_task with no handle, before "
-                    "running it again"
-                    + (", and leave out what's already done." if self.done else "."),
-                )
-            if isinstance(e, ToolError):
-                raise e
-            assert isinstance(e, SynologyError)
-            synology_error_response(f"{operation} files", e)
-        except ToolError as refused:
-            # A later item failed: say which done ones replaced something (pre-QA r4 on #623).
-            raise _with_replaced_note(
-                refused, operation, self.done, self.seen, self.went, self.dest
-            ) from None
+        e = outcome.error
+        if outcome.state == "may_have_started":
+            assert isinstance(e, httpx.TransportError)
+            # The start got no answer: it may have started, so it isn't retryable even when
+            # nothing else ran (#452; the maintainer's Q4 on #512; #588).
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                f"({describe_transport_error(e)}); its {operation.lower()} may have started.",
+                retryable=False,
+                param="paths",
+                value=p,
+                # Where it may have left something, not its source: a copy doesn't change it
+                # (pre-QA r4 on #687).
+                # Only the first letter: str.capitalize() lower-cases the rest, paths included
+                # (QA round 2 on #687).
+                suggestion=f"{_upper_first(self.check_clause(outcome.item))}, or file_task with "
+                "no handle, before running it again.",
+            )
+        if isinstance(e, ToolError):
+            raise e
+        assert isinstance(e, SynologyError)
+        synology_error_response(f"{operation} files", e)
+
+    def progress_text(self, outcome: ItemOutcome) -> str:
+        return _already_done(
+            self.operation,
+            self.done,
+            self.skipped,
+            dest_of=self.went,
+            dest=self.dest,
+            failing=outcome.item.source,
+        )
+
+    def check_clause(self, item: Item) -> str:
+        # A copy's source doesn't change: what it may have left is at the destination (pre-QA
+        # r3 on #687); a move's or restore's may be in either.
+        dest = shown(item.dest or self.dest)
+        if self.remove_src:
+            return f"check {shown(item.source)} and {dest} with list_files"
+        return f"check {dest} with list_files"
+
+    def retry_advice(self) -> str:
+        past = _PAST_TENSE.get(self.operation, "processed")
+        if self.remove_src:
+            return f"the paths already {past} (they're no longer where they were)"
+        return f"the paths already {past}"
+
+    def amend(self, error: ToolError) -> ToolError:
+        # Which done ones replaced something (pre-QA r4 on #623).
+        return _with_replaced_note(
+            error, self.operation, self.done, self.seen, self.went, self.dest
+        )
 
 
 async def _copy_move_summary(
@@ -1396,10 +1328,12 @@ async def _copy_move_summary(
     only_named_sources_removed: bool = False,
     earlier: Sequence[str] = (),
     replaced: dict[str, str] | None = None,
+    probe: bool = True,
 ) -> str:
     """The result text of a finished copy or move (a restore rewords it, ``_as_restore``).
     ``replaced``: sources whose name was already at the destination (with overwrite), and
-    whether that was a folder (#620)."""
+    whether that was a folder (#620). ``probe``: False when the call's wait is over, so a
+    skipped source's kind isn't read (`bounded_summary`)."""
     verb = "Copied" if not remove_src else "Moved"
     ok = [p for p in normalized if p not in skipped_paths]
 
@@ -1407,11 +1341,11 @@ async def _copy_move_summary(
         return p.split("/")[-1]
 
     if not skipped_paths:
-        lines = [format_status(f"{verb} {len(normalized):,} item(s) to {dest}/:")]
-        lines.extend(f"  {name(p)}" for p in normalized)
+        lines = [format_status(f"{verb} {len(normalized):,} item(s) to {shown(dest)}/:")]
+        lines.extend(f"  {shown(name(p))}" for p in normalized)
     else:
         lines = await _skip_report(
-            client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier
+            client, verb, dest, normalized, ok, skipped_paths, remove_src, earlier, probe=probe
         )
 
     met = {p: kind for p, kind in (replaced or {}).items() if p in ok}
@@ -1447,13 +1381,13 @@ async def _copy_move_summary(
     # sources may still be in that folder, it names what went instead (#585).
     if remove_src and not skipped_paths and not only_named_sources_removed:
         src_dirs = sorted({"/".join(p.split("/")[:-1]) for p in normalized})
-        lines.extend(f"\nSource files have been removed from {d}/." for d in src_dirs)
+        lines.extend(f"\nSource files have been removed from {shown(d)}/." for d in src_dirs)
     elif remove_src:
         by_dir: dict[str, list[str]] = {}
         for p in ok:
             by_dir.setdefault("/".join(p.split("/")[:-1]), []).append(name(p))
         lines.extend(
-            f"\nMoved sources removed from {d}/: {', '.join(names)}"
+            f"\nMoved sources removed from {shown(d)}/: {', '.join(map(shown, names))}"
             for d, names in sorted(by_dir.items())
         )
 
@@ -1516,9 +1450,11 @@ class DeleteAdapter:
     def start_guard(self, item: Item) -> AbstractAsyncContextManager[Any]:
         return contextlib.nullcontext()
 
-    async def before_start(self, item: Item) -> dict[str, Any] | None:
+    async def before_start(self, item: Item, read_timeout: float) -> dict[str, Any] | None:
         # Never start a second delete of a path that already has one running (#245).
-        return await running_task(self.client, api=self.api, path=item.source)
+        return await running_task(
+            self.client, api=self.api, path=item.source, read_timeout=read_timeout
+        )
 
     def start_params(self, item: Item) -> dict[str, str]:
         return {
@@ -1558,13 +1494,18 @@ class DeleteAdapter:
             recycle[share_name] = status[share_name]
         return {"paths": [p], "recursive": self.recursive, "recycle": recycle}
 
-    async def end_group(self, items: Sequence[Item]) -> None:
+    async def end_group(self, items: Sequence[Item], wait: float) -> None:
         return None
 
     async def summary(self, batch: BatchOutcome) -> str:
         # Only what ran: the call's wait may have run out before the rest (#496).
         ran = [o.item.source for o in batch.items if o.state == "done"]
-        return await _delete_summary(self.client, ran, self.recycle_bin_status)
+
+        def make(probe: bool) -> Awaitable[str]:
+            return _delete_summary(self.client, ran, self.recycle_bin_status, probe=probe)
+
+        wait = batch.budget.for_check() if batch.budget is not None else None
+        return await bounded_summary(make, wait, "Delete")
 
     def handoff_text(self, outcome: ItemOutcome, batch: BatchOutcome) -> str:
         assert outcome.handoff is not None
@@ -1580,34 +1521,45 @@ class DeleteAdapter:
         )
         return reply if outcome.running is None else _already_running("Delete", p) + "\n" + reply
 
-    def failure(self, outcome: ItemOutcome, batch: BatchOutcome) -> NoReturn:
+    def cause(self, outcome: ItemOutcome) -> NoReturn:
         p = outcome.item.source
-        rest = [x.source for x in batch.not_started()]
-        try:
-            e = outcome.error
-            if outcome.state == "may_have_started":
-                assert isinstance(e, httpx.TransportError)
-                if not self.deleted and not rest:
-                    raise e  # nothing to add: the server's usual timeout or connection error
-                # The start got no answer (a status with none hands the item off in
-                # poll_task): it may have started. Say so, with what was done and what
-                # wasn't started (QA round 1 on #480).
-                error_response(
-                    ErrorCode.TIMEOUT
-                    if isinstance(e, httpx.TimeoutException)
-                    else ErrorCode.UNAVAILABLE,
-                    f"Delete files failed: DSM didn't answer for {shown(p)} "
-                    f"({describe_transport_error(e)}); its delete may have started.",
-                    retryable=False,
-                    suggestion="Check with list_files, or file_task with no handle, "
-                    "before deleting again.",
-                )
-            if isinstance(e, ToolError):
-                raise e
-            assert isinstance(e, SynologyError)
-            synology_error_response("Delete files", e)
-        except ToolError as err:
-            raise _with_progress_so_far(err, p, self.deleted, rest) from None
+        e = outcome.error
+        if outcome.state == "may_have_started":
+            assert isinstance(e, httpx.TransportError)
+            # The start got no answer (a status with none hands the item off in poll_task): it
+            # may have started, so it isn't retryable even when nothing else ran (#452; the
+            # maintainer's Q4 on #512; QA round 1 on #480).
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"Delete files failed: DSM didn't answer for {shown(p)} "
+                f"({describe_transport_error(e)}); its delete may have started.",
+                retryable=False,
+                param="paths",
+                value=p,
+                # Named, as copy's names where to look (pre-QA r5 on #687).
+                suggestion=f"{_upper_first(self.check_clause(outcome.item))}, or file_task with "
+                "no handle, before deleting again.",
+            )
+        if isinstance(e, ToolError):
+            raise e
+        assert isinstance(e, SynologyError)
+        synology_error_response("Delete files", e)
+
+    def progress_text(self, outcome: ItemOutcome) -> str:
+        return _already_done("Delete", self.deleted)
+
+    def check_clause(self, item: Item) -> str:
+        return f"check {shown(item.source)} with list_files"
+
+    def retry_advice(self) -> str:
+        # The same call again is refused (the deleted paths are missing): only the items not
+        # deleted can be retried (QA round 2 on #480).
+        return "the paths already deleted (the same call would be refused)"
+
+    def amend(self, error: ToolError) -> ToolError:
+        return error
 
 
 def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> None:
@@ -1620,7 +1572,7 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
         mapped = error_from_code(err_code, "SYNO.FileStation.Delete")
         error_response(
             mapped.error_code,
-            f"Delete files failed: DSM error code {err_code} on path: {err_path}.",
+            f"Delete files failed: DSM error code {err_code} on path: {shown(str(err_path))}.",
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -1717,8 +1669,12 @@ async def _delete_summary(
     client: DsmClient,
     normalized: list[str],
     recycle_bin_status: dict[str, bool] | None,
+    *,
+    probe: bool = True,
 ) -> str:
-    """The result text of a finished delete_files call."""
+    """The result text of a finished delete_files call. ``probe``: False when the call's wait
+    is over (`bounded_summary`): a share whose bin setting isn't known yet is reported as one
+    DSM didn't answer for, never guessed."""
     # A path inside a share's bin (/<share>/#recycle/…) is gone for good whatever the share's
     # setting: DSM keeps no second copy (#220). A user's home bin reached through /homes
     # (/homes/<user>/#recycle/…) is, to DSM, a folder inside the homes share, so a delete there
@@ -1745,6 +1701,7 @@ async def _delete_summary(
     shares_with_recycle: set[str] = set()
     shares_without_recycle: set[str] = set()
     shares_unknown: set[str] = set()  # DSM didn't answer
+    shares_late: set[str] = set()  # not checked: the call's wait was over (`bounded_summary`)
     shares_unclear: set[str] = set()  # answered, but not whether the bin is on
 
     # A home bin through /homes follows the homes share's own bin (#610), checked once per
@@ -1757,6 +1714,8 @@ async def _delete_summary(
     if home_keys and recycle_bin_status is not None:
         if "homes" in recycle_bin_status:
             homes_bin = recycle_bin_status["homes"]
+        elif not probe:
+            homes_answered = False
         else:
             try:
                 homes_bin, definite = await probe_recycle_status(client, "homes")
@@ -1801,6 +1760,9 @@ async def _delete_summary(
                 else:
                     shares_without_recycle.add(share_name)
                 continue
+            if not probe and share_name not in recycle_bin_status:
+                shares_late.add(share_name)
+                continue
             try:
                 enabled = await ensure_recycle_status(client, share_name, recycle_bin_status)
             except httpx.TransportError as e:
@@ -1817,12 +1779,18 @@ async def _delete_summary(
     # Shares where this call deleted from a bin for good (a home bin kept in /homes's isn't).
     bin_shares = {key.split("/")[0] for key in in_bin if key not in kept_bins | unknown_bins}
     has_recycle = bool(
-        shares_with_recycle or shares_unknown or shares_unclear or kept_bins or unknown_bins
+        shares_with_recycle
+        or shares_unknown
+        or shares_late
+        or shares_unclear
+        or kept_bins
+        or unknown_bins
     )
     verb = "Deleted" if has_recycle else "Permanently deleted"
 
     lines = [format_status(f"{verb} {len(normalized):,} item(s):")]
-    lines.extend(f"  {p}" for p in normalized)
+    # A list: padding and characters that draw nothing are shown, as errors show them (#519).
+    lines.extend(f"  {shown(p)}" for p in normalized)
 
     # DSM keeps no empty folder in the bin, not even one deleted on its own (seska DSM
     # 7.1.1; vdsm, all four versions, for one inside a deleted folder), so the note doesn't
@@ -1853,7 +1821,7 @@ async def _delete_summary(
                 "after the user agrees:"
             )
             home_bin = f"/homes/{user}/#recycle"
-            lines.extend(f"  {kept}{p[len(home_bin) :]}" for p in bin_paths)
+            lines.extend(f"  {shown(kept + p[len(home_bin) :])}" for p in bin_paths)
             continue
         if share in unknown_bins:
             lines.append(
@@ -1861,7 +1829,7 @@ async def _delete_summary(
                 f"went from {user}'s home recycle bin into {kept}, and list_recycle_bin "
                 "share=homes shows whether they can be recovered:"
             )
-            lines.extend(f"  {p}" for p in bin_paths)
+            lines.extend(f"  {shown(p)}" for p in bin_paths)
             continue
         # Name the bin items only when the call also deleted others, so it's clear
         # which ones are gone for good.
@@ -1870,7 +1838,7 @@ async def _delete_summary(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
                 "these cannot be recovered:"
             )
-            lines.extend(f"  {p}" for p in bin_paths)
+            lines.extend(f"  {shown(p)}" for p in bin_paths)
         else:
             lines.append(
                 f"\n\u26a0 Deleted from the recycle bin on /{share} \u2014 permanent, "
@@ -1884,6 +1852,12 @@ async def _delete_summary(
         f"\nCouldn't check whether /{share} has its recycle bin enabled (DSM didn't answer); "
         "list_recycle_bin shows whether these files can be recovered."
         for share in sorted(shares_unknown)
+    )
+    # Cut short by this server, not DSM: the call's wait was over (pre-QA r4 on #687).
+    lines.extend(
+        f"\nDidn't check whether /{share} has its recycle bin enabled (the call's wait was over); "
+        "list_recycle_bin shows whether these files can be recovered."
+        for share in sorted(shares_late)
     )
     lines.extend(
         f"\nCouldn't check whether /{share} has its recycle bin enabled; "
@@ -1965,9 +1939,7 @@ async def restore_from_recycle_bin(
                 dest,
                 overwrite=overwrite,
                 remove_src=True,
-                done=[],
-                skipped=[],
-                later=None,
+                anything_done=False,
             )
         recreated, made = (
             ([], [])
@@ -1975,7 +1947,7 @@ async def restore_from_recycle_bin(
             else await _recreate_missing_folders(client, restore_destinations)
         )
         note = (
-            f"\nRe-created {', '.join(recreated)} (no longer there) to restore into."
+            f"\nRe-created {', '.join(map(shown, recreated))} (no longer there) to restore into."
             if recreated
             else ""
         )
@@ -2051,11 +2023,27 @@ async def _recreate_missing_folders(
         - set(wanted)
     )
     try:
-        gone = {
-            path for path, code in await find_missing_paths(client, wanted + parents) if code == 408
-        }
+        found = await find_missing_paths(client, wanted + parents)
     except SynologyError as e:
         synology_error_response("Restore files", e)
+    # A destination this account can't use is refused before anything moves: found only at its
+    # item's turn, it came after earlier items were restored (#482).
+    denied = [path for path, code in found if code == 407 and path in wanted]
+    if denied:
+        error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "Restore files refused: no permission to use the original folder"
+            f"{'s' if len(denied) > 1 else ''} {', '.join(map(shown, denied))}. "
+            "Nothing was restored.",
+            retryable=False,
+            param="dest_folder",
+            value=denied[0],
+            suggestion=(
+                "Restore them to a folder this DSM account can write to (dest_folder), or have "
+                "the folder's permissions changed in DSM."
+            ),
+        )
+    gone = {path for path, code in found if code == 408}
     missing = [path for path in wanted if path in gone]
     created: list[str] = []
     for path in sorted(missing, key=lambda p: p.count("/"), reverse=True):

@@ -654,8 +654,11 @@ def shown(path: str) -> str:
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
     error or list that names a path the server checked or got
-    from DSM uses ``shown`` (plain unless something would be invisible). Successful
-    replies and listings show paths as DSM does, escaped by the client (#604)."""
+    from DSM uses ``shown`` (plain unless something would be invisible), and so does a reply
+    naming what a call acted on, successful or not: a delete's, copy's, move's or restore's
+    summary and its skipped list (#519), since those are the paths a model will act on next.
+    Listings of what's on the NAS (list_files, search_files, list_recycle_bin, get_file_info)
+    show names as DSM does, escaped by the client (#604)."""
     for part in path.split("/"):
         if not part:
             continue
