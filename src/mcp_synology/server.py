@@ -471,11 +471,15 @@ class _SynologyServer(MCPServer):
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()
-            text = _scrubbed(_json_strings_redacted(str(exc)), "error", name, original=str(exc))
-            raise type(exc)(f"{REPLY_LABEL}\n{text}{notice}") from exc.__cause__
+            text = _scrubbed(
+                _json_strings_redacted(str(exc)) + notice,
+                "error",
+                name,
+                original=str(exc) + notice,
+            )
+            raise type(exc)(f"{REPLY_LABEL}\n{text}") from exc.__cause__
         if not isinstance(result, CallToolResult):
             return result
-        result = _scrubbed_result(result, name)
         notice = await self._take_update_notice()
         if notice:
             texts = [i for i, c in enumerate(result.content) if isinstance(c, TextContent)]
@@ -489,7 +493,8 @@ class _SynologyServer(MCPServer):
                 result = result.model_copy(
                     update={"content": [*result.content, TextContent(type="text", text=notice)]}
                 )
-        return _labeled(result)
+        # After the notice, so the reply's every text, the notice's too, is scrubbed (#514).
+        return _labeled(_scrubbed_result(result, name))
 
     async def _parameters(self, name: str) -> tuple[dict[str, Any], set[str]] | None:
         """Tool ``name``'s parameters and their schemas as served (compacted), and the ones
@@ -646,10 +651,19 @@ _VALIDATION_MESSAGES = {
 def _scrubbed(text: str, sink: str, where: str, *, original: str | None = None) -> str:
     """``text`` as it may leave the server: credentials masked by `redact_secrets` (#514). That
     it masked anything is logged once per text at WARNING, naming the sink and the tool, never
-    the text (#514 Q2): usually a call site let a credential through. ``original`` is the text
+    the text (#514 Q2): in a reply or an error, usually a call site let a credential through; in
+    the instructions, usually the user's own text. ``original`` is the text
     before an earlier pass (`_json_strings_redacted`), for the comparison."""
     out = redact_secrets(text, names=True)
-    if out != (original if original is not None else text):
+    if out == (original if original is not None else text):
+        return out
+    if sink == "instructions":
+        # Usually the user's own text: custom_instructions or an instructions_file.
+        logger.warning(
+            "The server instructions held text that looked like a credential, masked there "
+            "(#514); check custom_instructions and instructions_file in the config."
+        )
+    else:
         logger.warning(
             "The %s of %s held text that looked like a credential, masked there (#514); if it "
             "was one, a call site let it through.",
@@ -1507,9 +1521,7 @@ def create_server(config: AppConfig) -> MCPServer:
     else:
         instructions = builtin
 
-    instructions = _scrubbed(
-        _fill_template(instructions, template_vars), "instructions", "the server"
-    )
+    instructions = _fill_template(instructions, template_vars)
 
     if replacement is None:
         # A full replacement file is the user's own; everything else gets the notices.
@@ -1532,6 +1544,9 @@ def create_server(config: AppConfig) -> MCPServer:
         version, notice = startup_update
         instructions += f"\n\nUPDATE AVAILABLE:\n{notice}"
         manager._announced_version = version
+
+    # Once, on the whole text: the user's own text, the notices and the update notice (#514).
+    instructions = _scrubbed(instructions, "instructions", "the server")
 
     @asynccontextmanager
     async def _lifespan(_server: MCPServer[Any]) -> AsyncIterator[None]:

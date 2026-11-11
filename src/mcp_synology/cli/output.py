@@ -1,18 +1,23 @@
 """The one way the CLI writes to the terminal (#514).
 
 Every line the CLI prints itself goes through `say`. It does two things before styling:
-- runs `redact_secrets`, so a credential that reaches a message (in a DSM error, a URL or a
-  config value) is masked;
-- writes control characters and terminal escapes visibly as ``\\xNN`` (keeping tab, line
-  feed and carriage return), so text from a config file or the NAS can't move the cursor,
-  recolor the terminal or forge a line (#486).
+- runs `redact_secrets` in its names mode, so a credential that reaches a message (in a DSM
+  error, a URL or a config value) is masked, while a local path such as
+  ``/home/b/nas;sid=2/config.yaml``, which the user may copy, is kept (a ``key=value`` item is
+  masked only inside a URL; the log file and stderr logging get the full pass);
+- writes control characters and terminal escapes visibly as ``\\xNN``, other than tab, line
+  feed and carriage return, so a message can't send a terminal escape (#486). A carriage
+  return or line feed still moves to a new line or column 0: values from a config file and the
+  NAS are escaped where they come from (``repr`` in config errors, `core.client._loads`).
 
 Styling comes after, from the caller's ``fg``, so the escaping never touches the
 CLI's own colors. Not through it: a prompt's text (`click.prompt`, `click.confirm`), which the
 CLI builds from its own words and values escaped at the source (``repr``, `core.client._loads`);
 click's own rendering of a `ClickException`; and Python's traceback for an unhandled crash.
-``tests/test_redaction_sinks.py`` fails on a ``click.echo``, ``click.secho``, ``print`` or a
-direct stream write anywhere else in ``src/``.
+``tests/test_redaction_sinks.py`` fails on a ``click.echo``, ``click.secho``, ``print``, a
+``sys.stdout``/``sys.stderr`` write (``.buffer`` and ``__stderr__`` too), ``os.write`` or a
+``traceback.print_*`` anywhere else in ``src/``; a stream held in a variable can't be told
+apart from another object's ``write``, so that one is review's to catch.
 """
 
 from __future__ import annotations
@@ -61,5 +66,5 @@ def say(
 ) -> None:
     """Write ``message`` to stdout (or stderr with ``err``), redacted, with control characters
     made visible, then colored ``fg``."""
-    text = visible(redact_secrets("" if message is None else str(message)))
+    text = visible(redact_secrets("" if message is None else str(message), names=True))
     click.echo(click.style(text, fg=fg) if fg is not None else text, err=err, nl=nl)

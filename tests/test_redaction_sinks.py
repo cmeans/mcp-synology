@@ -21,13 +21,16 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import pytest
+import respx
+from click.testing import CliRunner
 from mcp.client import Client
 from mcp.server.mcpserver import Context  # noqa: TC002 - the SDK reads the annotation at runtime
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent
 
-from mcp_synology.cli import logging_
+from mcp_synology.cli import logging_, main
 from mcp_synology.cli.output import say, visible
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import error_response, report_progress
@@ -126,6 +129,53 @@ async def test_an_error_never_carries_a_credential(leak: str) -> None:
             assert CANARY not in _text(result), tool
 
 
+# Inside error_response's JSON envelope a line break is escaped, so only the walk over the
+# envelope's strings sees a header or a wrapped link at a line's start (pre-QA r2 on #514 PR 2).
+ENVELOPE_LEAKS = [f"\nX-SYNO-Token: {CANARY}", f"\nthunder://{CANARY}"]
+
+
+@pytest.mark.parametrize("leak", ENVELOPE_LEAKS)
+async def test_an_error_envelope_is_redacted_string_by_string(leak: str) -> None:
+    server = _SynologyServer("canary")
+
+    @server.tool(name="structured")
+    async def structured() -> str:
+        error_response(ErrorCode.UNAVAILABLE, f"DSM said {leak}", retryable=False)
+
+    async with Client(server) as client:
+        result = await client.call_tool("structured", {})
+    assert result.is_error
+    assert CANARY not in _text(result)
+
+
+async def test_the_update_notice_is_scrubbed_with_the_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Text added after a tool ran (the update notice, from a release's notes) goes through
+    the sink too, on a reply and on an error."""
+    server = _SynologyServer("canary")
+    notices = iter([f"\n\nUpdate: see {LEAKS[0]}", f"\n\nUpdate: see {LEAKS[1]}"])
+
+    async def take() -> str:
+        return next(notices)
+
+    monkeypatch.setattr(server, "_take_update_notice", take)
+
+    @server.tool(name="ok")
+    async def ok() -> str:
+        return "done"
+
+    @server.tool(name="fails")
+    async def fails() -> str:
+        raise ToolError("no")
+
+    async with Client(server) as client:
+        for tool in ("ok", "fails"):
+            text = _text(await client.call_tool(tool, {}))
+            assert "Update: see" in text, tool
+            assert CANARY not in text, tool
+
+
 async def test_a_progress_message_never_carries_a_credential() -> None:
     server = _SynologyServer("canary")
 
@@ -146,11 +196,19 @@ async def test_a_progress_message_never_carries_a_credential() -> None:
     assert not any(CANARY in m for m in messages)
 
 
-def test_the_instructions_never_carry_a_credential() -> None:
+def test_the_instructions_never_carry_a_credential(caplog: pytest.LogCaptureFixture) -> None:
     config = make_test_config(custom_instructions=" ".join(LEAKS))
-    instructions = create_server(config).instructions or ""
+    with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+        instructions = create_server(config).instructions or ""
     assert instructions
     assert CANARY not in instructions
+    # The user's own text is the likely source, so the WARNING points at the config.
+    assert [
+        r.getMessage() for r in caplog.records if "looked like a credential" in r.getMessage()
+    ] == [
+        "The server instructions held text that looked like a credential, masked there (#514); "
+        "check custom_instructions and instructions_file in the config."
+    ]
 
 
 # --- terminal ---
@@ -167,8 +225,19 @@ def test_the_cli_never_prints_a_credential(
     assert "Error:" in (errout if err else out)
 
 
+@pytest.mark.parametrize(
+    "path", ["/home/b/nas;sid=2/config.yaml", "C:\\Users\\a;token=1\\c.yaml", "/x/a&passwd=1.yaml"]
+)
+def test_the_cli_keeps_local_paths_that_look_like_query_items(
+    path: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The user copies a path `setup` prints: a `key=value` item is masked only in a URL."""
+    say(f"Config written to {path}")
+    assert capsys.readouterr().out == f"Config written to {path}\n"
+
+
 def test_the_cli_shows_control_characters_visibly(capsys: pytest.CaptureFixture[str]) -> None:
-    """#486: a key from a config file can't recolor the terminal or forge a line."""
+    """#486: a key from a config file can't send a terminal escape; tab, LF and CR are kept."""
     say("key 'ho\x1b[31mst\x07' is unknown\tand\r\nnext")
     assert capsys.readouterr().out == "key 'ho\\x1b[31mst\\x07' is unknown\tand\r\nnext\n"
     assert visible("\x00\x7f") == "\\x00\\x7f"
@@ -224,6 +293,54 @@ def test_logs_never_carry_a_credential(
     assert CANARY not in capsys.readouterr().err
 
 
+@respx.mock
+def test_check_at_debug_never_shows_a_credential(
+    fresh_root_logging: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End to end, as #514 asked: `check` at debug level (`logging.level`) with a log file,
+    the password from the environment, and DSM's connection failing with a credential in the
+    error's text. No canary reaches stdout, stderr or the log file."""
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    log_file = tmp_path / "check.log"
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "schema_version: 1\n"
+        "connection:\n  host: 127.0.0.1\n  port: 5000\n  https: false\n  timeout: 5\n"
+        "auth:\n  username: admin\n"
+        f"logging:\n  level: debug\n  file: {log_file}\n"
+        "modules:\n  filestation:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+    respx.get("http://127.0.0.1:5000/webapi/query.cgi").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {"SYNO.API.Auth": {"path": "entry.cgi", "minVersion": 1, "maxVersion": 7}},
+            },
+        )
+    )
+    respx.post("http://127.0.0.1:5000/webapi/entry.cgi").mock(
+        side_effect=httpx.ReadError(f"reset by {LEAKS[0]} after {LEAKS[1]}")
+    )
+    result = CliRunner().invoke(
+        main, ["check", "-c", str(config)], env={"SYNOLOGY_PASSWORD": CANARY}
+    )
+    assert result.exit_code == 1, result.output
+    assert "dropped it" in result.output
+    # The error was shown, masked, not dropped.
+    assert "***@nas.example" in result.output
+    for h in logging.getLogger().handlers:
+        h.flush()
+    written = log_file.read_text(encoding="utf-8")
+    assert "SYNO.API.Auth" in written
+    assert CANARY not in result.output
+    assert CANARY not in written
+    assert CANARY not in capsys.readouterr().err
+
+
 # --- structural ---
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -235,7 +352,7 @@ _LOGGING = "mcp_synology/cli/logging_.py"
 
 def _calls() -> Iterator[tuple[str, ast.Call]]:
     for path in sorted(SRC.rglob("*.py")):
-        rel = str(path.relative_to(SRC))
+        rel = path.relative_to(SRC).as_posix()
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Call):
                 yield rel, node
@@ -264,14 +381,33 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
     return found
 
 
-_WRITERS = {"click.echo", "click.secho", "print", "click.get_text_stream"}
+# What writes to the terminal without `say`, by name: a stream held in a variable
+# (`out = sys.stderr; out.write(...)`) can't be told apart from any other object's `write`.
+_WRITERS = {
+    "click.echo",
+    "click.secho",
+    "click.utils.echo",
+    "print",
+    "click.get_text_stream",
+    "os.write",
+    "traceback.print_exc",
+    "traceback.print_exception",
+    "traceback.print_stack",
+    "traceback.print_tb",
+    "traceback.print_last",
+    "warnings.showwarning",
+} | {
+    f"sys.{stream}{part}.write"
+    for stream in ("stdout", "stderr", "__stdout__", "__stderr__")
+    for part in ("", ".buffer")
+}
 _LOG_SETUP = {"basicConfig", "dictConfig", "fileConfig", "Formatter"}
 
 
 def test_every_output_goes_through_its_sink() -> None:
     found: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
-        rel = str(path.relative_to(SRC))
+        rel = path.relative_to(SRC).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"))
         aliases = _aliases(tree)
         for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
@@ -280,9 +416,7 @@ def test_every_output_goes_through_its_sink() -> None:
             resolved = f"{aliases[head]}.{tail}".rstrip(".") if head in aliases else name
             last = resolved.rsplit(".", 1)[-1]
             here = f"{rel}:{call.lineno} {name}("
-            if (resolved in _WRITERS or name in ("sys.stdout.write", "sys.stderr.write")) and (
-                rel != _TERMINAL
-            ):
+            if (resolved in _WRITERS or name in _WRITERS) and rel != _TERMINAL:
                 found.append(here)
             if last == "ToolError" and rel not in _ERRORS:
                 found.append(here)

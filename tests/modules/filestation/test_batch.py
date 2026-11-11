@@ -454,7 +454,7 @@ def _name(call: ast.Call) -> str:
 
 def _modules() -> list[tuple[str, ast.Module]]:
     return [
-        (str(path.relative_to(SRC)), ast.parse(path.read_text()))
+        (path.relative_to(SRC).as_posix(), ast.parse(path.read_text(encoding="utf-8")))
         for path in sorted(SRC.rglob("*.py"))
     ]
 

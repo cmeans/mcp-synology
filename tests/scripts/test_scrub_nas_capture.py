@@ -203,10 +203,10 @@ def test_real_nas_fixtures_are_scrubbed(sc: ModuleType, path: Path) -> None:
 def test_every_fixture_from_a_real_nas_is_named_realnas() -> None:
     """A capture from a real NAS saved without the -realnas name would skip the check above."""
     unnamed = [
-        str(p.relative_to(ROOT))
+        p.relative_to(ROOT).as_posix()
         for p in sorted(ROOT.glob("tests/**/*.json"))
         if SYNOLOGY_MODEL.search(p.read_text())
         and not p.name.endswith("-realnas.json")
-        and str(p.relative_to(ROOT)) not in LEGACY_REAL_NAS
+        and p.relative_to(ROOT).as_posix() not in LEGACY_REAL_NAS
     ]
     assert unnamed == [], f"name real-NAS fixtures *-realnas.json and scrub them: {unnamed}"

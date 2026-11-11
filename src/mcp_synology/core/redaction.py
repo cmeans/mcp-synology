@@ -130,8 +130,23 @@ _CREDENTIAL_HEADER = re.compile(
 # A cookie header, as a log line, a dict repr or JSON writes it (`Cookie: …`, `{'Cookie': '…'}`,
 # `"cookie": "…"`): DSM's session is its `id` cookie (#176), and every credential key among the
 # `;`-separated items is masked (QA round 1 on #680).
-_COOKIE = re.compile(rf"""(?i)((?:set-)?cookie{_HEADER_GAP})([^\n'"\\]{{0,4096}})""")
-_COOKIE_ITEM = re.compile(rf"(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)([^;\s]*)")
+# The header's value ends where the quote that opened it closes, so a cookie's own quoted value
+# (RFC 6265 allows `id="…"`) is read inside it: an escaped `\"` in JSON, a `"` in a repr or a
+# tuple, and in a header line a `"` that follows an item's `=` (pre-QA r2 on #514 PR 2).
+_COOKIE = re.compile(
+    r"""(?i)((?:set-)?cookie\\?['"]?\s{0,64}[:=,]\s{0,64}b?)"""
+    # JSON inside a JSON string: its quotes are `\"`, a cookie's own `\\\"`.
+    r"""(?:(\\")((?:\\{3}"|\\(?!")[^\n]|[^"\\\n]){0,4096})"""
+    # JSON.
+    r"""|(")((?:\\[^\n]|[^"\\\n]){0,4096})"""
+    # A repr or a tuple.
+    r"""|(')((?:\\[^\n]|[^'\\\n]){0,4096})"""
+    # A header line.
+    r"""|((?:(?<==)"[^"\n]{0,1024}"?|[^\n'"\\]){0,4096}))"""
+)
+_COOKIE_ITEM = re.compile(
+    rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s]*)"""
+)
 # A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`): a quoted
 # value, or a number.
 _CREDENTIAL_JSON_ESCAPED = re.compile(
@@ -292,12 +307,22 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
 
     text = _URL_IN_TEXT.sub(lambda m: params(m.group(0)), text) if names else params(text)
     text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
-    text = _COOKIE.sub(
-        lambda m: (
-            m.group(1) + _COOKIE_ITEM.sub(lambda i: f"{i.group(1)}{i.group(2)}{MASK}", m.group(2))
-        ),
-        text,
-    )
+
+    def cookie(m: re.Match[str]) -> str:
+        opener = m.group(2) or m.group(4) or m.group(6) or ""
+        value = next(v for v in (m.group(3), m.group(5), m.group(7), m.group(8)) if v is not None)
+
+        def item(i: re.Match[str]) -> str:
+            quote = i.group(3)[: i.group(3).find('"') + 1] if '"' in i.group(3)[:4] else ""
+            return (
+                f"{i.group(1)}{i.group(2)}{quote}{MASK}{quote}"
+                if quote
+                else (f"{i.group(1)}{i.group(2)}{MASK}")
+            )
+
+        return m.group(1) + opener + _COOKIE_ITEM.sub(item, value)
+
+    text = _COOKIE.sub(cookie, text)
     text = _CREDENTIAL_JSON_ESCAPED.sub(
         lambda m: m.group(1) + (f'\\"{MASK}' if m.group(2).startswith('\\"') else MASK), text
     )
