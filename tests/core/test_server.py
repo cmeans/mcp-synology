@@ -2120,7 +2120,9 @@ class TestInstructionComments:
 # and a name or path in separate parameters (album_id / album_name, folder_id / folder_path and
 # the like).
 # +288 by #615: the server instructions' TEXT FROM THE NAS section.
-PAYLOAD_BUDGET_CHARS = 61_400
+# +57 over the budget by #692 (#685, the maintainer's Q2): PATH FORMAT says a path a reply
+# shows in quotes is quoted only to show its exact characters, so pass it without them.
+PAYLOAD_BUDGET_CHARS = 61_457
 
 
 class TestPayloadBudget:
