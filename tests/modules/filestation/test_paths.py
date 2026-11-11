@@ -1182,6 +1182,28 @@ class TestPathListsQuoteACommaName:
         assert shown(self.COMMA) == repr(self.COMMA)
         assert shown("/s/a,b") == "/s/a,b"  # no space after the comma: not a list separator
 
+    def test_a_comma_alone_is_quoted_without_escapes(self) -> None:
+        """Pre-QA r2 on #692: what's inside the quotes is the path exactly, as the instructions
+        tell a model; repr doubled a backslash."""
+        from mcp_synology.modules.filestation.helpers import shown
+
+        assert shown("/s/C:\\new, x") == "'/s/C:\\new, x'"
+        assert shown("/s/it's, x") == '"/s/it\'s, x"'
+        both = '/s/it\'s "a", x'
+        assert eval(shown(both)) == both  # both quote kinds: repr's escaped form
+        # Another reason to quote still writes escapes (a hidden character must show).
+        assert shown("/s/a\u200b, b") == "'/s/a\\u200b, b'"
+
+    def test_a_path_passed_back_in_quotes_gets_a_hint(self) -> None:
+        """Pre-QA r2 on #692: the share part is the quote; the error says to drop them."""
+        from mcp_synology.modules.filestation.helpers import validate_share_path
+
+        for quoted in ("'/photos/Paris, France'", '"/photos/Paris, France"'):
+            error = validate_share_path(quoted, {"photos"})
+            assert error is not None
+            assert error.endswith("If the path came from a reply in quotes, pass it without them.")
+        assert "in quotes" not in (validate_share_path("/nope/x", {"photos"}) or "")
+
     def test_not_started_after_a_failure(self) -> None:
         from mcp_synology.core.formatting import error_response
         from mcp_synology.modules.filestation.batch import _with_not_started

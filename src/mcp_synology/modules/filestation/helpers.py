@@ -668,8 +668,6 @@ def shown(path: str) -> str:
     A path holding ``", "`` is quoted too (#685): replies list paths joined by ``", "``, where
     a folder named ``a, photos/family`` would read as two paths, ``/s/a`` and the
     share-relative ``photos/family`` the server accepts."""
-    if ", " in path:
-        return _escaped_repr(path)
     for part in path.split("/"):
         if not part:
             continue
@@ -684,7 +682,22 @@ def shown(path: str) -> str:
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
+    if ", " in path:
+        # Quoted only, with no escapes: nothing else needs showing, so what's inside the
+        # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
+        # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
+        return _plain_quoted(path)
     return path
+
+
+def _plain_quoted(path: str) -> str:
+    """``path`` in quotes that hold it exactly: single quotes, or double when it holds a
+    single one; with both, `_escaped_repr`'s form (an escaped quote)."""
+    if "'" not in path:
+        return f"'{path}'"
+    if '"' not in path:
+        return f'"{path}"'
+    return _escaped_repr(path)
 
 
 def normalize_path(path: str) -> str:
@@ -729,10 +742,17 @@ def validate_share_path(path: str, known_shares: set[str]) -> str | None:
     # (DSM 7.1 and 7.2.2; QA R1 on #173). The user home service doesn't: /Home is 408 (#353).
     if share.casefold() not in {s.casefold() for s in known_shares}:
         available = ", ".join(sorted(known_shares)) if known_shares else "(none)"
+        # A path passed back with the quotes a reply showed it in (`shown`): say so, as
+        # advice only, so a share really named that way isn't refused (pre-QA r2 on #692).
+        quotes = (
+            " If the path came from a reply in quotes, pass it without them."
+            if share in ("'", '"')
+            else ""
+        )
         return (
             f"Unknown shared folder {share!r}. "
             f"Available shares: {available}. "
-            f"Use list_shares to see all shared folders."
+            f"Use list_shares to see all shared folders.{quotes}"
         )
     return None
 
