@@ -241,7 +241,7 @@ def check(config: str | None):
 
 **Why click over argparse:**
 - `click.prompt()` with `hide_input=True` for password entry — the `setup` command needs this
-- Colored output (`click.style()`, `click.echo()`) for status messages during setup
+- Colored output for status messages during setup, through `cli/output.py` `say()` (redacted, control characters shown visibly; #514)
 - Clean subcommand dispatch without manual `argparse` subparser boilerplate
 - Decorator-based API is more readable and easier for Claude Code to generate correctly
 

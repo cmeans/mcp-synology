@@ -5,10 +5,10 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING, NoReturn
 
-import click
 import yaml
 
 from mcp_synology.cli.logging_ import _configure_logging
+from mcp_synology.cli.output import say
 
 if TYPE_CHECKING:
     from mcp_synology.core.config import AppConfig
@@ -25,7 +25,7 @@ def escape_what_stdout_cant_encode() -> None:
 
 
 def _fail(message: str) -> NoReturn:
-    click.echo(click.style(f"Error: {message}", fg="red"), err=True)
+    say(f"Error: {message}", fg="red", err=True)
     sys.exit(1)
 
 

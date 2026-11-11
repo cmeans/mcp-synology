@@ -130,8 +130,23 @@ _CREDENTIAL_HEADER = re.compile(
 # A cookie header, as a log line, a dict repr or JSON writes it (`Cookie: …`, `{'Cookie': '…'}`,
 # `"cookie": "…"`): DSM's session is its `id` cookie (#176), and every credential key among the
 # `;`-separated items is masked (QA round 1 on #680).
-_COOKIE = re.compile(rf"""(?i)((?:set-)?cookie{_HEADER_GAP})([^\n'"\\]{{0,4096}})""")
-_COOKIE_ITEM = re.compile(rf"(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)([^;\s]*)")
+# The header's value ends where the quote that opened it closes, so a cookie's own quoted value
+# (RFC 6265 allows `id="…"`) is read inside it: an escaped `\"` in JSON, a `"` in a repr or a
+# tuple, and in a header line a `"` that follows an item's `=` (pre-QA r2 on #514 PR 2).
+_COOKIE = re.compile(
+    r"""(?i)((?:set-)?cookie\\?['"]?\s{0,64}[:=,]\s{0,64}b?)"""
+    # JSON inside a JSON string: its quotes are `\"`, a cookie's own `\\\"`.
+    r"""(?:(\\")((?:\\{3}"|\\(?!")[^\n]|[^"\\\n]){0,4096})"""
+    # JSON.
+    r"""|(")((?:\\[^\n]|[^"\\\n]){0,4096})"""
+    # A repr or a tuple.
+    r"""|(')((?:\\[^\n]|[^'\\\n]){0,4096})"""
+    # A header line.
+    r"""|((?:(?<==)"[^"\n]{0,1024}"?|[^\n'"\\]){0,4096}))"""
+)
+_COOKIE_ITEM = re.compile(
+    rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s]*)"""
+)
 # A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`): a quoted
 # value, or a number.
 _CREDENTIAL_JSON_ESCAPED = re.compile(
@@ -146,6 +161,27 @@ _CREDENTIAL_JSON = re.compile(
 )
 _CREDENTIAL_REPR = re.compile(
     rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)('(?:[^'\\\n]|\\.)*'?|"(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+)
+# In names mode, a member only where its value ends it: a separator, a closing bracket or the
+# line's end follows (`"password": "draft".txt` is a file name), and a number takes a dot only
+# with a digit after (`'token': 5.txt`; QA round 1 on #681). Logs keep the patterns above: a
+# log line's member can be followed by anything (`"passwd": "x" and more`, pydantic's
+# truncated `{'passwd': 'S3cr...ice_name': …}`; pre-QA r5).
+_NUMBER = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+_MEMBER_END = r"(?=\s{0,64}(?:[,;}\])\r\n]|$))"
+_NAMES_JSON_ESCAPED = re.compile(
+    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})"""
+    rf"""(\\"(?:[^"\\\n]|\\[^"\n])*+(?:\\"|(?=[\r\n])|$)|(?>{_NUMBER}))"""
+    rf"""(?=\s{{0,64}}(?:[,;}}\])\r\n]|\\"|$))"""
+)
+_NAMES_JSON = re.compile(
+    rf"""(?i)("{_KEY}"\s{{0,64}}:\s{{0,64}})"""
+    rf"""("(?:[^"\\\n]|\\.)*+(?:"|(?=[\r\n])|$)|(?>{_NUMBER})){_MEMBER_END}"""
+)
+_NAMES_REPR = re.compile(
+    rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)"""
+    rf"""('(?:[^'\\\n]|\\.)*+(?:'|(?=[\r\n])|$)|"(?:[^"\\\n]|\\.)*+(?:"|(?=[\r\n])|$)"""
+    rf"""|(?>{_NUMBER})){_MEMBER_END}"""
 )
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
@@ -265,8 +301,15 @@ def _mask_wrapped(text: str) -> str:
     return _WRAPPED_IN_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
 
 
-def redact_secrets(text: str) -> str:
+def redact_secrets(text: str, *, names: bool = False) -> str:
     """``text`` with credentials masked and everything else kept (#514).
+
+    ``names``: the text may hold file and folder names (a tool's reply, error or progress), so a
+    ``key=value`` item is masked only inside a URL (``scheme://…?token=…``), never in bare text,
+    where ``download.php?id=7&token=a1b2c3.zip`` is a name the model must be able to repeat
+    (maintainer, 2026-11-10); a header or cookie only where it reads as one (`_header_context`),
+    and a JSON or repr member only when a separator, a closing bracket or the line's end follows
+    its value. Userinfo and wrapped links are masked either way; logs get every form anywhere.
 
     URL userinfo (``scheme://***@host``), the value of a credential parameter (``passwd``,
     ``_sid``, ``SynoToken``, ``otp_code``, ``device_id``, a tracker passkey; as ``key=value`` or
@@ -278,23 +321,68 @@ def redact_secrets(text: str) -> str:
     # Userinfo longer than the scan's window (a long token as the password): each URL's own
     # authority, up to its first `/`, `?` or `#`, is masked to its last `@`.
     text = _URL_IN_TEXT.sub(lambda m: _mask_authority(m.group(0)), text)
-    text = _CREDENTIAL_PARAM.sub(
-        lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
+
+    def params(part: str) -> str:
+        return _CREDENTIAL_PARAM.sub(
+            lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), part
+        )
+
+    text = _URL_IN_TEXT.sub(lambda m: params(m.group(0)), text) if names else params(text)
+    text = _CREDENTIAL_HEADER.sub(
+        lambda m: f"{m.group(1)}{MASK}" if not names or _header_context(m) else m.group(0), text
     )
-    text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
-    text = _COOKIE.sub(
-        lambda m: (
-            m.group(1) + _COOKIE_ITEM.sub(lambda i: f"{i.group(1)}{i.group(2)}{MASK}", m.group(2))
-        ),
-        text,
+
+    def cookie(m: re.Match[str]) -> str:
+        if names and not _header_context(m):
+            return m.group(0)
+        opener = m.group(2) or m.group(4) or m.group(6) or ""
+        value = next(v for v in (m.group(3), m.group(5), m.group(7), m.group(8)) if v is not None)
+
+        def item(i: re.Match[str]) -> str:
+            quote = i.group(3)[: i.group(3).find('"') + 1] if '"' in i.group(3)[:4] else ""
+            return (
+                f"{i.group(1)}{i.group(2)}{quote}{MASK}{quote}"
+                if quote
+                else (f"{i.group(1)}{i.group(2)}{MASK}")
+            )
+
+        return m.group(1) + opener + _COOKIE_ITEM.sub(item, value)
+
+    text = _COOKIE.sub(cookie, text)
+    escaped, member, item = (
+        (_NAMES_JSON_ESCAPED, _NAMES_JSON, _NAMES_REPR)
+        if names
+        else (_CREDENTIAL_JSON_ESCAPED, _CREDENTIAL_JSON, _CREDENTIAL_REPR)
     )
-    text = _CREDENTIAL_JSON_ESCAPED.sub(
-        lambda m: m.group(1) + (f'\\"{MASK}' if m.group(2).startswith('\\"') else MASK), text
-    )
-    text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
-    return _CREDENTIAL_REPR.sub(
-        lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
-    )
+
+    def escaped_value(m: re.Match[str]) -> str:
+        value = m.group(2)
+        if not value.startswith('\\"'):
+            return m.group(1) + MASK
+        # Names mode takes the closing `\"` into the value: it's given back (pre-QA r6).
+        closed = names and len(value) > 2 and value.endswith('\\"')
+        return f'{m.group(1)}\\"{MASK}{chr(92) + chr(34) if closed else ""}'
+
+    text = escaped.sub(escaped_value, text)
+    text = member.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
+    return item.sub(lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text)
+
+
+def _header_context(m: re.Match[str]) -> bool:
+    """Whether a header or cookie match reads as one in names mode, not as a file name: its
+    name is quoted (a dict, JSON, httpcore's header tuples: `'Cookie': …`, `(b'Cookie', …`),
+    or it starts its line with no indent (`Cookie: …` as a line of its own). A listing's or
+    table's cell (`  Cookie: id=42 recipe.txt`, `📄 Cookie: …`) or a quoted name (`'Cookie:
+    id=42.txt'`) is kept (QA round 1 on #681, pre-QA r5). Looks at most at the match and the
+    character before it, so it stays linear."""
+    text, start = m.string, m.start()
+    head = m.group(1)
+    # Quoted on both sides: `/share/cookie', 'id=42.txt'` ends a quoted path, not a key.
+    if re.match(r"(?i)(?:set-)?(?:cookie|x-syno-token)\\?['\"]", head) and (
+        start > 0 and text[start - 1] in "'\""
+    ):
+        return True
+    return start == 0 or text[start - 1] == "\n"
 
 
 def _mask_authority(url: str) -> str:
@@ -312,8 +400,18 @@ def _mask_authority(url: str) -> str:
     return _AUTHORITY.sub(masked, url)
 
 
+# A value that is only a placeholder in angle brackets.
+# The placeholders this server prints for the user to fill in (`setup`'s client snippet); a
+# real value in angle brackets (`<hunter2>`) is still masked.
+_PLACEHOLDERS = frozenset({"<your password>"})
+
+
 def _masked_value(value: str, quote: str) -> str:
-    """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number."""
+    """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number.
+    A placeholder (`"<your password>"`, as `setup`'s client snippet prints) is kept: it holds no
+    secret, and the user fills it in."""
+    if value.strip("'\"") in _PLACEHOLDERS:
+        return value
     if quote not in ("'", '"') or not value.startswith(quote):
         return MASK
     closed = len(value) > 1 and value.endswith(quote) and not value.endswith("\\" + quote)

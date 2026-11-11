@@ -15,6 +15,7 @@ from mcp.server.mcpserver import (
 from mcp.types import ToolAnnotations
 from pydantic import Field, field_validator
 
+from mcp_synology.core.formatting import report_progress
 from mcp_synology.core.local_paths import (
     check_local_path_entries,
     check_resolvable,
@@ -461,7 +462,7 @@ def register(ctx: "RegisterContext") -> None:
 
     def _progress_cb(mcp_ctx: Context) -> ProgressCallback:
         """Forward a task's progress (with its message) to the client."""
-        return lambda p, t, m: mcp_ctx.report_progress(p, t, m)
+        return lambda p, t, m: report_progress(mcp_ctx, p, t, m)
 
     if "list_shares" in ctx.allowed_tools:
 
@@ -833,7 +834,7 @@ def register(ctx: "RegisterContext") -> None:
             [path] = await resolve_paths(client, known_shares, "download_file", "path", [path])
 
             async def _progress(current: int, total: int | None) -> None:
-                await ctx.report_progress(float(current), float(total) if total else None)
+                await report_progress(ctx, float(current), float(total) if total else None)
 
             return _reply(
                 await download_file(
@@ -1130,7 +1131,7 @@ def register(ctx: "RegisterContext") -> None:
             )
 
             async def _progress(current: int, total: int | None) -> None:
-                await ctx.report_progress(float(current), float(total) if total else None)
+                await report_progress(ctx, float(current), float(total) if total else None)
 
             return _reply(
                 await upload_file(

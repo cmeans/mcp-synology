@@ -13,12 +13,13 @@ import re
 import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.shared.exceptions import MCPError, UrlElicitationRequiredError
 from mcp.types import CallToolResult, Icon, TextContent
 from pydantic import ValidationError
 
@@ -39,7 +40,7 @@ from mcp_synology.core.config import (
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, forges, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
-from mcp_synology.core.redaction import redact_urls
+from mcp_synology.core.redaction import MASK, redact_secrets, redact_urls
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
@@ -471,9 +472,26 @@ class _SynologyServer(MCPServer):
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()
-            raise type(exc)(f"{REPLY_LABEL}\n{exc}{notice}") from exc.__cause__
+            text = _scrubbed(str(exc), "error", name) + _scrubbed(notice, "error", name)
+            raise type(exc)(f"{REPLY_LABEL}\n{text}") from exc.__cause__
+        except MCPError as exc:
+            # A protocol error a tool raised goes to the client as it is: its message and data
+            # are scrubbed here (QA round 1 on #681). No tool raises one today.
+            message = f"{REPLY_LABEL}\n{_scrubbed(exc.error.message, 'error', name)}"
+            # A URL elicitation's data is the link the user must open: kept as it is.
+            data = (
+                exc.error.data
+                if isinstance(exc, UrlElicitationRequiredError)
+                else _redacted_strings(exc.error.data)
+            )
+            if data != exc.error.data:
+                _warn_masked("error data", name)
+            exc.error = exc.error.model_copy(update={"message": message, "data": data})
+            exc.args = (exc.error.code, message, data)
+            raise
         if not isinstance(result, CallToolResult):
-            return result
+            # An input request (elicitation): its messages are text the client shows.
+            return cast("InputRequiredResult", _scrubbed_model(result, name, "input request"))
         notice = await self._take_update_notice()
         if notice:
             texts = [i for i, c in enumerate(result.content) if isinstance(c, TextContent)]
@@ -487,7 +505,8 @@ class _SynologyServer(MCPServer):
                 result = result.model_copy(
                     update={"content": [*result.content, TextContent(type="text", text=notice)]}
                 )
-        return _labeled(result)
+        # After the notice, so the reply's every text, the notice's too, is scrubbed (#514).
+        return _labeled(_scrubbed_result(result, name))
 
     async def _parameters(self, name: str) -> tuple[dict[str, Any], set[str]] | None:
         """Tool ``name``'s parameters and their schemas as served (compacted), and the ones
@@ -639,6 +658,149 @@ _VALIDATION_MESSAGES = {
     "float_parsing": "must be a number",
     "value_error": "has a value it doesn't take",
 }
+
+
+def _scrubbed(text: str, sink: str, where: str) -> str:
+    """``text`` as it may leave the server: credentials masked by `redact_secrets` (#514). That
+    it masked anything is logged once per text at WARNING, naming the sink and the tool, never
+    the text (#514 Q2): in a reply or an error, usually a call site let a credential through; in
+    the instructions, usually the user's own text. An error that is a JSON envelope is redacted
+    string by string (`_json_strings_redacted`) and not scanned again once encoded: a URL in an
+    encoded string ends at the backslash of an escaped quote, and the pass would drop it."""
+    out = _json_strings_redacted(text) if sink == "error" else None
+    if out is None:
+        out = redact_secrets(text, names=True)
+    if out == text:
+        return out
+    if sink == "instructions":
+        # Usually the user's own text: custom_instructions or an instructions_file.
+        logger.warning(
+            "The server instructions held text that looked like a credential, masked there "
+            "(#514); check custom_instructions and instructions_file in the config."
+        )
+    else:
+        logger.warning(
+            "The %s of %s held text that looked like a credential, masked there (#514); if it "
+            "was one, a call site let it through.",
+            sink,
+            where,
+        )
+    return out
+
+
+def _redacted_strings(value: Any) -> Any:
+    """``value`` (decoded JSON) with each string, keys too, run through `redact_secrets`."""
+    if isinstance(value, str):
+        return redact_secrets(value, names=True)
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, item in value.items():
+            k, v = _redacted_strings(key), _redacted_strings(item)
+            if isinstance(v, str | int | float) and not isinstance(v, bool):
+                # A credential's own member (`{"passwd": "x"}`): its value alone is plain text,
+                # so the key is checked as a JSON member with a stand-in value.
+                member = json.dumps({k: "x"}) if isinstance(k, str) else ""
+                if member and redact_secrets(member, names=True) != member:
+                    v = MASK
+            out[k] = v
+        return out
+    if isinstance(value, list):
+        return [_redacted_strings(v) for v in value]
+    return value
+
+
+def _json_strings_redacted(text: str) -> str | None:
+    """A structured error's text with every string in its JSON envelope run through
+    `redact_secrets`, and the text before the envelope too: JSON inside the message is escaped
+    there (`\\"passwd\\": …`), and each string decoded is plain again. None for text that isn't
+    a JSON envelope, which the caller redacts whole."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        body = json.loads(text[start:])  # this server's own error envelope
+    except ValueError:
+        return None
+    prefix = redact_secrets(text[:start], names=True)
+    redacted = _redacted_strings(body)
+    if redacted == body:
+        return prefix + text[start:]
+    return prefix + json.dumps(redacted)
+
+
+def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
+    """``result`` with each text block's credentials masked (`_scrubbed`), every other block's
+    text fields (`_scrubbed_model`), each string of its structured content if a tool sends one
+    (none does: `add_tool` makes them unstructured, #377, but a tool can still ask for it), and
+    every `_meta`: the result's and each block's."""
+    content = [
+        _scrubbed_model(
+            c.model_copy(update={"text": _scrubbed(c.text, "reply", name)}), name, "block"
+        )
+        if isinstance(c, TextContent)
+        else _scrubbed_model(c, name, "block")
+        for c in result.content
+    ]
+    update: dict[str, Any] = {"content": content}
+    if result.structured_content is not None:
+        structured = _redacted_strings(result.structured_content)
+        if structured != result.structured_content:
+            _warn_masked("structured reply", name)
+        update["structured_content"] = structured
+    if result.meta is not None:
+        meta = _redacted_strings(result.meta)
+        if meta != result.meta:
+            _warn_masked("reply's _meta", name)
+        update["meta"] = meta
+    return result.model_copy(update=update)
+
+
+# A block's or a resource's own fields that hold base64 data, never text: left as they are.
+# Under `_meta` a key with these names is text like any other.
+_BINARY_FIELDS = frozenset({"data", "blob"})
+
+
+def _scrubbed_model(model: Any, name: str, what: str) -> Any:
+    """``model`` (a content block, an input request) with every string masked but base64
+    `data` and `blob` fields of the block or its resource (QA round 1 and pre-QA r5 on #681).
+    A text block's text was masked already; this covers its `_meta`. None is sent today."""
+    raw = model.model_dump(by_alias=True, exclude_none=True)
+
+    def walk(value: Any, *, binary: bool) -> Any:
+        if isinstance(value, dict):
+            return {
+                k: value[k]
+                if (binary and k in _BINARY_FIELDS) or _passed_through(k, value)
+                else walk(value[k], binary=binary and k == "resource")
+                for k in value
+            }
+        if isinstance(value, list):
+            return [walk(v, binary=False) for v in value]
+        if isinstance(value, str):
+            return redact_secrets(value, names=True)
+        return value
+
+    redacted = walk(raw, binary=True)
+    if redacted == raw:
+        return model
+    _warn_masked(f"{raw['type']} {what}" if "type" in raw else what, name)
+    return type(model).model_validate(redacted)
+
+
+def _passed_through(key: str, parent: dict[str, Any]) -> bool:
+    """Fields a client hands back or opens as they are (pre-QA r6 on #681): an input
+    request's `requestState` ("opaque state to pass back verbatim") and a URL elicitation's
+    `url`, which a mask would break, as a Photos share link's passphrase is kept."""
+    return key == "requestState" or (key == "url" and parent.get("mode") == "url")
+
+
+def _warn_masked(sink: str, name: str) -> None:
+    logger.warning(
+        "The %s of %s held text that looked like a credential, masked there (#514); if it "
+        "was one, a call site let it through.",
+        sink,
+        name,
+    )
 
 
 def _labeled(result: CallToolResult) -> CallToolResult:
@@ -1531,6 +1693,9 @@ def create_server(config: AppConfig) -> MCPServer:
         version, notice = startup_update
         instructions += f"\n\nUPDATE AVAILABLE:\n{notice}"
         manager._announced_version = version
+
+    # Once, on the whole text: the user's own text, the notices and the update notice (#514).
+    instructions = _scrubbed(instructions, "instructions", "the server")
 
     @asynccontextmanager
     async def _lifespan(_server: MCPServer[Any]) -> AsyncIterator[None]:

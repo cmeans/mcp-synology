@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from functools import partial
 
 import pytest
 
@@ -351,6 +352,12 @@ LONG_INPUTS = [
     pytest.param("a+" * 30_000, id="scheme-characters"),
     pytest.param("://@" * 200_000, id="scheme-at-runs"),
     pytest.param("cookie: " * 7_500, id="cookie-runs"),
+    pytest.param("Cookie: " + 'id="' * 20_000, id="cookie-quote-runs"),
+    # Names mode looked back over the whole line for each header (pre-QA r5 on #681).
+    pytest.param("a x-syno-token: b " * 50_000, id="headers-on-one-line"),
+    pytest.param("a Cookie: x' " * 50_000, id="cookies-on-one-line"),
+    pytest.param("Cookie: " + 'a="b' * 30_000, id="cookie-unclosed-quotes"),
+    pytest.param('cookie:"' + "\\" * 50_000, id="cookie-backslashes"),
     pytest.param("x://a" + ",a" * 30_000, id="commas"),
     pytest.param("x://a" + (", " + " " * 40) * 1_500, id="spaces-after-commas"),
     pytest.param('"passwd": "' + "a" * 60_000, id="unterminated-json"),
@@ -364,7 +371,9 @@ LONG_INPUTS = [
 
 @pytest.mark.parametrize("text", LONG_INPUTS)
 @pytest.mark.parametrize(
-    "redact", [redact_urls, redact_secrets, redact_title], ids=["urls", "secrets", "title"]
+    "redact",
+    [redact_urls, redact_secrets, partial(redact_secrets, names=True), redact_title],
+    ids=["urls", "secrets", "names", "title"],
 )
 def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
     assert callable(redact)
@@ -566,6 +575,21 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         # A number, decimals and exponents too.
         ('{"otp_code": 123456}', '{"otp_code": ***}'),
         ('{"passwd": 1.5e3}', '{"passwd": ***}'),
+        # Logs mask a member whatever follows it (pre-QA r5 on #681): names mode keeps these.
+        ("'token': 5.txt", "'token': ***txt"),
+        ('"passwd": "hunter2" and more', '"passwd": "***" and more'),
+        ("'passwd': 'x' -> failed", "'passwd': '***' -> failed"),
+        ('"otp_code": 123456 (2FA)', '"otp_code": *** (2FA)'),
+        # Pydantic's truncated repr of a login's parameters.
+        (
+            "input_value={'passwd': 'S3cr3tPassw0r...ice_name': 'abcdefghij'}",
+            "input_value={'passwd': '***': 'abcdefghij'}",
+        ),
+        ("{'token': 5, 'a': 1}", "{'token': ***, 'a': 1}"),
+        # A header or cookie value is masked to its end in logs, brackets included (pre-QA r6).
+        ("Cookie: passwd=ab}cd; x=1", "Cookie: passwd=***; x=1"),
+        ("X-SYNO-Token: ab]cd", "X-SYNO-Token: ***"),
+        ('{"passwd": "x" }', '{"passwd": "***" }'),
         # An unterminated value ending in an escaped quote keeps one quote.
         ('{"passwd": "a\\"', '{"passwd": "***'),
         # DSM's 2FA device token in a login reply, and the session as its `id` cookie.
@@ -587,6 +611,17 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
             "Headers([('cookie','id=***'),('cookie','did=***')])",
         ),
         ('{\\"cookie\\": \\"id=SEC; did=D1\\"}', '{\\"cookie\\": \\"id=***; did=***\\"}'),
+        # A quoted cookie value (RFC 6265), in each form (pre-QA r2 on #514 PR 2).
+        ('Cookie: id="SEC"', 'Cookie: id="***"'),
+        ('Cookie: id="SEC"; did="D1"', 'Cookie: id="***"; did="***"'),
+        ('Set-Cookie: id="S C"; path=/', 'Set-Cookie: id="***"; path=/'),
+        ("{'Cookie': 'id=\"SEC\"; did=\"D1\"'}", "{'Cookie': 'id=\"***\"; did=\"***\"'}"),
+        ('{"Cookie": "id=\\"SEC\\"; did=D1"}', '{"Cookie": "id=\\"***\\"; did=***"}'),
+        (
+            '{\\"cookie\\": \\"id=\\\\\\"SEC\\\\\\"; did=D1\\"}',
+            '{\\"cookie\\": \\"id=\\\\\\"***\\\\\\"; did=***\\"}',
+        ),
+        ("[(b'Cookie', b'id=\"SEC\"')]", "[(b'Cookie', b'id=\"***\"')]"),
         ("Cookie:     id=SEC", "Cookie:     id=***"),
         ("Cookie: a=1;   id=SEC", "Cookie: a=1;   id=***"),
         ("Cookie: SynoToken=SEC", "Cookie: SynoToken=***"),
@@ -605,6 +640,9 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ("thunder://QUFodHRw%2BOi8vdTpDQU5BUlk=", "thunder://***"),
         ("?u=thunder%3A%2F%2FQUFodHRw", "?u=thunder%3A%2F%2F***"),
         ("candid=1", "candid=1"),
+        # A placeholder for the user to fill in isn't a secret (`setup`'s client snippet).
+        ('"SYNOLOGY_PASSWORD": "<your password>"', '"SYNOLOGY_PASSWORD": "<your password>"'),
+        ("?passwd=<your password>", "?passwd=<your password>"),
         # A prefix joined by `-`.
         ("x?access-token=CANARY", "x?access-token=***"),
         ("?x-api-key=CANARY", "?x-api-key=***"),
@@ -649,3 +687,55 @@ def test_a_nested_url_with_long_userinfo_is_masked() -> None:
     too (pre-QA r7 on #514)."""
     nested = "https://x/?next=https://user:eyJ" + "a" * 300 + "CANARY@h/x"
     assert redact_secrets(nested) == "https://x/?next=https://***@h/x"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Bare text in names mode: a name, kept.
+        ("download.php?id=7&token=a1b2c3.zip", "download.php?id=7&token=a1b2c3.zip"),
+        ("notes;password=old.txt", "notes;password=old.txt"),
+        # Inside a URL, masked as ever, userinfo too.
+        (
+            "https://user:password@domain.example/path?token=SEC&x=1",
+            "https://***@domain.example/path?token=***&x=1",
+        ),
+        ("see https://h/x?passwd=SEC for it", "see https://h/x?passwd=*** for it"),
+        # JSON, cookies and headers aren't names: masked either way.
+        ('{"passwd": "SEC"}', '{"passwd": "***"}'),
+        ("Cookie: id=SEC", "Cookie: id=***"),
+        ("X-SYNO-Token: SEC", "X-SYNO-Token: ***"),
+        ("ok\nCookie: id=SEC", "ok\nCookie: id=***"),
+        ("{'Cookie': 'id=SEC'}", "{'Cookie': 'id=***'}"),
+        ("[(b'X-SYNO-Token', b'SEC')]", "[(b'X-SYNO-Token', b'***')]"),
+        # A file name that only looks like one, in a listing row (QA round 1 on #681).
+        ("📄 Cookie: id=42 recipe.txt", "📄 Cookie: id=42 recipe.txt"),
+        ("📄 x-syno-token = notes.txt", "📄 x-syno-token = notes.txt"),
+        ('📄 "password": "draft".txt', '📄 "password": "draft".txt'),
+        ("📄 'token': 5.txt", "📄 'token': 5.txt"),
+        ('📄 "passwd": "a, b".x', '📄 "passwd": "a, b".x'),
+        ("'token': 5.txt", "'token': 5.txt"),
+        ('"password": "draft".txt', '"password": "draft".txt'),
+        ('{\\"token\\": 5.txt}', '{\\"token\\": 5.txt}'),
+        # A table's first column, a quoted name, a name after a comma (pre-QA r5 on #681).
+        ("  Cookie: id=42 recipe.txt  12 KiB", "  Cookie: id=42 recipe.txt  12 KiB"),
+        ("'Cookie: id=42 recipe.txt' not found", "'Cookie: id=42 recipe.txt' not found"),
+        ("a.txt, Cookie: id=42.txt", "a.txt, Cookie: id=42.txt"),
+        ("  x-syno-token = notes.txt", "  x-syno-token = notes.txt"),
+        ("[(b'Cookie', b'id=SEC')]", "[(b'Cookie', b'id=***')]"),
+        # Escaped JSON keeps its closing quote (pre-QA r6 on #681).
+        ('{\\"passwd\\": \\"SECRET1\\"}', '{\\"passwd\\": \\"***\\"}'),
+        ('{\\"passwd\\":\\"S\\",\\"a\\":1}', '{\\"passwd\\":\\"***\\",\\"a\\":1}'),
+        ('{\\"X-SYNO-Token\\": \\"S\\"}', '{\\"X-SYNO-Token\\": \\"***\\"}'),
+        # A quoted path that ends in the header's name is a path, not a key.
+        ("['/share/cookie', 'id=42.txt']", "['/share/cookie', 'id=42.txt']"),
+        (
+            "Can't copy '/a/fortune cookie' = 'id=3.txt'",
+            "Can't copy '/a/fortune cookie' = 'id=3.txt'",
+        ),
+        ("['/a/x-syno-token', 'notes.txt']", "['/a/x-syno-token', 'notes.txt']"),
+    ],
+)
+def test_names_mode_masks_query_items_only_inside_urls(text: str, expected: str) -> None:
+    """The model-facing sinks pass ``names=True`` (maintainer, 2026-11-10)."""
+    assert redact_secrets(text, names=True) == expected
