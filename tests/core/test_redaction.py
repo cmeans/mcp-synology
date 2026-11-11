@@ -652,3 +652,25 @@ def test_a_nested_url_with_long_userinfo_is_masked() -> None:
     too (pre-QA r7 on #514)."""
     nested = "https://x/?next=https://user:eyJ" + "a" * 300 + "CANARY@h/x"
     assert redact_secrets(nested) == "https://x/?next=https://***@h/x"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Bare text in names mode: a name, kept.
+        ("download.php?id=7&token=a1b2c3.zip", "download.php?id=7&token=a1b2c3.zip"),
+        ("notes;password=old.txt", "notes;password=old.txt"),
+        # Inside a URL, masked as ever, userinfo too.
+        (
+            "https://user:password@domain.example/path?token=SEC&x=1",
+            "https://***@domain.example/path?token=***&x=1",
+        ),
+        ("see https://h/x?passwd=SEC for it", "see https://h/x?passwd=*** for it"),
+        # JSON, cookies and headers aren't names: masked either way.
+        ('{"passwd": "SEC"}', '{"passwd": "***"}'),
+        ("Cookie: id=SEC", "Cookie: id=***"),
+    ],
+)
+def test_names_mode_masks_query_items_only_inside_urls(text: str, expected: str) -> None:
+    """The model-facing sinks pass ``names=True`` (maintainer, 2026-11-10)."""
+    assert redact_secrets(text, names=True) == expected

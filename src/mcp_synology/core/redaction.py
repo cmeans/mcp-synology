@@ -265,8 +265,14 @@ def _mask_wrapped(text: str) -> str:
     return _WRAPPED_IN_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
 
 
-def redact_secrets(text: str) -> str:
+def redact_secrets(text: str, *, names: bool = False) -> str:
     """``text`` with credentials masked and everything else kept (#514).
+
+    ``names``: the text may hold file and folder names (a tool's reply, error or progress), so a
+    ``key=value`` item is masked only inside a URL (``scheme://…?token=…``), never in bare text,
+    where ``download.php?id=7&token=a1b2c3.zip`` is a name the model must be able to repeat
+    (maintainer, 2026-11-10). Userinfo, wrapped links, JSON, repr, header and cookie forms are
+    masked either way.
 
     URL userinfo (``scheme://***@host``), the value of a credential parameter (``passwd``,
     ``_sid``, ``SynoToken``, ``otp_code``, ``device_id``, a tracker passkey; as ``key=value`` or
@@ -278,9 +284,13 @@ def redact_secrets(text: str) -> str:
     # Userinfo longer than the scan's window (a long token as the password): each URL's own
     # authority, up to its first `/`, `?` or `#`, is masked to its last `@`.
     text = _URL_IN_TEXT.sub(lambda m: _mask_authority(m.group(0)), text)
-    text = _CREDENTIAL_PARAM.sub(
-        lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
-    )
+
+    def params(part: str) -> str:
+        return _CREDENTIAL_PARAM.sub(
+            lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), part
+        )
+
+    text = _URL_IN_TEXT.sub(lambda m: params(m.group(0)), text) if names else params(text)
     text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _COOKIE.sub(
         lambda m: (

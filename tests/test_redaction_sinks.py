@@ -84,6 +84,27 @@ async def test_a_reply_never_carries_a_credential(
     assert CANARY not in caplog.text
 
 
+# File and folder names that look like query items: the model must be able to repeat them, so a
+# reply, error or progress message keeps them (maintainer, 2026-11-10).
+NAMES = ["download.php?id=7&token=a1b2c3.zip", "notes;password=old.txt", "a&sid=1.pdf"]
+
+
+async def test_a_reply_keeps_file_names_that_look_like_query_items(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    server = _SynologyServer("names")
+
+    @server.tool(name="listing")
+    async def listing() -> str:
+        return "\n".join(f"/video/{name}" for name in NAMES)
+
+    with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+        async with Client(server) as client:
+            text = _text(await client.call_tool("listing", {}))
+    assert all(name in text for name in NAMES), text
+    assert "looked like a credential" not in caplog.text
+
+
 @pytest.mark.parametrize("leak", LEAKS)
 async def test_an_error_never_carries_a_credential(leak: str) -> None:
     server = _SynologyServer("canary")

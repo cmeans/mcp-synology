@@ -460,7 +460,7 @@ async def report_progress(
     from mcp_synology.core.redaction import redact_secrets
 
     await ctx.report_progress(
-        progress, total, redact_secrets(message) if message is not None else None
+        progress, total, redact_secrets(message, names=True) if message is not None else None
     )
 
 

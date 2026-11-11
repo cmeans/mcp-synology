@@ -648,7 +648,7 @@ def _scrubbed(text: str, sink: str, where: str, *, original: str | None = None) 
     it masked anything is logged once per text at WARNING, naming the sink and the tool, never
     the text (#514 Q2): usually a call site let a credential through. ``original`` is the text
     before an earlier pass (`_json_strings_redacted`), for the comparison."""
-    out = redact_secrets(text)
+    out = redact_secrets(text, names=True)
     if out != (original if original is not None else text):
         logger.warning(
             "The %s of %s held text that looked like a credential, masked there (#514); if it "
@@ -673,7 +673,7 @@ def _json_strings_redacted(text: str) -> str:
 
     def walk(value: Any) -> Any:
         if isinstance(value, str):
-            return redact_secrets(value)
+            return redact_secrets(value, names=True)
         if isinstance(value, dict):
             return {k: walk(v) for k, v in value.items()}
         if isinstance(value, list):
