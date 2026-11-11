@@ -1034,3 +1034,56 @@ async def test_a_skip_report_out_of_time_doesnt_read_the_kinds(
         mock_client, ["/s/a", "/s/b"], "/s/d", False, 0, ["/s/b"], probe=False
     )
     assert "1 skipped in whole or in part" in text, text
+
+
+async def test_a_restore_whose_original_folder_is_refused_is_refused_up_front(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+) -> None:
+    """#482: a 407 original folder was found only at its item's turn, after earlier items were
+    restored. It's refused before anything moves."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    dsm = FakeDsm({src: PathScript() for src in tool.sources})
+    dsm.unclear["/s/o1"] = 407
+    dsm.mount(respx_mock)
+    with pytest.raises(ToolError) as refused:
+        await tool.call(mock_client, TaskRecords())
+    body = json.loads(str(refused.value))["error"]
+    assert body["code"] == "permission_denied"
+    assert body["message"] == (
+        "Restore files refused: no permission to use the original folder /s/o1. "
+        "Nothing was restored."
+    )
+    assert (body["param"], body["value"], body["retryable"]) == ("dest_folder", "/s/o1", False)
+    assert dsm.starts() == []
+
+
+async def test_a_restore_whose_later_folder_is_gone_says_what_was_restored(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+) -> None:
+    """#482 (QA's differential review of #678): a later group's destination answering 408 after
+    earlier items finished said "Nothing was restored". Now it's that item's failure, through the
+    one formatter: what was restored, which item failed, what wasn't started."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+
+    class Deleted(FakeDsm):
+        def _getinfo(self, path: str) -> httpx.Response:
+            if path == "/s/o1" and self.starts():
+                return self._ok({"files": [{"code": 408, "path": path}]})
+            return super()._getinfo(path)
+
+    dsm = Deleted({src: PathScript() for src in tool.sources})
+    dsm.mount(respx_mock)
+    with pytest.raises(ToolError) as refused:
+        await tool.call(mock_client, TaskRecords())
+    body = json.loads(str(refused.value))["error"]
+    message = body["message"]
+    assert "Nothing was" not in message, message
+    assert message.startswith(
+        "Restore files refused: the destination folder /s/o1 doesn't exist. "
+        "Failed on: /s/#recycle/o1/f1. Already restored before this failure: "
+        "/s/#recycle/o0/f0 (to /s/o0)."
+    ), message
+    assert message.endswith("Not started: /s/#recycle/o2/f2."), message
+    assert body["retryable"] is False
+    assert "leave out the paths already restored" in body["suggestion"]
+    assert [c.params["path"] for c in dsm.starts()] == ["/s/#recycle/o0/f0"]

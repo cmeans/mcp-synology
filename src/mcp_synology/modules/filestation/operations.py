@@ -1988,11 +1988,27 @@ async def _recreate_missing_folders(
         - set(wanted)
     )
     try:
-        gone = {
-            path for path, code in await find_missing_paths(client, wanted + parents) if code == 408
-        }
+        found = await find_missing_paths(client, wanted + parents)
     except SynologyError as e:
         synology_error_response("Restore files", e)
+    # A destination this account can't use is refused before anything moves: found only at its
+    # item's turn, it came after earlier items were restored (#482).
+    denied = [path for path, code in found if code == 407 and path in wanted]
+    if denied:
+        error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "Restore files refused: no permission to use the original folder"
+            f"{'s' if len(denied) > 1 else ''} {', '.join(map(shown, denied))}. "
+            "Nothing was restored.",
+            retryable=False,
+            param="dest_folder",
+            value=denied[0],
+            suggestion=(
+                "Restore them to a folder this DSM account can write to (dest_folder), or have "
+                "the folder's permissions changed in DSM."
+            ),
+        )
+    gone = {path for path, code in found if code == 408}
     missing = [path for path in wanted if path in gone]
     created: list[str] = []
     for path in sorted(missing, key=lambda p: p.count("/"), reverse=True):
