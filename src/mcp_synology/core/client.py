@@ -55,11 +55,17 @@ _SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_c
 def _log_safe(
     params: dict[str, Any], sensitive: frozenset[str] = _SENSITIVE_PARAMS
 ) -> dict[str, Any]:
-    """Params as they may be logged: sensitive names masked, URL secrets redacted (#143)."""
-    return {
-        k: "***" if k in sensitive else redact_urls(v) if isinstance(v, str) else v
-        for k, v in params.items()
-    }
+    """Params as they may be logged: sensitive names masked, URL secrets redacted (#143), in a
+    list's items too (#458: a URI list was logged as it was)."""
+
+    def safe(value: Any) -> Any:
+        if isinstance(value, str):
+            return redact_urls(value)
+        if isinstance(value, list | tuple):
+            return [safe(item) for item in value]
+        return value
+
+    return {k: "***" if k in sensitive else safe(v) for k, v in params.items()}
 
 
 # Type alias for transfer progress callbacks.

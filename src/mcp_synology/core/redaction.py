@@ -56,7 +56,7 @@ _SCHEME = r"[A-Za-z][A-Za-z0-9+.-]{0,31}"
 # hides a whole URL, credentials included), or an ed2k link written without `//`. Wrapped links
 # are masked whole (#458, #514 Q4).
 _WRAPPED = ("thunder", "flashget", "qqdl")
-_OPAQUE_START = r"(?i:magnet):\?|(?i:ed2k|thunder|flashget|qqdl):"
+_OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/])(?i:ed2k|thunder|flashget|qqdl):"
 
 # A URL or magnet inside free text. A comma ends a match only where another URI
 # starts after it, as create_download splits its list (#397): a comma inside a URL
@@ -74,12 +74,22 @@ _URL_IN_TEXT = re.compile(rf"""(?:{_OPAQUE_START}|{_SCHEME}://){_URL_CHAR}+(?<!,
 # What a host may hold, once userinfo is gone: a name, an IPv4 or bracketed IPv6 address, a
 # port. A netloc with anything else (`c&token=…`, a URL's query glued to its host after a comma
 # split it, #466) keeps its host and masks the rest.
-_HOST = re.compile(r"[A-Za-z0-9.\-_~%\[\]:]*")
+_HOST = re.compile(r"[\w.\-~%\[\]:]*")
+# A whole host after an `@`, as userinfo ends: a name (IDN too) or a bracketed address, maybe a
+# port, then the end of the authority. An `@` later in the path or the prose isn't followed by
+# one (`https://u:p@h/@name`, `… mail bob@c.example/x`: the first `@` is the one that counts).
+_WHOLE_HOST = re.compile(r"""(?:\[[\w:.%]+\]|[\w.\-~%]+)(?::\d*)?(?=[/?#,\s"'<>]|$)""")
+# `&key=value` in a URL's path, or in an opaque link before any `?`: a query that lost its `?`,
+# as when a comma split a URL (#466).
+_AMP_ITEM = re.compile(r"&([^\s=&?;#/]+)=[^\s&;#/]*")
 
 # Wrapped links in free text, masked whole with their scheme kept.
 _WRAPPED_IN_TEXT = re.compile(
-    r"""(?i)(?<![A-Za-z0-9+.-])(thunder|flashget|qqdl):(//)?[^\s,"'<>]*"""
+    r"""(?i)(?<![^\s,"'<>(\[=])(thunder|flashget|qqdl):(//)?[A-Za-z0-9+=][A-Za-z0-9+/=]*"""
+    r"""(?=[\s,"'<>&]|$)"""
 )
+# A wrapped link's body: base64, not starting with `/` (so `//` is the separator, never body).
+_WRAPPED_BODY = re.compile(r"(?://)?[A-Za-z0-9+=][A-Za-z0-9+/=]*")
 
 # Credential parameters, as `key=value` in a query, a form body or prose, or as a JSON member.
 # The keys DSM and this server use for a password, a session, a 2FA code or device, and the
@@ -88,10 +98,16 @@ _CREDENTIAL_KEYS = (
     "passwd|password|pwd|_sid|sid|synotoken|otp_code|device_id|device_name|passkey|authkey|"
     "torrent_pass|token|access_token|api_key|apikey"
 )
-_CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<![A-Za-z0-9_])((?:{_CREDENTIAL_KEYS})=)[^\s&;#"'<>]+""")
-_CREDENTIAL_JSON = re.compile(
-    rf"""(?i)("(?:{_CREDENTIAL_KEYS})"\s{{0,4}}:\s{{0,4}}")(?:[^"\\]|\\.){{1,4096}}(")"""
-)
+# A key may carry a prefix ending in `_` (`refresh_token`, `user_password`), never letters
+# alone (`insid`, `passwordless` are other words).
+_KEY = rf"(?:[A-Za-z0-9]+_)?(?:{_CREDENTIAL_KEYS})"
+_CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<![A-Za-z0-9_])({_KEY}=)[^\s&;#"'<>]+""")
+# DSM's CSRF header, as a log line or an error quotes it.
+_CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
+# A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
+# a value longer than any cap is masked whole too.
+_CREDENTIAL_JSON = re.compile(rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}}")(?:[^"\\\n]|\\.)+("?)""")
+_CREDENTIAL_REPR = re.compile(rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}}')(?:[^'\\\n]|\\.)+('?)""")
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
 # How many `@`s in one window the scan tries, last first: a password holds few, and a cap keeps
@@ -117,10 +133,13 @@ def _is_userinfo(span: str) -> bool:
     a plain ``user`` with no whitespace, ``/``, ``?`` or ``#`` (``https://site/@name`` is a
     path). The scan passes a non-empty span from one line.
     """
+    if "://" in span:
+        return False  # another URL starts before this `@` (`http://h then ftp://u:p@x`)
     user, colon, rest = span.partition(":")
     if not colon:
         return not any(c.isspace() or c in "/?#" for c in span)
-    if any(c in "/?#" for c in user):
+    if any(c in "/?#" for c in user) or ", " in user:
+        # A path before the colon, or prose (`https://nas.local, contact: admin@x`).
         return False
     return _PORT_THEN_PATH.match(rest) is None
 
@@ -138,15 +157,7 @@ def _mask_userinfo(text: str) -> str:
     while start >= 0:
         begin = start + 3
         window = text[begin : begin + _USERINFO_WINDOW].partition("\n")[0]
-        end = None
-        at = window.rfind("@")
-        for _ in range(_USERINFO_TRIES):
-            if at <= 0:
-                break
-            if _HOST_START.match(window, at + 1) and _is_userinfo(window[:at]):
-                end = at
-                break
-            at = window.rfind("@", 0, at)
+        end = _userinfo_end(window)
         if end is not None and window[:end] != MASK:
             out.append(text[pos:begin])
             out.append(MASK)
@@ -154,6 +165,29 @@ def _mask_userinfo(text: str) -> str:
         start = text.find("://", max(begin, pos))
     out.append(text[pos:])
     return "".join(out)
+
+
+def _userinfo_end(window: str) -> int | None:
+    """Where userinfo ends in ``window`` (the text after a ``://``): the first ``@`` that ends
+    userinfo and is followed by a whole host; failing that, the last ``@`` that ends userinfo and
+    is followed by a host's first character (a password holding ``@``, or a host this can't
+    read). At most ``_USERINFO_TRIES`` of each."""
+    ats: list[int] = []
+    at = window.find("@", 1)
+    while at > 0 and len(ats) < _USERINFO_TRIES:
+        ats.append(at)
+        at = window.find("@", at + 1)
+    for at in ats:
+        if _WHOLE_HOST.match(window, at + 1) and _is_userinfo(window[:at]):
+            return at
+    at = window.rfind("@")
+    for _ in range(_USERINFO_TRIES):
+        if at <= 0:
+            return None
+        if _HOST_START.match(window, at + 1) and _is_userinfo(window[:at]):
+            return at
+        at = window.rfind("@", 0, at)
+    return None
 
 
 def _mask_wrapped(text: str) -> str:
@@ -172,7 +206,9 @@ def redact_secrets(text: str) -> str:
     """
     text = _mask_userinfo(_mask_wrapped(text))
     text = _CREDENTIAL_PARAM.sub(lambda m: f"{m.group(1)}{MASK}", text)
-    return _CREDENTIAL_JSON.sub(lambda m: f"{m.group(1)}{MASK}{m.group(2)}", text)
+    text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
+    text = _CREDENTIAL_JSON.sub(lambda m: f"{m.group(1)}{MASK}{m.group(2)}", text)
+    return _CREDENTIAL_REPR.sub(lambda m: f"{m.group(1)}{MASK}{m.group(2)}", text)
 
 
 def _is_token(run: str) -> bool:
@@ -226,13 +262,19 @@ def redact_url(url: str) -> str:
     if url[: len("magnet:?")].lower() == "magnet:?":  # any case, as DSM may accept it
         return _redact_magnet(url)
     scheme, colon, rest = url.partition(":")
-    if colon and scheme.lower() in _WRAPPED:
-        return _mask_wrapped(url)
+    if (
+        colon
+        and scheme.lower() in _WRAPPED
+        and (_WRAPPED_BODY.fullmatch(rest) or rest in (MASK, f"//{MASK}"))
+    ):
+        return f"{scheme}:{'//' if rest.startswith('//') else ''}{MASK}"
     if "://" not in url:
-        if colon and re.fullmatch(_SCHEME, scheme) and "?" in rest:
-            # An opaque link such as `ed2k:foo?token=…`: its query is masked as a URL's (#466).
-            before, _, query = url.partition("?")
-            return f"{before}?{_redact_query(query.partition('#')[0])}"
+        if colon and re.fullmatch(_SCHEME, scheme) and ("?" in rest or "&" in rest):
+            # An opaque link such as `ed2k:foo?token=…` or `ed2k:foo&token=…`: its query is
+            # masked as a URL's (#466).
+            before, q, query = url.partition("?")
+            before = _AMP_ITEM.sub(lambda m: f"&{m.group(1)}={MASK}", before)
+            return f"{before}?{_redact_query(query.partition('#')[0])}" if q else before
         return url
     url = _mask_userinfo(url)
     try:
@@ -251,6 +293,7 @@ def redact_url(url: str) -> str:
         # Not a host past this point: a query glued to it once a comma split the URL (#466).
         netloc = f"{user}{at}{host[: kept.end() + 1]}{MASK}"
     path = "/".join(_redact_segment(seg) for seg in parts.path.split("/"))
+    path = _AMP_ITEM.sub(lambda m: f"&{m.group(1)}={MASK}", path)
     query = _redact_query(parts.query) if parts.query else ""
     return urlunsplit((parts.scheme, netloc, path, query, ""))
 

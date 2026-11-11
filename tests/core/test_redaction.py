@@ -352,3 +352,104 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
     started = time.perf_counter()
     redact(text)
     assert time.perf_counter() - started < 1.0
+
+
+# --- #514 PR 1, pre-QA: userinfo next to other `@`s, false positives, key forms ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The first `@` followed by a whole host ends userinfo; a later `@` keeps the host.
+        ("https://u:pw@medium.com/@someone/post", "https://***@medium.com/@someone/post"),
+        ("https://u:pw@h.example:8080/@x", "https://***@h.example:8080/@x"),
+        (
+            "see https://user:pw@h.example/a and mail bob@c.example",
+            "see https://***@h.example/a and mail bob@c.example",
+        ),
+        # A password holding `@` ends at the `@` before the host.
+        ("https://user:p@ss:CANARY05@h/x", "https://***@h/x"),
+        # A password with a space; a user name with one.
+        ("https://user:pw d@h/x", "https://***@h/x"),
+        # Prose after a bare host: neither "nas.local, contact" nor another URL is userinfo.
+        (
+            "Failed to reach https://nas.local, contact: admin@example.com",
+            "Failed to reach https://nas.local, contact: admin@example.com",
+        ),
+        ("http://nas.local then ftp://u:p@h/x", "http://nas.local then ftp://***@h/x"),
+        # The scan stays on one line: a password can't span a line break.
+        ("https://user:pw\nd@h/x", "https://user:pw\nd@h/x"),
+    ],
+)
+def test_userinfo_ends_at_the_right_at(text: str, expected: str) -> None:
+    assert redact_secrets(text) == expected
+    assert redact_urls(text) == expected
+
+
+def test_a_password_holding_many_ats_is_still_masked() -> None:
+    """The forward scan gives up after `_USERINFO_TRIES` `@`s; the fallback from the last `@`
+    still finds the host."""
+    assert redact_secrets("https://u:" + "p@" * 9 + "q@h/x") == "https://***@h/x"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://h/dl/a,b://c/x&token=CANARY3",
+        "ftp://h/a,ED2K:foo&token=CANARY2",
+        # A scheme longer than the 32 characters a URL match takes: no split, the item is in
+        # the path, and masked there.
+        "ftp://h/a," + "b" * 40 + "://c&token=CANARY1",
+    ],
+)
+def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
+    """#466: after a comma split, `&key=value` lands in a path or an opaque link."""
+    assert "CANARY" not in redact_urls(text)
+    assert "CANARY" not in redact_secrets(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A file or prose that names a wrapped scheme isn't a link (pre-QA on #514).
+        "/music/AC-DC/Thunder:Struck.mp3",
+        "Weather: thunder: storms",
+        "xthunder://QUFB",
+        # An IDN host is a host.
+        "https://bücher.example/announce",
+    ],
+)
+def test_names_that_look_like_links_are_kept(text: str) -> None:
+    assert redact_secrets(text) == text
+    assert redact_urls(text) == text
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("qqdl:Q0FOQVJZMDk=", "qqdl:***"),
+        ("thunder://QUFodHRw", "thunder://***"),
+        ("thunder://***", "thunder://***"),
+        ("Thunder:Struck.mp3", "Thunder:Struck.mp3"),
+    ],
+)
+def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
+    assert redact_url(url) == expected
+    assert redact_urls(f"uri={url}") == f"uri={expected}"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("{'passwd': 'CANARY'}", "{'passwd': '***'}"),
+        ("refresh_token=CANARY&x=1", "refresh_token=***&x=1"),
+        ("user_password=CANARY", "user_password=***"),
+        ("X-SYNO-Token: CANARY", "X-SYNO-Token: ***"),
+        # Longer than any cap: masked whole, not left as it is.
+        ('{"token": "' + "A" * 5000 + 'TAIL"}', '{"token": "***"}'),
+        # Unterminated, to the line's end.
+        ('{"passwd": "CANARY', '{"passwd": "***'),
+    ],
+)
+def test_more_credential_forms(text: str, expected: str) -> None:
+    assert redact_secrets(text) == expected
