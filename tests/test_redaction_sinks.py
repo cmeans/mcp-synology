@@ -16,6 +16,7 @@ test: they fail on a `click.echo`, `click.secho` or `print`, a `ToolError(` or
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import sys
 from pathlib import Path
@@ -87,6 +88,22 @@ async def test_a_reply_never_carries_a_credential(
     assert CANARY not in caplog.text
 
 
+async def test_a_structured_reply_is_scrubbed(caplog: pytest.LogCaptureFixture) -> None:
+    """No tool sends structured content today (#377), but one that asks for it is scrubbed."""
+    server = _SynologyServer("canary")
+
+    @server.tool(name="structured", structured_output=True)
+    async def structured() -> dict[str, str]:
+        return {"url": LEAKS[0]}
+
+    with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+        async with Client(server) as client:
+            result = await client.call_tool("structured", {})
+    assert CANARY not in _text(result)
+    assert CANARY not in json.dumps(result.structured_content)
+    assert "The structured reply of structured" in caplog.text
+
+
 # File and folder names that look like query items: the model must be able to repeat them, so a
 # reply, error or progress message keeps them (maintainer, 2026-11-10).
 NAMES = ["download.php?id=7&token=a1b2c3.zip", "notes;password=old.txt", "a&sid=1.pdf"]
@@ -122,11 +139,42 @@ async def test_an_error_never_carries_a_credential(leak: str) -> None:
         # of JSON inside it.
         error_response(ErrorCode.UNAVAILABLE, f"DSM said {leak}", retryable=False)
 
+    @server.tool(name="braces")
+    async def braces() -> str:
+        # A `{` that doesn't start a JSON envelope: the text is redacted whole.
+        raise ToolError(f"bad {{x}} {leak}")
+
     async with Client(server) as client:
-        for tool in ("leaky", "structured"):
+        for tool in ("leaky", "structured", "braces"):
             result = await client.call_tool(tool, {})
             assert result.is_error
             assert CANARY not in _text(result), tool
+
+
+# A quoted URL in a structured error's message: inside the encoded envelope its quote is `\"`,
+# and scanning the encoded text again dropped the backslash, so the reply wasn't JSON any more
+# (pre-QA r3 on #514 PR 2).
+QUOTED_URLS = [
+    f'album "https://h.example/a?sid={CANARY}": no',
+    f'album "https://h.example/a;token={CANARY}"',
+    f'album "https://admin:{CANARY}@h.example/a?token=x" and {LEAKS[2]}',
+]
+
+
+@pytest.mark.parametrize("message", QUOTED_URLS)
+async def test_a_structured_error_stays_json(message: str) -> None:
+    server = _SynologyServer("canary")
+
+    @server.tool(name="structured")
+    async def structured() -> str:
+        error_response(ErrorCode.UNAVAILABLE, message, retryable=False)
+
+    async with Client(server) as client:
+        result = await client.call_tool("structured", {})
+    text = _text(result)
+    assert CANARY not in text
+    envelope = json.loads(text[text.index("{") :])
+    assert envelope["error"]["message"].startswith("album ")
 
 
 # Inside error_response's JSON envelope a line break is escaped, so only the walk over the
@@ -339,6 +387,25 @@ def test_check_at_debug_never_shows_a_credential(
     assert CANARY not in result.output
     assert CANARY not in written
     assert CANARY not in capsys.readouterr().err
+
+
+def test_the_sdk_keeps_the_redacting_handlers(fresh_root_logging: None) -> None:
+    """`serve` sets logging up before the SDK's own `basicConfig` runs in `MCPServer`, so the
+    SDK's handler is never added (upstream drift: pre-QA r3 on #514 PR 2)."""
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    logging_._init_early_logging(verbose=False)
+    before = list(root.handlers)
+    create_server(make_test_config())
+    # The SDK added no handler, and every handler that formats uses the redacting formatter
+    # (the early-records buffer formats nothing: it replays into the log file's handler).
+    assert root.handlers == before
+    assert any(isinstance(h.formatter, logging_.RedactingFormatter) for h in root.handlers)
+    assert all(
+        h.formatter is None or isinstance(h.formatter, logging_.RedactingFormatter)
+        for h in root.handlers
+    )
 
 
 # --- structural ---

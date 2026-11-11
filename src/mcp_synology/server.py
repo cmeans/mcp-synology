@@ -39,7 +39,7 @@ from mcp_synology.core.config import (
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
 from mcp_synology.core.formatting import error_response, forges, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
-from mcp_synology.core.redaction import redact_secrets, redact_urls
+from mcp_synology.core.redaction import MASK, redact_secrets, redact_urls
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
 from mcp_synology.modules import downloadstation as _downloadstation_mod
 from mcp_synology.modules import filestation as _filestation_mod
@@ -471,12 +471,7 @@ class _SynologyServer(MCPServer):
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()
-            text = _scrubbed(
-                _json_strings_redacted(str(exc)) + notice,
-                "error",
-                name,
-                original=str(exc) + notice,
-            )
+            text = _scrubbed(str(exc), "error", name) + _scrubbed(notice, "error", name)
             raise type(exc)(f"{REPLY_LABEL}\n{text}") from exc.__cause__
         if not isinstance(result, CallToolResult):
             return result
@@ -648,14 +643,17 @@ _VALIDATION_MESSAGES = {
 }
 
 
-def _scrubbed(text: str, sink: str, where: str, *, original: str | None = None) -> str:
+def _scrubbed(text: str, sink: str, where: str) -> str:
     """``text`` as it may leave the server: credentials masked by `redact_secrets` (#514). That
     it masked anything is logged once per text at WARNING, naming the sink and the tool, never
     the text (#514 Q2): in a reply or an error, usually a call site let a credential through; in
-    the instructions, usually the user's own text. ``original`` is the text
-    before an earlier pass (`_json_strings_redacted`), for the comparison."""
-    out = redact_secrets(text, names=True)
-    if out == (original if original is not None else text):
+    the instructions, usually the user's own text. An error that is a JSON envelope is redacted
+    string by string (`_json_strings_redacted`) and not scanned again once encoded: a URL in an
+    encoded string ends at the backslash of an escaped quote, and the pass would drop it."""
+    out = _json_strings_redacted(text) if sink == "error" else None
+    if out is None:
+        out = redact_secrets(text, names=True)
+    if out == text:
         return out
     if sink == "instructions":
         # Usually the user's own text: custom_instructions or an instructions_file.
@@ -673,40 +671,67 @@ def _scrubbed(text: str, sink: str, where: str, *, original: str | None = None) 
     return out
 
 
-def _json_strings_redacted(text: str) -> str:
+def _redacted_strings(value: Any) -> Any:
+    """``value`` (decoded JSON) with each string, keys too, run through `redact_secrets`."""
+    if isinstance(value, str):
+        return redact_secrets(value, names=True)
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, item in value.items():
+            k, v = _redacted_strings(key), _redacted_strings(item)
+            if isinstance(v, str | int | float) and not isinstance(v, bool):
+                # A credential's own member (`{"passwd": "x"}`): its value alone is plain text,
+                # so the key is checked as a JSON member with a stand-in value.
+                member = json.dumps({k: "x"}) if isinstance(k, str) else ""
+                if member and redact_secrets(member, names=True) != member:
+                    v = MASK
+            out[k] = v
+        return out
+    if isinstance(value, list):
+        return [_redacted_strings(v) for v in value]
+    return value
+
+
+def _json_strings_redacted(text: str) -> str | None:
     """A structured error's text with every string in its JSON envelope run through
-    `redact_secrets` first: JSON inside the message is escaped there (`\\"passwd\\": …`), and
-    each string decoded is plain again. Text that isn't a JSON envelope is returned as it is."""
+    `redact_secrets`, and the text before the envelope too: JSON inside the message is escaped
+    there (`\\"passwd\\": …`), and each string decoded is plain again. None for text that isn't
+    a JSON envelope, which the caller redacts whole."""
     start = text.find("{")
     if start < 0:
-        return text
+        return None
     try:
         body = json.loads(text[start:])  # this server's own error envelope
     except ValueError:
-        return text
-
-    def walk(value: Any) -> Any:
-        if isinstance(value, str):
-            return redact_secrets(value, names=True)
-        if isinstance(value, dict):
-            return {k: walk(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [walk(v) for v in value]
-        return value
-
-    redacted = walk(body)
-    return text if redacted == body else text[:start] + json.dumps(redacted)
+        return None
+    prefix = redact_secrets(text[:start], names=True)
+    redacted = _redacted_strings(body)
+    if redacted == body:
+        return prefix + text[start:]
+    return prefix + json.dumps(redacted)
 
 
 def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
-    """``result`` with each text block's credentials masked (`_scrubbed`)."""
+    """``result`` with each text block's credentials masked (`_scrubbed`), and each string of
+    its structured content if a tool sends one (none does: `add_tool` makes them unstructured,
+    #377, but a tool can still ask for it)."""
     content = [
         c.model_copy(update={"text": _scrubbed(c.text, "reply", name)})
         if isinstance(c, TextContent)
         else c
         for c in result.content
     ]
-    return result.model_copy(update={"content": content})
+    update: dict[str, Any] = {"content": content}
+    if result.structured_content is not None:
+        structured = _redacted_strings(result.structured_content)
+        if structured != result.structured_content:
+            logger.warning(
+                "The structured reply of %s held text that looked like a credential, masked "
+                "there (#514); if it was one, a call site let it through.",
+                name,
+            )
+        update["structured_content"] = structured
+    return result.model_copy(update=update)
 
 
 def _labeled(result: CallToolResult) -> CallToolResult:
