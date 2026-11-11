@@ -662,7 +662,13 @@ def shown(path: str) -> str:
     the slash (#688).
     Listings of what's on the NAS (list_files, search_files, list_recycle_bin, get_file_info)
     show the names DSM returns as DSM does, escaped by the client (#604); their titles, which
-    name the path the caller asked about, use ``shown`` (#690)."""
+    name the path the caller asked about, use ``shown`` (#690).
+
+    A path holding ``", "`` is quoted too (#685): replies list paths joined by ``", "``, where
+    a folder named ``a, photos/family`` would read as two paths, ``/s/a`` and the
+    share-relative ``photos/family`` the server accepts."""
+    if ", " in path:
+        return _escaped_repr(path)
     for part in path.split("/"):
         if not part:
             continue

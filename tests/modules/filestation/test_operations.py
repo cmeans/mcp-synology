@@ -7558,7 +7558,8 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert (
-            "Already copied before this failure: /w/src/a, b. Of what was copied, these "
+            # A name holding ", " is quoted in every list, so it can't read as two (#685).
+            "Already copied before this failure: '/w/src/a, b'. Of what was copied, these "
             "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
             "be in the recycle bin. Not started: "
         ) in message, message

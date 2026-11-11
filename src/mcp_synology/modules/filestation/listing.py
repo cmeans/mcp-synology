@@ -718,7 +718,9 @@ async def _search_recycle_bin(
         notes.append("Paths are relative to the recycle bin, as a restore takes them.")
     if unreadable:
         more = f" and {len(unreadable) - 5} more" if len(unreadable) > 5 else ""
-        notes.append(f"Not searched (couldn't be listed): {', '.join(unreadable[:5])}{more}.")
+        # Quoted as every other path list is, so a name holding ", " reads as one (#685).
+        skipped = ", ".join(map(shown_path, unreadable[:5]))
+        notes.append(f"Not searched (couldn't be listed): {skipped}{more}.")
     if stopped:
         notes.append(
             f"Stopped after {folders:,} folder(s) and {entries:,} item(s), so there may be more "

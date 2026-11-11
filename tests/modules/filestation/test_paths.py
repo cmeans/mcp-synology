@@ -1170,6 +1170,56 @@ PADDED = "/video/x/foo "
 QUOTED = repr(PADDED)
 
 
+class TestPathListsQuoteACommaName:
+    """#685: replies join paths with ", ", so a name holding ", " is quoted wherever a path is
+    shown (`shown`), and a list can't read it as two paths."""
+
+    COMMA = "/s/a, photos/family"
+
+    def test_shown(self) -> None:
+        from mcp_synology.modules.filestation.helpers import shown
+
+        assert shown(self.COMMA) == repr(self.COMMA)
+        assert shown("/s/a,b") == "/s/a,b"  # no space after the comma: not a list separator
+
+    def test_not_started_after_a_failure(self) -> None:
+        from mcp_synology.core.formatting import error_response
+        from mcp_synology.modules.filestation.batch import _with_not_started
+
+        try:
+            error_response(ErrorCode.DSM_ERROR, "Copy files failed.", retryable=False)
+        except ToolError as e:
+            error = e
+        out = _error_of(_with_not_started(error, [self.COMMA, "/s/b"]))
+        assert out["message"].endswith(f"Not started: {self.COMMA!r}, /s/b."), out
+
+    def test_already_done(self) -> None:
+        from mcp_synology.modules.filestation.operations import _already_done
+
+        text = _already_done("Copy", [self.COMMA, "/s/b"])
+        assert text == f". Already copied before this failure: {self.COMMA!r}, /s/b", text
+
+    def test_handoffs_lists(self) -> None:
+        from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+        text = handoff_reply(
+            verb="Still copying",
+            path="/s/x",
+            handle=Handle("copy", "FileStation_1"),
+            status={},
+            dest="/s/d",
+            done=[self.COMMA],
+            not_started=[self.COMMA + "2"],
+        )
+        assert f"Already copied: {self.COMMA!r}." in text, text
+        assert f"Not started: {(self.COMMA + '2')!r}." in text, text
+
+    def test_where_it_went(self) -> None:
+        from mcp_synology.modules.filestation.tasks import where_it_went
+
+        assert where_it_went("/s/b", {"/s/b": self.COMMA}, "/s/d") == f"/s/b (to {self.COMMA!r})"
+
+
 class TestPaddedPathsAreShownQuoted:
     """Every error that names a path shows a padded one quoted (`shown`), so the stray
     space is visible; a plain path is shown as is."""
