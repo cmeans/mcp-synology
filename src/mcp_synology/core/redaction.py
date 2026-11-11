@@ -65,7 +65,7 @@ _SCHEME = r"[A-Za-z][A-Za-z0-9+.-]{0,31}"
 # hides a whole URL, credentials included), or an ed2k link written without `//`. Wrapped links
 # are masked whole (#458, #514 Q4).
 _WRAPPED = ("thunder", "flashget", "qqdl")
-_OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/_])(?i:ed2k|thunder|flashget|qqdl):"
+_OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/_])(?i:ed2k):"
 
 # A URL or magnet inside free text. A comma ends a match only where another URI
 # starts after it, as create_download splits its list (#397): a comma inside a URL
@@ -74,7 +74,7 @@ _OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/_])(?i:ed2k|thunder|flashget
 # URL in prose: "see https://…, then") is left out of it.
 _URL_CHAR = (
     r"""(?:[^\s,"'<>]"""
-    rf"""|,(?!\s{{0,16}}(?:{_SCHEME}://|(?i:magnet|ed2k|thunder|flashget|qqdl):)))"""
+    rf"""|,(?!\s{{0,16}}(?:{_SCHEME}://|(?i:magnet|ed2k):)))"""
 )
 # An ed2k, thunder, flashget or qqdl link after such a comma is a URI of its own, so it's matched
 # here too, or its query would stay as it is (#466: `ftp://h/a,ED2K:foo?token=…`).
@@ -91,27 +91,30 @@ _AMP_ITEM = re.compile(r"&([^\s=&?;#/]+)=[^\s&;#/]*")
 _NETLOC_ITEM = re.compile(r"([&;])([^\s=&?;#/]+)=[^\s&;#/]*")
 
 # Wrapped links in free text, masked whole with their scheme kept.
+# Real Thunder, FlashGet and QQDL links always have `//`: without it, `Thunder:Live` is a name.
+# Started where a URL scheme can start (not after a scheme character, as `redact_urls` reads
+# it), the body standard or URL-safe base64, ending at anything else.
 _WRAPPED_IN_TEXT = re.compile(
-    r"""(?i)(?<![A-Za-z0-9+.\-/_])(thunder|flashget|qqdl):"""
-    r"""(?:(//)[A-Za-z0-9+=][A-Za-z0-9+/=]*|[A-Za-z0-9+=][A-Za-z0-9+/=]*(?=[\s,"'<>&]|$))"""
+    r"""(?i)(?<![A-Za-z0-9+])(thunder|flashget|qqdl):(//)[A-Za-z0-9+=\-_][A-Za-z0-9+/=\-_]*"""
 )
 # A wrapped link's body: base64, not starting with `/` (so `//` is the separator, never body).
-_WRAPPED_BODY = re.compile(r"(//)?[A-Za-z0-9+=][A-Za-z0-9+/=]*")
+_WRAPPED_BODY = re.compile(r"//[A-Za-z0-9+=\-_][A-Za-z0-9+/=\-_]*")
 
 # Credential parameters, as `key=value` in a query, a form body or prose, or as a JSON member.
 # The keys DSM and this server use for a password, a session, a 2FA code or device, and the
 # passkeys private trackers put in a URL. Case is ignored.
 _CREDENTIAL_KEYS = (
     "passwd|password|pwd|_sid|sid|synotoken|otp_code|device_id|device_name|passkey|authkey|"
-    "torrent_pass|token|access_token|api_key|apikey|did"
+    "torrent_pass|token|access_token|api_key|api-key|apikey|did"
 )
 # A key may carry a prefix ending in `_` (`refresh_token`, `user_password`), never letters
 # alone (`insid`, `passwordless` are other words).
 _KEY = rf"(?:[A-Za-z0-9]+[_-])?(?:{_CREDENTIAL_KEYS})"
-# Not at the start of a path segment, nor after a `.` or `-` in one: `/share/token=abc/file.txt`
-# and `/share/my-token=abc/x` are file names. A prefix joins with `_` or `-` (`access-token`).
+# Only where query or form syntax puts an item: after `?`, `&` or `;`. A bare `sid=1.pdf` or
+# `/share/token=abc/file.txt` is a name (decided in pre-QA r6 on #514); a logged form body is
+# masked by parameter name (`client._log_safe`). A prefix joins with `_` or `-` (`access-token`).
 _CREDENTIAL_PARAM = re.compile(
-    rf"""(?i)(?<![A-Za-z0-9_/.\-])({_KEY}=)("[^"\n]{{0,4096}}"?|'[^'\n]{{0,4096}}'?|[^\s&;#"'<>]+)"""
+    rf"""(?i)(?<=[?&;])({_KEY}=)("[^"\n]{{0,4096}}"?|'[^'\n]{{0,4096}}'?|[^\s&;#"'<>]+)"""
 )
 # DSM's CSRF header, as a log line or an error quotes it.
 _CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
@@ -157,8 +160,9 @@ def _is_userinfo(span: str) -> bool:
     """
     user, colon, rest = span.partition(":")
     if not colon:
-        return not any(c in "/?#[]" for c in span)
-    if any(c in "/?#[]" for c in user) or (len(user) == 1 and rest[:1] == "/"):
+        return not any(c in "/?#[]\\" for c in span)
+    # A backslash reads as `/` to a browser (WHATWG): `https://evil\\@nas` is evil's host.
+    if any(c in "/?#[]\\" for c in user) or (len(user) == 1 and rest[:1] == "/"):
         return False
     return _PORT_THEN_PATH.match(rest) is None
 
@@ -176,15 +180,25 @@ def _mask_userinfo(text: str) -> str:
 
 
 def _userinfo_masked(url: str) -> str:
-    """One matched URL with its userinfo masked, if `_userinfo_end` finds any."""
-    start = url.find("://")
-    if start < 0 or "@" not in url:
+    """One matched URL with the userinfo after each of its ``://`` masked (a URL nested in a
+    query, `?next=https://u:p@h`, has its own), where `_userinfo_end` finds any."""
+    if "@" not in url:
         return url
-    begin = start + 3
-    # A window of `_USERINFO_WINDOW` characters, ending before another `://`.
-    window = url[begin : begin + _USERINFO_WINDOW].partition("://")[0]
-    end = _userinfo_end(window)
-    return url if end is None else f"{url[:begin]}{MASK}{url[begin + end :]}"
+    out: list[str] = []
+    pos = 0
+    start = url.find("://")
+    while start >= 0:
+        begin = start + 3
+        # A window of `_USERINFO_WINDOW` characters, ending before the next `://`.
+        window = url[begin : begin + _USERINFO_WINDOW].partition("://")[0]
+        end = _userinfo_end(window)
+        if end is not None:
+            out.append(url[pos:begin])
+            out.append(MASK)
+            pos = begin + end
+        start = url.find("://", max(begin, pos))
+    out.append(url[pos:])
+    return "".join(out)
 
 
 def _userinfo_end(window: str) -> int | None:
@@ -244,7 +258,8 @@ def _mask_authority(url: str) -> str:
     scheme, sep, rest = url.partition("://")
     if not sep:
         return url
-    end = next((i for i, c in enumerate(rest) if c in "/?#"), len(rest))
+    # A backslash ends the authority too, as a browser reads it (WHATWG).
+    end = next((i for i, c in enumerate(rest) if c in "/?#\\"), len(rest))
     authority = rest[:end]
     if "@" not in authority:
         return url
@@ -311,10 +326,12 @@ def redact_url(url: str) -> str:
         return _redact_magnet(url)
     scheme, colon, rest = url.partition(":")
     if colon and scheme.lower() in _WRAPPED:
+        if rest.startswith(f"//{MASK}"):
+            return url  # masked already: `redact_urls` masks wrapped links first
         body = _WRAPPED_BODY.match(rest)
-        # With `//` the body ends at punctuation (`thunder://…=.`); without, it's the whole rest.
-        if body and (body.group(1) or body.end() == len(rest)):
-            return f"{scheme}:{body.group(1) or ''}{MASK}{rest[body.end() :]}"
+        # The body ends at punctuation (`thunder://…=.`); without `//` it isn't a link.
+        if body:
+            return f"{scheme}://{MASK}{rest[body.end() :]}"
     if "://" not in url:
         if colon and re.fullmatch(_SCHEME, scheme) and any(c in rest for c in "?&#"):
             # An opaque link such as `ed2k:foo?token=…` or `ed2k:foo&token=…`: its query is
@@ -332,7 +349,9 @@ def redact_url(url: str) -> str:
         return url
 
     netloc = parts.netloc
-    if "@" in netloc:
+    # Not when a backslash comes before the `@`: a browser reads `https://evil\\@nas` as evil's
+    # host, so masking it would show `nas` as the host (WHATWG).
+    if "@" in netloc and "\\" not in netloc.rpartition("@")[0]:
         netloc = f"{MASK}@{netloc.rpartition('@')[2]}"
     # A query glued to the host once a comma split the URL (`b://c&token=…`, #466): its items
     # are masked as a query's. Only `&key=value`: an ed2k link's `|file|name|…|` netloc, or a

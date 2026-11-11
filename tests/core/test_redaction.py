@@ -249,7 +249,7 @@ CREDENTIAL_ROWS = [
         "W0ZMQVNIR0VUXUNBTkFSWTA4W0ZMQVNIR0VUXQ",
         id="flashget",
     ),
-    pytest.param("qqdl:Q0FOQVJZMDk=", "Q0FOQVJZMDk", id="qqdl-no-slashes"),
+    pytest.param("qqdl://Q0FOQVJZMDk=", "Q0FOQVJZMDk", id="qqdl"),
     # A comma followed by a scheme-like word splits a URL (#466).
     pytest.param("https://h/dl?files=a,b://c&token=CANARY10", "CANARY10", id="comma-scheme-split"),
     pytest.param("ftp://h/a,ED2K:foo?token=CANARY11", "CANARY11", id="comma-ed2k-split"),
@@ -285,8 +285,8 @@ def test_a_credential_never_survives(redact: object, text: str, secret: str) -> 
     [
         ("https://user:CAN/ARY02@h.example/x", "https://***@h.example/x"),
         ("thunder://QUFodHRw", "thunder://***"),
-        ("qqdl:Q0FOQVJZMDk=", "qqdl:***"),
-        ("login refused: passwd=CANARY12&account=me", "login refused: passwd=***&account=me"),
+        ("qqdl://Q0FOQVJZMDk=", "qqdl://***"),
+        ("POST entry.cgi?passwd=CANARY12&account=me", "POST entry.cgi?passwd=***&account=me"),
         ('{"passwd": "CANARY", "account": "me"}', '{"passwd": "***", "account": "me"}'),
         ('{"SynoToken":"CA\\"NARY"}', '{"SynoToken":"***"}'),
         ("&_sid=CANARY&x=1", "&_sid=***&x=1"),
@@ -408,6 +408,10 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
             "https://mirror.example,magnet:?xt=urn:btih:abc&dn=Show@Group",
         ),
         ("https://nas,ftp://u:p@h/x", "https://nas,ftp://***@h/x"),
+        # A backslash before `@` reads as `/` to a browser: not userinfo (WHATWG).
+        ("https://evil.example\\@nas.local/x", "https://evil.example\\@nas.local/x"),
+        # A port that's only a colon.
+        ("https://u:p@h:/x", "https://***@h:/x"),
         # A comma inside a password is part of the URL.
         ("https://u:p,w@h/x", "https://***@h/x"),
         ("https://admin:p@ss,1@nas/x", "https://***@nas/x"),
@@ -477,6 +481,14 @@ def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
         "Weather: thunder: storms",
         "xthunder://QUFB",
         "AC_thunder:Struck",
+        "Thunder:Live",
+        "qqdl:Mix2024",
+        "Rename failed: 'Thunder:Live' already exists",
+        # `key=value` outside query or form syntax is a name (pre-QA r6 on #514).
+        "sid=1.pdf",
+        "Report password=draft.docx",
+        "token=2024",
+        "x-api-key=S",
         # An IDN host is a host.
         "https://bücher.example/announce",
         # An ed2k link's `|file|name|size|hash|` is public, like a magnet's `xt`.
@@ -499,7 +511,8 @@ def test_names_that_look_like_links_are_kept(text: str) -> None:
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
-        ("qqdl:Q0FOQVJZMDk=", "qqdl:***"),
+        # Without `//` it isn't a link (real Thunder, FlashGet and QQDL links always have one).
+        ("qqdl:Q0FOQVJZMDk=", "qqdl:Q0FOQVJZMDk="),
         ("thunder://QUFodHRw", "thunder://***"),
         ("thunder://***", "thunder://***"),
         ("Thunder:Struck.mp3", "Thunder:Struck.mp3"),
@@ -517,8 +530,8 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
     ("text", "expected"),
     [
         ("{'passwd': 'CANARY'}", "{'passwd': '***'}"),
-        ("refresh_token=CANARY&x=1", "refresh_token=***&x=1"),
-        ("user_password=CANARY", "user_password=***"),
+        ("?refresh_token=CANARY&x=1", "?refresh_token=***&x=1"),
+        ("&user_password=CANARY", "&user_password=***"),
         ("X-SYNO-Token: CANARY", "X-SYNO-Token: ***"),
         # Longer than any cap: masked whole, not left as it is.
         ('{"token": "' + "A" * 5000 + 'TAIL"}', '{"token": "***"}'),
@@ -535,11 +548,17 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ("candid=1", "candid=1"),
         # A prefix joined by `-`.
         ("x?access-token=CANARY", "x?access-token=***"),
+        ("?x-api-key=CANARY", "?x-api-key=***"),
+        # A header key with a prefix isn't DSM's header.
+        ("my-x-syno-token: v", "my-x-syno-token: v"),
+        # A password within the scan's window holding `/`, which the authority fallback can't
+        # see past.
+        ("https://u:" + "p/" * 50 + "@h/x", "https://***@h/x"),
         ("{'otp_code': 123456, 'x': 1}", "{'otp_code': ***, 'x': 1}"),
         # Quoted `key=value`, a repr of a password holding `'` (double quotes), bytes.
-        ('passwd="CANARY"', 'passwd="***"'),
-        ("token='CANARY'", "token='***'"),
-        ('password="CANARY"&x=1', 'password="***"&x=1'),
+        ('&passwd="CANARY"', '&passwd="***"'),
+        (";token='CANARY'", ";token='***'"),
+        ('?password="CANARY"&x=1', '?password="***"&x=1'),
         ("""{'passwd': "it's"}""", """{'passwd': "***"}"""),
         ("{'passwd': b'x'}", "{'passwd': b'***'}"),
         # A wrapped link after punctuation that isn't part of a word.
@@ -553,3 +572,11 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
 )
 def test_more_credential_forms(text: str, expected: str) -> None:
     assert redact_secrets(text) == expected
+
+
+def test_a_url_nested_in_a_query_has_its_own_userinfo_masked() -> None:
+    """Each `://` in a match is scanned (pre-QA r6 on #514); `redact_urls` masks the whole
+    query value anyway."""
+    nested = "https://x/?next=https://u:CANARY@h/x"
+    assert redact_secrets(nested) == "https://x/?next=https://***@h/x"
+    assert "CANARY" not in redact_urls(nested)

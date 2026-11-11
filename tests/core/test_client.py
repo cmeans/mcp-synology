@@ -2277,6 +2277,7 @@ def test_log_safe_redacts_list_items() -> None:
     assert "CANARY" not in str(logged)
     assert logged["n"] == 2
     assert logged["uri"][0] == "https://***@h/x"
+    assert _log_safe({"t": ("https://u:CANARY@h/x",)})["t"] == ["https://***@h/x"]
 
 
 def test_log_safe_keeps_a_uri_list_with_an_at_in_a_name() -> None:
