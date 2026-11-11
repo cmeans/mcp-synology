@@ -645,10 +645,12 @@ def _escaped_repr(path: str) -> str:
 
 
 def shown(path: str) -> str:
-    """``path`` for a message: as is, or quoted (`_escaped_repr`) when a part has whitespace
-    at its start or end, a character that doesn't print (a tab, a no-break space) or one
-    `invisible_problem` refuses, so a stray space or a hidden character is visible once
-    paths are taken exactly (#488, #489, #515), or when the path holds ``", "`` (#685, below).
+    """``path`` for a message: as is, or quoted (`_escaped_repr`, with escapes) when a
+    part has whitespace at its start or end, a character that doesn't print (a tab, a
+    no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
+    character is visible once paths are taken exactly (#488, #489, #515). A path holding
+    ``", "`` and nothing else to show is quoted without escapes, unless it holds a
+    backslash (`_plain_quoted`, #685, below).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
@@ -692,7 +694,11 @@ def shown(path: str) -> str:
 
 def _plain_quoted(path: str) -> str:
     """``path`` in quotes that hold it exactly: single quotes, or double when it holds a
-    single one; with both, `_escaped_repr`'s form (an escaped quote)."""
+    single one; with both, or with a backslash, `_escaped_repr`'s form. In any quoted path a
+    backslash is then always an escape, as the server instructions say: a plain-quoted
+    ``C:\temp`` would read as ``C:<TAB>emp`` (pre-QA r3 on #692)."""
+    if "\\" in path:
+        return _escaped_repr(path)
     if "'" not in path:
         return f"'{path}'"
     if '"' not in path:

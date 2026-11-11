@@ -1187,7 +1187,11 @@ class TestPathListsQuoteACommaName:
         tell a model; repr doubled a backslash."""
         from mcp_synology.modules.filestation.helpers import shown
 
-        assert shown("/s/C:\\new, x") == "'/s/C:\\new, x'"
+        # A backslash keeps repr's escapes, so every backslash in a quoted path is an escape:
+        # plain, `C:\temp` would read as C:<TAB>emp (pre-QA r3).
+        assert shown("/s/C:\\temp, x") == "'/s/C:\\\\temp, x'"
+        assert shown("/s/C:\\temp, x") != shown("/s/C:\temp, x")
+        assert shown("/s/Paris, France") == "'/s/Paris, France'"
         assert shown("/s/it's, x") == '"/s/it\'s, x"'
         both = '/s/it\'s "a", x'
         assert eval(shown(both)) == both  # both quote kinds: repr's escaped form
