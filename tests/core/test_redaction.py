@@ -231,9 +231,8 @@ class TestRedactTitle:
 
 CREDENTIAL_ROWS = [
     # URL userinfo with a character urlsplit or the URL match stops at (#458).
-    pytest.param("https://user:CAN ARY01@h.example/x", "CAN ARY01", id="userinfo-space"),
     pytest.param("https://user:CAN/ARY02@h.example/x", "CAN/ARY02", id="userinfo-slash"),
-    pytest.param("https://user:CAN#ARY03@h.example/x", "CAN#ARY03", id="userinfo-hash"),
+    pytest.param("https://user:CANARY#03@h.example/x", "CANARY#03", id="userinfo-hash"),
     pytest.param("https://user%3ACANARY04@h.example/x", "CANARY04", id="userinfo-percent-encoded"),
     pytest.param("https://user:p@ss:CANARY05@h.example/x", "p@ss:CANARY05", id="userinfo-with-at"),
     pytest.param(
@@ -284,7 +283,6 @@ def test_a_credential_never_survives(redact: object, text: str, secret: str) -> 
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("https://user:CAN ARY01@h.example/x", "https://***@h.example/x"),
         ("https://user:CAN/ARY02@h.example/x", "https://***@h.example/x"),
         ("thunder://QUFodHRw", "thunder://***"),
         ("qqdl:Q0FOQVJZMDk=", "qqdl:***"),
@@ -345,7 +343,8 @@ def test_an_opaque_link_has_its_query_masked() -> None:
 LONG_INPUTS = [
     pytest.param("a" * 60_000 + "://", id="letters-then-scheme"),
     pytest.param("a+" * 30_000, id="scheme-characters"),
-    pytest.param("://@" * 50_000, id="scheme-at-runs"),
+    pytest.param("://@" * 200_000, id="scheme-at-runs"),
+    pytest.param("cookie: " * 7_500, id="cookie-runs"),
     pytest.param("x://a" + ",a" * 30_000, id="commas"),
     pytest.param("x://a" + (", " + " " * 40) * 1_500, id="spaces-after-commas"),
     pytest.param('"passwd": "' + "a" * 60_000, id="unterminated-json"),
@@ -383,10 +382,20 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
         ),
         # A password holding `@` ends at the `@` before the host.
         ("https://user:p@ss:CANARY05@h/x", "https://***@h/x"),
-        # A password with a space. A user name can't hold one (RFC 3986): what reads as one is
-        # prose after a bare host.
-        ("https://user:pw d@h/x", "https://***@h/x"),
+        # A URL holds no whitespace (RFC 3986): the scan ends at it, so prose after a host, a
+        # port included, is never userinfo.
         ("https://us er:pw@h/x", "https://us er:pw@h/x"),
+        (
+            "Cannot reach https://nas.local:5001 now, ask admin@example.com",
+            "Cannot reach https://nas.local:5001 now, ask admin@example.com",
+        ),
+        (
+            "http://10.0.0.2:5000 timed out; mail it@corp.com",
+            "http://10.0.0.2:5000 timed out; mail it@corp.com",
+        ),
+        ("https://h:5001, see a@b.c", "https://h:5001, see a@b.c"),
+        # A password holding `@` before an `@` in the path: the first whole host counts.
+        ("https://u:p@x@h.example/@name", "https://***@h.example/@name"),
         (
             "See https://example.com. Note: write to bob@example.org",
             "See https://example.com. Note: write to bob@example.org",
@@ -397,7 +406,7 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
         ),
         # An IPv6 host's colons aren't userinfo's; a password before one is.
         ("https://[::1]:5001/photo/@name", "https://[::1]:5001/photo/@name"),
-        ("https://u:p w@[::1]:5001/x", "https://***@[::1]:5001/x"),
+        ("https://u:pw@[::1]:5001/x", "https://***@[::1]:5001/x"),
         # A Windows drive isn't a user name.
         ("file://C:/Users/me@corp/x", "file://C:/Users/me@corp/x"),
         # Prose after a bare host: neither "nas.local, contact" nor another URL is userinfo.
@@ -413,6 +422,12 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
 def test_userinfo_ends_at_the_right_at(text: str, expected: str) -> None:
     assert redact_secrets(text) == expected
     assert redact_urls(text) == expected
+
+
+def test_a_password_with_a_space_isnt_masked() -> None:
+    """A known limit, kept open on #458: a URL can't hold a space (RFC 3986), and reading past
+    one read prose as userinfo and showed the wrong host (pre-QA rounds 2 to 4 on #514)."""
+    assert redact_secrets("https://user:pw d@h/x") == "https://user:pw d@h/x"
 
 
 def test_a_password_holding_many_ats_is_still_masked() -> None:
@@ -444,6 +459,7 @@ def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
         "/music/AC-DC/Thunder:Struck.mp3",
         "Weather: thunder: storms",
         "xthunder://QUFB",
+        "AC_thunder:Struck",
         # An IDN host is a host.
         "https://bücher.example/announce",
         # An ed2k link's `|file|name|size|hash|` is public, like a magnet's `xt`.
@@ -501,6 +517,16 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ("Cookie: lang=en; id=SESSION; x=1", "Cookie: lang=en; id=***; x=1"),
         ("candid=1", "candid=1"),
         ("{'otp_code': 123456, 'x': 1}", "{'otp_code': ***, 'x': 1}"),
+        # Quoted `key=value`, a repr of a password holding `'` (double quotes), bytes.
+        ('passwd="CANARY"', 'passwd="***"'),
+        ("token='CANARY'", "token='***'"),
+        ('password="CANARY"&x=1', 'password="***"&x=1'),
+        ("""{'passwd': "it's"}""", """{'passwd': "***"}"""),
+        ("{'passwd': b'x'}", "{'passwd': b'***'}"),
+        # A wrapped link after punctuation that isn't part of a word.
+        ("uri:thunder://QUFodHRw", "uri:thunder://***"),
+        ("a;thunder://QUFodHRw", "a;thunder://***"),
+        ("{thunder://QUFodHRw}", "{thunder://***}"),
         # A wrapped link in a sentence or a Markdown link.
         ("see thunder://QUFodHRw=.", "see thunder://***."),
         ("[link](thunder://QUFodHRw=)", "[link](thunder://***)"),

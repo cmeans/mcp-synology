@@ -10,8 +10,9 @@ Rules, chosen so the host stays visible and nothing secret-shaped survives:
 
 - userinfo becomes ``***@``: found by a scan after each ``://`` (a 256-character window on one line,
   ending at the next ``://``), ending at the first ``@`` followed by a whole host, else the last
-  ``@`` before a host, so a password holding a space, ``/``, ``#`` or ``@`` is masked; a user
-  name holds no whitespace or brackets (RFC 3986), so prose and IPv6 hosts aren't userinfo
+  ``@`` before a host, so a password holding a ``/``, ``#`` or ``@`` is masked. The window ends at
+  whitespace, as a URL does (RFC 3986): prose after a host is never userinfo, and a password with
+  a space isn't masked
 - a host followed by text a host can't hold (``c&token=…``) keeps the host and masks the rest,
   and ``&key=value`` in a path is masked as a query item (#466)
 - every query value becomes ``***`` (keys are kept); a bare query item becomes ``***``
@@ -63,7 +64,7 @@ _SCHEME = r"[A-Za-z][A-Za-z0-9+.-]{0,31}"
 # hides a whole URL, credentials included), or an ed2k link written without `//`. Wrapped links
 # are masked whole (#458, #514 Q4).
 _WRAPPED = ("thunder", "flashget", "qqdl")
-_OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/])(?i:ed2k|thunder|flashget|qqdl):"
+_OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/_])(?i:ed2k|thunder|flashget|qqdl):"
 
 # A URL or magnet inside free text. A comma ends a match only where another URI
 # starts after it, as create_download splits its list (#397): a comma inside a URL
@@ -90,7 +91,7 @@ _NETLOC_ITEM = re.compile(r"([&;])([^\s=&?;#/]+)=[^\s&;#/]*")
 
 # Wrapped links in free text, masked whole with their scheme kept.
 _WRAPPED_IN_TEXT = re.compile(
-    r"""(?i)(?<![^\s,"'<>(\[=])(thunder|flashget|qqdl):"""
+    r"""(?i)(?<![A-Za-z0-9+.\-/_])(thunder|flashget|qqdl):"""
     r"""(?:(//)[A-Za-z0-9+=][A-Za-z0-9+/=]*|[A-Za-z0-9+=][A-Za-z0-9+/=]*(?=[\s,"'<>&]|$))"""
 )
 # A wrapped link's body: base64, not starting with `/` (so `//` is the separator, never body).
@@ -107,11 +108,15 @@ _CREDENTIAL_KEYS = (
 # alone (`insid`, `passwordless` are other words).
 _KEY = rf"(?:[A-Za-z0-9]+_)?(?:{_CREDENTIAL_KEYS})"
 # Not at the start of a path segment: `/share/token=abc/file.txt` is a file name.
-_CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<![A-Za-z0-9_/])({_KEY}=)[^\s&;#"'<>]+""")
+_CREDENTIAL_PARAM = re.compile(
+    rf"""(?i)(?<![A-Za-z0-9_/])({_KEY}=)("[^"\n]{{0,4096}}"?|'[^'\n]{{0,4096}}'?|[^\s&;#"'<>]+)"""
+)
 # DSM's CSRF header, as a log line or an error quotes it.
 _CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
 # The session as DSM's `id` cookie (#176), in a `Cookie:` header a log line or error quotes.
-_SESSION_COOKIE = re.compile(r"(?i)(cookie:[^\n]{0,512}?(?<![A-Za-z0-9_])id=)[^;\s]+")
+_SESSION_COOKIE = re.compile(
+    r"(?i)(cookie:(?:(?!cookie:)[^\n]){0,256}?(?<![A-Za-z0-9_])id=)[^;\s]+"
+)
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
 # A number is masked too (`{"otp_code": 123456}`). Not a bare `key: value` in YAML or prose:
@@ -120,7 +125,7 @@ _CREDENTIAL_JSON = re.compile(
     rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}})("(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
 )
 _CREDENTIAL_REPR = re.compile(
-    rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}})('(?:[^'\\\n]|\\.)*'?|-?\d[\d.eE+-]*)"""
+    rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}}b?)('(?:[^'\\\n]|\\.)*'?|"(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
 )
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
@@ -130,6 +135,7 @@ _USERINFO_TRIES = 8
 # A character a host can start with, after the `@` that ends userinfo.
 _HOST_START = re.compile(r"[A-Za-z0-9\[]")
 _PORT_THEN_PATH = re.compile(r"\d+/")
+_BLANK = re.compile(r"\s")
 
 
 # A query item or path parameter glued to a title: ``?key=value``, ``&key=value``
@@ -141,28 +147,24 @@ _QUERY_ITEM = re.compile(r"([?&;])([^\s=&?;#]+)=[^\s&;#]*")
 def _is_userinfo(span: str) -> bool:
     """Whether ``span``, the text between a ``://`` and an ``@``, reads as userinfo.
 
-    ``user:password`` with anything in the password (a space, ``/``, ``#``: #458), as long as
-    the user part holds no ``/``, ``?`` or ``#`` (``https://site/a and me: x@y`` has a path
-    before the colon) and the colon isn't a port before a path (``h:8080/@x``). Without a colon,
-    a plain ``user`` with no whitespace, ``/``, ``?`` or ``#`` (``https://site/@name`` is a
-    path). The scan passes a non-empty span from one line.
+    ``user:password`` with a ``/``, ``#`` or ``@`` in the password (#458), as long as the user
+    part holds no ``/``, ``?``, ``#`` or bracket (``https://site/a:x@y`` has a path before the
+    colon; ``[::1]:5001`` is an IPv6 host), the colon isn't a port before a path
+    (``h:8080/@x``) and the user isn't a Windows drive (``file://C:/Users/me@corp``). Without a
+    colon, a plain ``user`` with no ``/``, ``?``, ``#`` or bracket (``https://site/@name`` is a
+    path). The scan passes a non-empty span with no whitespace.
     """
     user, colon, rest = span.partition(":")
     if not colon:
-        return not any(c.isspace() or c in "/?#[]" for c in span)
-    # A user name holds no whitespace (RFC 3986), path or bracket: what does is a path before
-    # the colon, prose (`https://nas.local now: ask admin@x`) or an IPv6 host (`[::1]:5001`).
-    if any(c.isspace() or c in "/?#[]" for c in user):
-        return False
-    if rest[:1].isspace() or (len(user) == 1 and rest[:1] == "/"):
-        # Prose after a colon, or a Windows drive (`file://C:/Users/me@corp`).
+        return not any(c in "/?#[]" for c in span)
+    if any(c in "/?#[]" for c in user) or (len(user) == 1 and rest[:1] == "/"):
         return False
     return _PORT_THEN_PATH.match(rest) is None
 
 
 def _mask_userinfo(text: str) -> str:
     """``text`` with the userinfo of every ``scheme://user:password@host`` masked, found by a
-    scan rather than ``urlsplit``, so a password holding a space, ``/`` or ``#`` is masked too
+    scan rather than ``urlsplit``, so a password holding a ``/``, ``#`` or ``@`` is masked too
     (#458). Each ``://`` gets a window of ``_USERINFO_WINDOW`` characters on its line, so the
     scan is linear in ``text``."""
     if "@" not in text:
@@ -173,7 +175,12 @@ def _mask_userinfo(text: str) -> str:
     while start >= 0:
         begin = start + 3
         # Userinfo ends the line's text before another URL starts: it never holds a `://`.
-        window = text[begin : begin + _USERINFO_WINDOW].partition("\n")[0].partition("://")[0]
+        window = text[begin : begin + _USERINFO_WINDOW].partition("://")[0]
+        # A URL holds no whitespace (RFC 3986): userinfo ends before it, so prose after a host
+        # is never read as userinfo. A password with a space isn't masked (#458 keeps that open).
+        blank = _BLANK.search(window)
+        if blank:
+            window = window[: blank.start()]
         end = _userinfo_end(window)
         if end is not None:
             out.append(text[pos:begin])
@@ -225,11 +232,15 @@ def redact_secrets(text: str) -> str:
     # Userinfo longer than the scan's window (a long token as the password): each URL's own
     # authority, up to its first `/`, `?` or `#`, is masked to its last `@`.
     text = _URL_IN_TEXT.sub(lambda m: _mask_authority(m.group(0)), text)
-    text = _CREDENTIAL_PARAM.sub(lambda m: f"{m.group(1)}{MASK}", text)
+    text = _CREDENTIAL_PARAM.sub(
+        lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
+    )
     text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _SESSION_COOKIE.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
-    return _CREDENTIAL_REPR.sub(lambda m: m.group(1) + _masked_value(m.group(2), "'"), text)
+    return _CREDENTIAL_REPR.sub(
+        lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
+    )
 
 
 def _mask_authority(url: str) -> str:
@@ -246,7 +257,7 @@ def _mask_authority(url: str) -> str:
 
 def _masked_value(value: str, quote: str) -> str:
     """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number."""
-    if not value.startswith(quote):
+    if quote not in ("'", '"') or not value.startswith(quote):
         return MASK
     closed = len(value) > 1 and value.endswith(quote) and not value.endswith("\\" + quote)
     return f"{quote}{MASK}{quote}" if closed else f"{quote}{MASK}"
@@ -341,7 +352,7 @@ def redact_url(url: str) -> str:
 
 def redact_urls(text: str) -> str:
     """Redact every URL or magnet found in ``text`` (lists, JSON, prose)."""
-    # Userinfo first: a password with a space or a `#` would end a URL match early (#458).
+    # Userinfo first: a password with a `#` would end a URL match early (#458).
     text = _mask_userinfo(_mask_wrapped(text))
     return _URL_IN_TEXT.sub(lambda m: redact_url(m.group(0)), text)
 
