@@ -13,7 +13,7 @@ import re
 import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 import anyio
 import httpx
@@ -477,13 +477,16 @@ class _SynologyServer(MCPServer):
         except MCPError as exc:
             # A protocol error a tool raised goes to the client as it is: its message and data
             # are scrubbed here (QA round 1 on #681). No tool raises one today.
-            message = _scrubbed(exc.error.message, "error", name)
+            message = f"{REPLY_LABEL}\n{_scrubbed(exc.error.message, 'error', name)}"
             data = _redacted_strings(exc.error.data)
+            if data != exc.error.data:
+                _warn_masked("error data", name)
             exc.error = exc.error.model_copy(update={"message": message, "data": data})
             exc.args = (exc.error.code, message, data)
             raise
         if not isinstance(result, CallToolResult):
-            return result
+            # An input request (elicitation): its messages are text the client shows.
+            return cast("InputRequiredResult", _scrubbed_model(result, name, "input request"))
         notice = await self._take_update_notice()
         if notice:
             texts = [i for i, c in enumerate(result.content) if isinstance(c, TextContent)]
@@ -721,13 +724,16 @@ def _json_strings_redacted(text: str) -> str | None:
 
 
 def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
-    """``result`` with each text block's credentials masked (`_scrubbed`), and each string of
-    its structured content if a tool sends one (none does: `add_tool` makes them unstructured,
-    #377, but a tool can still ask for it)."""
+    """``result`` with each text block's credentials masked (`_scrubbed`), every other block's
+    text fields (`_scrubbed_model`), each string of its structured content if a tool sends one
+    (none does: `add_tool` makes them unstructured, #377, but a tool can still ask for it), and
+    every `_meta`: the result's and each block's."""
     content = [
-        c.model_copy(update={"text": _scrubbed(c.text, "reply", name)})
+        _scrubbed_model(
+            c.model_copy(update={"text": _scrubbed(c.text, "reply", name)}), name, "text block"
+        )
         if isinstance(c, TextContent)
-        else _scrubbed_block(c, name)
+        else _scrubbed_model(c, name, "content block")
         for c in result.content
     ]
     update: dict[str, Any] = {"content": content}
@@ -737,36 +743,43 @@ def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
             _warn_masked("structured reply", name)
         update["structured_content"] = structured
     if result.meta is not None:
-        update["meta"] = _redacted_strings(result.meta)
+        meta = _redacted_strings(result.meta)
+        if meta != result.meta:
+            _warn_masked("reply's _meta", name)
+        update["meta"] = meta
     return result.model_copy(update=update)
 
 
-# Fields that hold base64 data, never text: left as they are.
+# A block's or a resource's own fields that hold base64 data, never text: left as they are.
+# Under `_meta` a key with these names is text like any other.
 _BINARY_FIELDS = frozenset({"data", "blob"})
 
 
-def _scrubbed_block(block: Any, name: str) -> Any:
-    """A content block other than text (an embedded resource, a resource link, an image or
-    audio block) with every text field masked: an embedded resource's text, a link's URI, name
-    and description, any `_meta`. None is sent today (QA round 1 on #681)."""
-    raw = block.model_dump(by_alias=True, exclude_none=True)
+def _scrubbed_model(model: Any, name: str, what: str) -> Any:
+    """``model`` (a content block, an input request) with every string masked but base64
+    `data` and `blob` fields of the block or its resource (QA round 1 and pre-QA r5 on #681).
+    A text block's text was masked already; this covers its `_meta`. None is sent today."""
+    raw = model.model_dump(by_alias=True, exclude_none=True)
 
-    def walk(value: Any, key: str = "") -> Any:
-        if key in _BINARY_FIELDS:
-            return value
+    def walk(value: Any, *, binary: bool) -> Any:
         if isinstance(value, dict):
-            return {k: walk(v, k) for k, v in value.items()}
+            return {
+                k: value[k]
+                if binary and k in _BINARY_FIELDS
+                else walk(value[k], binary=binary and k == "resource")
+                for k in value
+            }
         if isinstance(value, list):
-            return [walk(v) for v in value]
+            return [walk(v, binary=False) for v in value]
         if isinstance(value, str):
             return redact_secrets(value, names=True)
         return value
 
-    redacted = walk(raw)
+    redacted = walk(raw, binary=True)
     if redacted == raw:
-        return block
-    _warn_masked(f"{raw.get('type', 'content')} block", name)
-    return type(block).model_validate(redacted)
+        return model
+    _warn_masked(f"{raw.get('type', what)} {what}" if "type" in raw else what, name)
+    return type(model).model_validate(redacted)
 
 
 def _warn_masked(sink: str, name: str) -> None:

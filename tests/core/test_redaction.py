@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from functools import partial
 
 import pytest
 
@@ -352,6 +353,9 @@ LONG_INPUTS = [
     pytest.param("://@" * 200_000, id="scheme-at-runs"),
     pytest.param("cookie: " * 7_500, id="cookie-runs"),
     pytest.param("Cookie: " + 'id="' * 20_000, id="cookie-quote-runs"),
+    # Names mode looked back over the whole line for each header (pre-QA r5 on #681).
+    pytest.param("a x-syno-token: b " * 50_000, id="headers-on-one-line"),
+    pytest.param("a Cookie: x' " * 50_000, id="cookies-on-one-line"),
     pytest.param("Cookie: " + 'a="b' * 30_000, id="cookie-unclosed-quotes"),
     pytest.param('cookie:"' + "\\" * 50_000, id="cookie-backslashes"),
     pytest.param("x://a" + ",a" * 30_000, id="commas"),
@@ -367,7 +371,9 @@ LONG_INPUTS = [
 
 @pytest.mark.parametrize("text", LONG_INPUTS)
 @pytest.mark.parametrize(
-    "redact", [redact_urls, redact_secrets, redact_title], ids=["urls", "secrets", "title"]
+    "redact",
+    [redact_urls, redact_secrets, partial(redact_secrets, names=True), redact_title],
+    ids=["urls", "secrets", "names", "title"],
 )
 def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
     assert callable(redact)
@@ -569,9 +575,16 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         # A number, decimals and exponents too.
         ('{"otp_code": 123456}', '{"otp_code": ***}'),
         ('{"passwd": 1.5e3}', '{"passwd": ***}'),
-        # A member's value ends its member, in any mode: these are names (QA r1 on #681).
-        ("'token': 5.txt", "'token': 5.txt"),
-        ('"password": "draft".txt', '"password": "draft".txt'),
+        # Logs mask a member whatever follows it (pre-QA r5 on #681): names mode keeps these.
+        ("'token': 5.txt", "'token': ***txt"),
+        ('"passwd": "hunter2" and more', '"passwd": "***" and more'),
+        ("'passwd': 'x' -> failed", "'passwd': '***' -> failed"),
+        ('"otp_code": 123456 (2FA)', '"otp_code": *** (2FA)'),
+        # Pydantic's truncated repr of a login's parameters.
+        (
+            "input_value={'passwd': 'S3cr3tPassw0r...ice_name': 'abcdefghij'}",
+            "input_value={'passwd': '***': 'abcdefghij'}",
+        ),
         ("{'token': 5, 'a': 1}", "{'token': ***, 'a': 1}"),
         ('{"passwd": "x" }', '{"passwd": "***" }'),
         # An unterminated value ending in an escaped quote keeps one quote.
@@ -688,7 +701,8 @@ def test_a_nested_url_with_long_userinfo_is_masked() -> None:
         # JSON, cookies and headers aren't names: masked either way.
         ('{"passwd": "SEC"}', '{"passwd": "***"}'),
         ("Cookie: id=SEC", "Cookie: id=***"),
-        ("  X-SYNO-Token: SEC", "  X-SYNO-Token: ***"),
+        ("X-SYNO-Token: SEC", "X-SYNO-Token: ***"),
+        ("ok\nCookie: id=SEC", "ok\nCookie: id=***"),
         ("{'Cookie': 'id=SEC'}", "{'Cookie': 'id=***'}"),
         ("[(b'X-SYNO-Token', b'SEC')]", "[(b'X-SYNO-Token', b'***')]"),
         # A file name that only looks like one, in a listing row (QA round 1 on #681).
@@ -697,6 +711,16 @@ def test_a_nested_url_with_long_userinfo_is_masked() -> None:
         ('📄 "password": "draft".txt', '📄 "password": "draft".txt'),
         ("📄 'token': 5.txt", "📄 'token': 5.txt"),
         ('📄 "passwd": "a, b".x', '📄 "passwd": "a, b".x'),
+        ("'token': 5.txt", "'token': 5.txt"),
+        ('"password": "draft".txt', '"password": "draft".txt'),
+        ('{\\"token\\": 5.txt}', '{\\"token\\": 5.txt}'),
+        # A table's first column, a quoted name, a name after a comma (pre-QA r5 on #681).
+        ("  Cookie: id=42 recipe.txt  12 KiB", "  Cookie: id=42 recipe.txt  12 KiB"),
+        ("'Cookie: id=42 recipe.txt' not found", "'Cookie: id=42 recipe.txt' not found"),
+        ("a.txt, Cookie: id=42.txt", "a.txt, Cookie: id=42.txt"),
+        ("  x-syno-token = notes.txt", "  x-syno-token = notes.txt"),
+        # A value stops at a bracket either way.
+        ("[(b'Cookie', b'id=SEC')]", "[(b'Cookie', b'id=***')]"),
     ],
 )
 def test_names_mode_masks_query_items_only_inside_urls(text: str, expected: str) -> None:

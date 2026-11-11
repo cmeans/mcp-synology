@@ -31,7 +31,14 @@ from mcp.client import Client
 from mcp.server.mcpserver import Context  # noqa: TC002 - the SDK reads the annotation at runtime
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
-from mcp.types import EmbeddedResource, ResourceLink, TextContent, TextResourceContents
+from mcp.types import (
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    ResourceLink,
+    TextContent,
+    TextResourceContents,
+)
 
 from mcp_synology.cli import logging_, main
 from mcp_synology.cli.output import say, visible
@@ -139,6 +146,55 @@ async def test_other_content_blocks_and_protocol_errors_are_scrubbed() -> None:
             await client.call_tool("protocol", {})
     assert CANARY not in str(raised.value)
     assert CANARY not in json.dumps(raised.value.error.model_dump(mode="json"))
+
+
+async def test_every_meta_is_scrubbed_and_base64_kept() -> None:
+    """A text block's `_meta`, a `data` or `blob` key under `_meta`, and the result's `_meta`
+    are text; only a block's own base64 `data` is kept (pre-QA r5 on #681)."""
+    server = _SynologyServer("canary")
+    image = "aGVsbG8="  # base64 a canary can't be hidden in without decoding
+
+    @server.tool(name="meta")
+    async def meta() -> CallToolResult:
+        return CallToolResult(
+            content=[
+                TextContent(type="text", text="ok", _meta={"src": LEAKS[0]}),
+                ImageContent(
+                    type="image",
+                    data=image,
+                    mimeType="image/png",
+                    _meta={"data": LEAKS[0], "blob": {"x": LEAKS[1]}},
+                ),
+            ],
+            _meta={"origin": LEAKS[0]},
+        )
+
+    async with Client(server) as client:
+        result = await client.call_tool("meta", {})
+    dumped = json.dumps(result.model_dump(mode="json", by_alias=True))
+    assert CANARY not in dumped
+    assert image in dumped
+
+
+async def test_a_protocol_error_is_labeled() -> None:
+    server = _SynologyServer("canary")
+
+    @server.tool(name="protocol")
+    async def protocol() -> str:
+        raise MCPError(-32603, "failed")
+
+    async with Client(server) as client:
+        with pytest.raises(MCPError) as raised:
+            await client.call_tool("protocol", {})
+    assert raised.value.error.message.startswith(REPLY_LABEL)
+
+
+def test_an_input_request_is_scrubbed() -> None:
+    """No tool asks for input today; an elicitation's text would reach the client as is."""
+    from mcp_synology.server import _scrubbed_model
+
+    request = TextContent(type="text", text=f"Sign in at {LEAKS[0]}")
+    assert CANARY not in _scrubbed_model(request, "t", "input request").text
 
 
 # File and folder names that look like query items: the model must be able to repeat them, so a
@@ -512,6 +568,8 @@ _WRITERS = {
     "click.utils.echo",
     "print",
     "click.get_text_stream",
+    "click.get_binary_stream",
+    "builtins.print",
     "os.write",
     "traceback.print_exc",
     "traceback.print_exception",
@@ -577,8 +635,7 @@ def _output_paths(rel: str, tree: ast.Module) -> list[str]:
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr in _CONTEXT_LOG
-                and isinstance(node.value, ast.Name)
-                and node.value.id in ("ctx", "context")
+                and _dotted(node.value).rsplit(".", 1)[-1].lower().endswith(("ctx", "context"))
             ):
                 found.append(here)
         if not isinstance(node, ast.Call):
@@ -602,10 +659,15 @@ def _output_paths(rel: str, tree: ast.Module) -> list[str]:
             and node.args[1].value in ("report_progress", "echo", "secho", "write", "writelines")
         ):
             found.append(f"{here} getattr {node.args[1].value}")
-        # An exit with a message prints it to stderr as it is.
-        if resolved in ("sys.exit", "SystemExit") and any(
-            isinstance(a, ast.JoinedStr)
-            or (isinstance(a, ast.Constant) and isinstance(a.value, str))
+        # An exit with anything but a number prints it to stderr as it is.
+        # (`SystemExit(128 + signum)` is a number; a name or a call may be text.)
+        if resolved in ("sys.exit", "SystemExit", "exit", "quit") and any(
+            isinstance(a, ast.Name)
+            or any(
+                isinstance(n, ast.JoinedStr | ast.Call)
+                or (isinstance(n, ast.Constant) and isinstance(n.value, str))
+                for n in ast.walk(a)
+            )
             for a in node.args
         ):
             found.append(f"{here} with a message")
@@ -615,6 +677,13 @@ def _output_paths(rel: str, tree: ast.Module) -> list[str]:
             and (rel, last) not in _KNOWN_CLICK_ERRORS
         ):
             found.append(f"{here} (click prints it, not say())")
+    # A project exception that click renders itself, by subclassing one of click's.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                base_name = resolve(_dotted(base))
+                if base_name.startswith("click.") and base_name.rsplit(".", 1)[-1] in _CLICK_ERRORS:
+                    found.append(f"{rel}:{node.lineno} class {node.name}({_dotted(base)})")
     return found
 
 
@@ -652,12 +721,22 @@ def cli():
     raise SystemExit(f"x {1}")
     raise click.UsageError("x")
     getattr(sys.stdout, "write")("x")
+    sys.exit("a" + str(1))
+    exit("x")
+    raise SystemExit(str(1))
+async def more(self, req_ctx):
+    await self.ctx.warning("x")
+    await req_ctx.info("x")
+    click.get_binary_stream("stdout").write(b"x")
+class Refusal(click.ClickException):
+    pass
 """
 
 
 def test_the_guard_names_every_way_around_a_sink() -> None:
     found = _output_paths("mcp_synology/modules/fake.py", ast.parse(_BYPASSES))
     expected_lines = {6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
+    expected_lines |= {25, 26, 27, 29, 30, 31, 32}
     assert {int(f.split(":")[1].split()[0]) for f in found} == expected_lines, "\n".join(found)
 
 

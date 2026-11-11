@@ -125,7 +125,7 @@ _CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<=[?&;])({_KEY}=)("[^"\n]*"?|'[^'\n]*'
 # `(b'Name', b'value')`), with any quote, `b` prefix or JSON escape around the value.
 _HEADER_GAP = r"""\\?['"]?\s{0,64}[:=,]\s{0,64}b?\\?['"]?"""
 _CREDENTIAL_HEADER = re.compile(
-    rf"""(?i)(?<![A-Za-z0-9_-])(x-syno-token{_HEADER_GAP})[^\s'"\\,)]+"""
+    rf"""(?i)(?<![A-Za-z0-9_-])(x-syno-token{_HEADER_GAP})[^\s'"\\,)\]}}]+"""
 )
 # A cookie header, as a log line, a dict repr or JSON writes it (`Cookie: …`, `{'Cookie': '…'}`,
 # `"cookie": "…"`): DSM's session is its `id` cookie (#176), and every credential key among the
@@ -145,27 +145,40 @@ _COOKIE = re.compile(
     r"""|((?:(?<==)"[^"\n]{0,1024}"?|[^\n'"\\]){0,4096}))"""
 )
 _COOKIE_ITEM = re.compile(
-    rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s]*)"""
+    rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s\]}}]*)"""
 )
-# A JSON or repr number: a dot is part of it only with a digit after (`'token': 5.txt` is a name).
-_NUMBER = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
 # A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`): a quoted
 # value, or a number.
 _CREDENTIAL_JSON_ESCAPED = re.compile(
-    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})(\\"(?:[^"\\\n]|\\[^"\n])*|(?>{_NUMBER}))"""
+    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})(\\"(?:[^"\\\n]|\\[^"\n])*|-?\d[\d.eE+-]*)"""
 )
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
 # A number is masked too (`{"otp_code": 123456}`). Not a bare `key: value` in YAML or prose:
 # `password: try again` is a sentence as often as a secret.
-# A member's value ends its member: a separator, a closing bracket or the line's end follows.
-# `"password": "draft".txt` is a file name, not a member (QA round 1 on #681).
-_MEMBER_END = r"(?=\s{0,64}(?:[,;}\])\r\n]|$))"
 _CREDENTIAL_JSON = re.compile(
+    rf"""(?i)("{_KEY}"\s{{0,64}}:\s{{0,64}})("(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+)
+_CREDENTIAL_REPR = re.compile(
+    rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)('(?:[^'\\\n]|\\.)*'?|"(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+)
+# In names mode, a member only where its value ends it: a separator, a closing bracket or the
+# line's end follows (`"password": "draft".txt` is a file name), and a number takes a dot only
+# with a digit after (`'token': 5.txt`; QA round 1 on #681). Logs keep the patterns above: a
+# log line's member can be followed by anything (`"passwd": "x" and more`, pydantic's
+# truncated `{'passwd': 'S3cr...ice_name': …}`; pre-QA r5).
+_NUMBER = r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+_MEMBER_END = r"(?=\s{0,64}(?:[,;}\])\r\n]|$))"
+_NAMES_JSON_ESCAPED = re.compile(
+    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}})"""
+    rf"""(\\"(?:[^"\\\n]|\\[^"\n])*+(?:\\"|(?=[\r\n])|$)|(?>{_NUMBER}))"""
+    rf"""(?=\s{{0,64}}(?:[,;}}\])\r\n]|\\"|$))"""
+)
+_NAMES_JSON = re.compile(
     rf"""(?i)("{_KEY}"\s{{0,64}}:\s{{0,64}})"""
     rf"""("(?:[^"\\\n]|\\.)*+(?:"|(?=[\r\n])|$)|(?>{_NUMBER})){_MEMBER_END}"""
 )
-_CREDENTIAL_REPR = re.compile(
+_NAMES_REPR = re.compile(
     rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)"""
     rf"""('(?:[^'\\\n]|\\.)*+(?:'|(?=[\r\n])|$)|"(?:[^"\\\n]|\\.)*+(?:"|(?=[\r\n])|$)"""
     rf"""|(?>{_NUMBER})){_MEMBER_END}"""
@@ -294,9 +307,9 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
     ``names``: the text may hold file and folder names (a tool's reply, error or progress), so a
     ``key=value`` item is masked only inside a URL (``scheme://…?token=…``), never in bare text,
     where ``download.php?id=7&token=a1b2c3.zip`` is a name the model must be able to repeat
-    (maintainer, 2026-11-10); a header or cookie only where it reads as one (`_header_context`).
-    Userinfo, wrapped links, JSON and repr members are masked either way; a member only when a
-    separator, a closing bracket or the line's end follows its value.
+    (maintainer, 2026-11-10); a header or cookie only where it reads as one (`_header_context`),
+    and a JSON or repr member only when a separator, a closing bracket or the line's end follows
+    its value. Userinfo and wrapped links are masked either way; logs get every form anywhere.
 
     URL userinfo (``scheme://***@host``), the value of a credential parameter (``passwd``,
     ``_sid``, ``SynoToken``, ``otp_code``, ``device_id``, a tracker passkey; as ``key=value`` or
@@ -336,22 +349,30 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
         return m.group(1) + opener + _COOKIE_ITEM.sub(item, value)
 
     text = _COOKIE.sub(cookie, text)
-    text = _CREDENTIAL_JSON_ESCAPED.sub(
+    escaped, member, item = (
+        (_NAMES_JSON_ESCAPED, _NAMES_JSON, _NAMES_REPR)
+        if names
+        else (_CREDENTIAL_JSON_ESCAPED, _CREDENTIAL_JSON, _CREDENTIAL_REPR)
+    )
+    text = escaped.sub(
         lambda m: m.group(1) + (f'\\"{MASK}' if m.group(2).startswith('\\"') else MASK), text
     )
-    text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
-    return _CREDENTIAL_REPR.sub(
-        lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
-    )
+    text = member.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
+    return item.sub(lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text)
 
 
 def _header_context(m: re.Match[str]) -> bool:
-    """Whether a header or cookie match reads as one, not as a file name (`Cookie: id=42
-    recipe.txt`): it starts its line, after whitespace, or follows a quote or a bracket (a
-    dict, a JSON object, httpcore's header tuples). In names mode only (QA round 1 on #681)."""
+    """Whether a header or cookie match reads as one in names mode, not as a file name: its
+    name is quoted (a dict, JSON, httpcore's header tuples: `'Cookie': …`, `(b'Cookie', …`),
+    or it starts its line with no indent (`Cookie: …` as a line of its own). A listing's or
+    table's cell (`  Cookie: id=42 recipe.txt`, `📄 Cookie: …`) or a quoted name (`'Cookie:
+    id=42.txt'`) is kept (QA round 1 on #681, pre-QA r5). Looks at most at the match and the
+    character before it, so it stays linear."""
     text, start = m.string, m.start()
-    before = text[text.rfind("\n", 0, start) + 1 : start].rstrip()
-    return not before or before[-1] in "'\"([{,"
+    head = m.group(1)
+    if re.match(r"(?i)(?:set-)?(?:cookie|x-syno-token)\\?['\"]", head):
+        return True
+    return start == 0 or text[start - 1] == "\n"
 
 
 def _mask_authority(url: str) -> str:
