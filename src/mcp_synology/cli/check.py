@@ -13,6 +13,7 @@ import click
 import httpx
 
 from mcp_synology.cli.logging_ import _init_early_logging
+from mcp_synology.cli.output import say
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 from mcp_synology.core.errors import NOT_DSM_HINT
 from mcp_synology.core.redaction import redact_urls
@@ -36,14 +37,14 @@ def check(config: str | None, verbose: bool) -> None:
     from mcp_synology.server import config_notices
 
     for notice in config_notices(app_config):
-        click.echo(click.style(f"Warning: {notice}", fg="yellow"), err=True)
+        say(f"Warning: {notice}", fg="yellow", err=True)
 
     # Before the login: someone running check because logins fail may be on an old
     # version (#314). `update_notices` doesn't apply here: a person asked.
     if app_config.check_for_updates:
         _report_update()
 
-    click.echo(f"Checking credentials for '{app_config.display_name}'...")
+    say(f"Checking credentials for '{app_config.display_name}'...")
     asyncio.run(_check_login(app_config))
 
 
@@ -56,7 +57,7 @@ def _report_update() -> None:
     except Exception:  # noqa: BLE001 - an update notice must never fail check
         return
     if notice:
-        click.echo(click.style(notice, fg="yellow"))
+        say(notice, fg="yellow")
 
 
 def connection_failure_message(base_url: str, host: str, exc: BaseException) -> str:
@@ -127,9 +128,9 @@ def exit_on_connection_failure(base_url: str, host: str, *, note: str = "") -> I
         message = not_dsm_message(base_url, None)
     else:
         return
-    click.echo(click.style(f"Error: {message}", fg="red"), err=True)
+    say(f"Error: {message}", fg="red", err=True)
     if note:
-        click.echo(note, err=True)
+        say(note, err=True)
     sys.exit(1)
 
 
@@ -149,7 +150,7 @@ def _asked_to_send(config: AppConfig, instance: str) -> bool:
     here (pre-QA on #559)."""
     if not _stdin_is_a_terminal():
         # Says why, so a failing script or a model knows a person can settle it (QA round 4).
-        click.echo(
+        say(
             f"Keyring entry {instance!r} doesn't say which NAS it's for, and this needs someone "
             "at a terminal to answer.",
             err=True,
@@ -215,7 +216,7 @@ async def _check_login(config: object) -> None:
             except (DsmHttpError, DsmReplyError):
                 raise  # not DSM's API: exit_on_connection_failure says so
             except SynologyError as e:
-                click.echo(click.style(f"Error: DSM API query failed: {e}", fg="red"), err=True)
+                say(f"Error: DSM API query failed: {e}", fg="red", err=True)
                 sys.exit(1)
 
             # On a full path nothing else stops this first send, so whose password it is has to be
@@ -225,12 +226,10 @@ async def _check_login(config: object) -> None:
             first_use = host_this_login_would_record(config)
             if first_use:
                 if not _asked_to_send(config, instance):
-                    click.echo(
-                        click.style(
-                            f"Nothing was sent, and entry {instance!r} is unchanged. If these are "
-                            f"another NAS's credentials, {own_instance_id_clause(config)}.",
-                            fg="red",
-                        ),
+                    say(
+                        f"Nothing was sent, and entry {instance!r} is unchanged. If these are "
+                        f"another NAS's credentials, {own_instance_id_clause(config)}.",
+                        fg="red",
                         err=True,
                     )
                     sys.exit(1)
@@ -242,14 +241,12 @@ async def _check_login(config: object) -> None:
             auth = AuthManager(config, client)
             try:
                 await auth.login()
-                click.echo(click.style("Authentication successful!", fg="green"))
+                say("Authentication successful!", fg="green")
                 # The upgrade advice sends people here to record it, so say whether it did.
                 if auth.recorded_host:
-                    click.echo(
-                        f"Keyring entry {instance!r} is now recorded for {auth.recorded_host}."
-                    )
+                    say(f"Keyring entry {instance!r} is now recorded for {auth.recorded_host}.")
                 elif entry_left_unrecorded(config):
-                    click.echo(
+                    say(
                         f"Keyring entry {instance!r} still has no recorded host and port: this "
                         f"login didn't use its password, or the host couldn't be recorded. "
                         f"{how_to_record(config)}."
@@ -261,7 +258,7 @@ async def _check_login(config: object) -> None:
                 # Its own suggestion says to run check; this is check (QA round 1, #233).
                 next_step = "Check the NAS, or the proxy in front of it, and try again."
                 message = f"Authentication failed: {e} {next_step}"
-                click.echo(click.style(message, fg="red"), err=True)
+                say(message, fg="red", err=True)
                 sys.exit(1)
             except (SynologyError, OSError) as e:
                 hint = getattr(e, "suggestion", None)
@@ -296,5 +293,5 @@ async def _check_login(config: object) -> None:
                     # comes from the keyring, so a newline in it mustn't forge a line.
                     text += f" They were set up for {e.recorded_host!r}."
                 detail = f"{text} {hint.rstrip('.')}." if hint else text
-                click.echo(click.style(f"Authentication failed: {detail}", fg="red"), err=True)
+                say(f"Authentication failed: {detail}", fg="red", err=True)
                 sys.exit(1)

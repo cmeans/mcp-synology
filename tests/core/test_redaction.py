@@ -558,6 +558,9 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ('{"data": {"did": "DEVTOKEN", "sid": "S1"}}', '{"data": {"did": "***", "sid": "***"}}'),
         ("Cookie: lang=en; id=SESSION; x=1", "Cookie: lang=en; id=***; x=1"),
         ("candid=1", "candid=1"),
+        # A placeholder for the user to fill in isn't a secret (`setup`'s client snippet).
+        ('"SYNOLOGY_PASSWORD": "<your password>"', '"SYNOLOGY_PASSWORD": "<your password>"'),
+        ("?passwd=<your password>", "?passwd=<your password>"),
         # A prefix joined by `-`.
         ("x?access-token=CANARY", "x?access-token=***"),
         ("?x-api-key=CANARY", "?x-api-key=***"),

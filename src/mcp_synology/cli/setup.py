@@ -19,6 +19,7 @@ import yaml
 
 from mcp_synology.cli.check import exit_on_connection_failure
 from mcp_synology.cli.logging_ import _configure_logging, _init_early_logging
+from mcp_synology.cli.output import say
 from mcp_synology.cli.startup import escape_what_stdout_cant_encode, load_or_exit
 
 if TYPE_CHECKING:
@@ -47,10 +48,9 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
     # Every path below asks something. A pipe can answer, but with stdin closed, as under cron,
     # the first question was a traceback (pre-QA on #559).
     if sys.stdin is None:
-        click.echo(
-            click.style(
-                "Error: setup asks questions, and stdin is closed. Run it at a terminal.", fg="red"
-            ),
+        say(
+            "Error: setup asks questions, and stdin is closed. Run it at a terminal.",
+            fg="red",
             err=True,
         )
         sys.exit(1)
@@ -67,7 +67,7 @@ def setup(config: str | None, list_configs: bool, verbose: bool) -> None:
         # A file named by MCP_SYNOLOGY_CONFIG must exist: creating a config elsewhere
         # would ignore the variable without a word (#499).
         if os.environ.get("MCP_SYNOLOGY_CONFIG") is not None:
-            click.echo(click.style(f"Error: {e}", fg="red"), err=True)
+            say(f"Error: {e}", fg="red", err=True)
             sys.exit(1)
         # No config file found — enter interactive creation mode. One that's there and isn't
         # loaded is named, since "no file found" would be false (#552). Imported here: at the top,
@@ -111,20 +111,20 @@ def _list_configurations() -> None:
     except (FileNotFoundError, NotADirectoryError):
         yaml_files = []
     except OSError as e:
-        click.echo(f"Config directory can't be read: {_shown_name(_CONFIG_DIR)}: {e.strerror}")
+        say(f"Config directory can't be read: {_shown_name(_CONFIG_DIR)}: {e.strerror}")
         return
     if not yaml_files:
-        click.echo("No configurations found.")
-        click.echo(f"Config directory: {_shown_name(_CONFIG_DIR)}")
+        say("No configurations found.")
+        say(f"Config directory: {_shown_name(_CONFIG_DIR)}")
         return
 
-    click.echo(f"Configurations in {_shown_name(_CONFIG_DIR)}:\n")
+    say(f"Configurations in {_shown_name(_CONFIG_DIR)}:\n")
     for f in yaml_files:
         shown = _shown_name(f.name)
         try:
             # A named pipe would wait for a writer, and the later files would go unlisted.
             if not f.is_file():
-                click.echo(f"  {shown}  (could not parse)")
+                say(f"  {shown}  (could not parse)")
                 continue
             raw = parse_config_text(f.read_text(encoding="utf-8")) or {}
             # An empty `connection:` is no connection settings (#492).
@@ -145,27 +145,27 @@ def _list_configurations() -> None:
                 label = instance_id.lower()  # as the server uses it
             else:
                 label = _shown_name(f.stem)
-            click.echo(f"  {shown}")
-            click.echo(f"    Name: {label}")
-            click.echo(f"    Host: {host}")
-            click.echo()
+            say(f"  {shown}")
+            say(f"    Name: {label}")
+            say(f"    Host: {host}")
+            say()
         except yaml.YAMLError as e:
             # The reason `check` gives; format_yaml_error never quotes the file (QA round 2
             # on #532).
-            click.echo(f"  {shown}  (could not parse)")
+            say(f"  {shown}  (could not parse)")
             for line in format_yaml_error(e).splitlines():
-                click.echo(f"    {line}")
+                say(f"    {line}")
         except (OSError, ValueError, AttributeError):
-            click.echo(f"  {shown}  (could not parse)")
+            say(f"  {shown}  (could not parse)")
 
 
 def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     """Interactive setup when no config file is loaded. ``not_loaded`` says why one that's there
     isn't."""
     if not_loaded:
-        click.echo(f"{not_loaded}\n\nTo make a new config at the home location instead:\n")
+        say(f"{not_loaded}\n\nTo make a new config at the home location instead:\n")
     else:
-        click.echo("No configuration file found. Let's create one.\n")
+        say("No configuration file found. Let's create one.\n")
 
     from mcp_synology.core.config import (
         alias_problem,
@@ -188,19 +188,14 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         )
         if not problems:
             break
-        click.echo(
-            click.style(f"  The host {host_message(problems, hidden_note=False)}", fg="red"),
-            err=True,
-        )
+        say(f"  The host {host_message(problems, hidden_note=False)}", fg="red", err=True)
     # HTTPS by default (#193): DSM serves it on 5001 out of the box.
     use_https = click.confirm("Use HTTPS?", default=True)
     if not use_https:
-        click.echo(
-            click.style(
-                "  Plain HTTP: your DSM password and session cross the network unencrypted. "
-                "Fine on a network you trust. To switch later: https://github.com/cmeans/mcp-synology/blob/main/docs/https.md",
-                fg="yellow",
-            )
+        say(
+            "  Plain HTTP: your DSM password and session cross the network unencrypted. "
+            "Fine on a network you trust. To switch later: https://github.com/cmeans/mcp-synology/blob/main/docs/https.md",
+            fg="yellow",
         )
     # A NAS on a custom port couldn't be set up interactively (#504 item 1): the host
     # takes no port, so it's asked for here, defaulting to DSM's.
@@ -219,7 +214,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     # An IPv6 address, or a name with characters outside a-z, 0-9 and hyphens, gives no
     # usable ID: ask for one.
     if instance_id_problem(instance_id):
-        click.echo(
+        say(
             "  This host gives no usable instance ID (its first part has characters other "
             "than letters a-z, digits and hyphens)."
         )
@@ -231,7 +226,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
                 break
             # The file's "leave it out to derive it" advice doesn't apply here: this host
             # gives none (pre-QA r3).
-            click.echo(f"  That instance ID {'is empty' if not instance_id.strip() else problem}.")
+            say(f"  That instance ID {'is empty' if not instance_id.strip() else problem}.")
 
     # Prompt for alias
     while True:
@@ -241,7 +236,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         alias: str | None = alias_input.strip() or None
         if alias is None or not (problem := alias_problem(alias)):
             break
-        click.echo(f"  That alias {problem}")
+        say(f"  That alias {problem}")
 
     # Build config dict
     conn: dict[str, Any] = {"host": host}
@@ -249,7 +244,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         conn["port"] = port
     if use_https:
         conn["https"] = True
-        click.echo(
+        say(
             "  DSM's own certificate is self-signed, so verification fails unless you've "
             "installed a trusted one.\n  Without verification the connection is still "
             "encrypted, but not protected against a machine impersonating the NAS."
@@ -279,7 +274,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         app_config = AppConfig(**config_dict)
     except ValidationError as e:
         # Screened like every config error: pydantic's own text quotes the input (#471).
-        click.echo(click.style(f"Error: {format_validation_error(e)}", fg="red"), err=True)
+        say(f"Error: {format_validation_error(e)}", fg="red", err=True)
         sys.exit(1)
 
     # This path doesn't go through load_config. Before the password is typed (#558).
@@ -295,11 +290,11 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     if config_path.exists() and not click.confirm(
         f"\n{config_path} already exists. Overwrite?", default=False
     ):
-        click.echo("Aborted.")
+        say("Aborted.")
         return
 
     # Prompt for credentials
-    click.echo()
+    say()
     username = _ask_username(None)
     password = click.prompt("DSM password", hide_input=True)
 
@@ -314,14 +309,14 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         try:
             return _store_keyring(service, username, password, host, connection_port, device_id)
         except SystemExit:
-            click.echo("No config was written.", err=True)
+            say("No config was written.", err=True)
             raise
 
     nas_hostname = None
     if no_keyring_here():
         keyring_ok = store(None)
     else:
-        click.echo("\nConnecting to NAS...")
+        say("\nConnecting to NAS...")
         result = asyncio.run(_connect_and_login(app_config, username, password, store, verbose))
         if not result["success"]:
             _exit_nothing_changed()
@@ -354,21 +349,19 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
     except OSError as e:
         # This path can now be reached with no login first, as on Docker. An unwritable home
         # stops earlier, at the state lock (#455).
-        click.echo(
-            click.style(
-                f"Couldn't write {_shown_name(config_path)}: {e.strerror}. Fix the folder and run "
-                "this again.",
-                fg="red",
-            ),
+        say(
+            f"Couldn't write {_shown_name(config_path)}: {e.strerror}. Fix the folder and run "
+            "this again.",
+            fg="red",
             err=True,
         )
         sys.exit(1)
-    click.echo(f"\nConfig written to {config_path}")
+    say(f"\nConfig written to {config_path}")
     # Discovery reads config.yaml, not this file, so a bare `check` wouldn't find it.
     from mcp_synology.core.config import quoted_path
 
     lead = "To use it, name it" if keyring_ok else "With those variables set, test it"
-    click.echo(f"{lead}: mcp-synology check --config {quoted_path(config_path)}")
+    say(f"{lead}: mcp-synology check --config {quoted_path(config_path)}")
 
     _echo_two_fa_advice()
 
@@ -401,10 +394,10 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
 
     if app_config.connection is None:
         raise RuntimeError("Config missing connection settings")
-    click.echo(f"Setting up credentials for {app_config.display_name}")
-    click.echo(f"  Host: {app_config.connection.host}:{app_config.connection.port}")
-    click.echo(f"  Instance: {app_config.instance_id}")
-    click.echo()
+    say(f"Setting up credentials for {app_config.display_name}")
+    say(f"  Host: {app_config.connection.host}:{app_config.connection.port}")
+    say(f"  Instance: {app_config.instance_id}")
+    say()
 
     service = f"mcp-synology/{app_config.instance_id}"
     instance = str(app_config.instance_id)
@@ -426,7 +419,7 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
     if no_keyring_here():
         keyring_ok = store(None)
     else:
-        click.echo("\nAttempting login...")
+        say("\nAttempting login...")
         result = asyncio.run(_setup_login(app_config, username, password, store))
         if not result["success"]:
             _exit_nothing_changed()
@@ -438,12 +431,12 @@ def _setup_credential_flow(app_config: Any, verbose: bool) -> None:
         # On variables alone (the Docker path) there's no file, and the bare command finds them.
         path = app_config._source_path
         if path:
-            click.echo(
+            say(
                 "With those variables set, test it: mcp-synology check --config "
                 f"{quoted_path(path)}"
             )
         else:
-            click.echo(
+            say(
                 "With those variables and the server's SYNOLOGY_HOST, SYNOLOGY_HTTPS and "
                 f"SYNOLOGY_PORT set, test it: {CHECK_NO_FILE}"
             )
@@ -475,7 +468,7 @@ def _may_replace_entry(
         return True
     except Exception as e:
         logger.debug("Keyring error reading entry %r: %s", instance, e, exc_info=True)
-        click.echo(
+        say(
             f"\nCouldn't read keyring entry {instance!r}, so nothing was changed. Check that the "
             "OS keyring is unlocked and try again, or set SYNOLOGY_USERNAME and SYNOLOGY_PASSWORD "
             "instead"
@@ -518,10 +511,10 @@ def _may_replace_entry(
     # An entry with no record may well be this NAS's own, from before hosts were recorded.
     route = None if not unknown or config is None else check_route(config)
     if not unknown:
-        click.echo(f"Aborted, nothing changed. To keep both, {own_id}")
+        say(f"Aborted, nothing changed. To keep both, {own_id}")
     else:
         own = route or "run this again and answer yes"
-        click.echo(
+        say(
             f"Aborted, nothing changed. If these are this NAS's own credentials, {own}. "
             f"If they're another NAS's, {own_id}"
         )
@@ -533,7 +526,7 @@ def _echo_two_fa_advice() -> None:
     from mcp_synology.core.auth import no_keyring_2fa_advice, no_keyring_here
 
     if no_keyring_here():
-        click.echo(f"\nIf this account uses 2FA: {no_keyring_2fa_advice(cli=True)}.")
+        say(f"\nIf this account uses 2FA: {no_keyring_2fa_advice(cli=True)}.")
 
 
 def _variable_lines(username: str, *, windows: bool = os.name == "nt") -> str:
@@ -676,16 +669,14 @@ def _store_keyring(
                 f"{lead}{state} The new 2FA device token couldn't be stored either, so the server "
                 f"may not be able to log in without a code. {fix}"
             )
-        click.echo(
+        say(
             f"\n{lead}{state} Set these environment variables where the server runs instead: "
             "in the `env` block of your MCP client's config, or in your shell, with your "
             "password in place of the placeholder:\n" + _variable_lines(username),
             err=stop,
         )
         if stop:
-            click.echo(
-                "Or check that the keyring is unlocked and writable, and run this again.", err=True
-            )
+            say("Or check that the keyring is unlocked and writable, and run this again.", err=True)
             sys.exit(1)
         return False
     _say_stored(device_id)
@@ -728,14 +719,14 @@ def _drop_a_token_left_for_another_account(
 
 
 def _say_stored(device_id: str | None) -> None:
-    click.echo("\nCredentials stored in OS keyring.")
+    say("\nCredentials stored in OS keyring.")
     if device_id:
-        click.echo(click.style("2FA bootstrap complete!", fg="green"))
-        click.echo("Device token stored in keyring.")
+        say("2FA bootstrap complete!", fg="green")
+        say("Device token stored in keyring.")
 
 
 def _stop_on_keyring(message: str) -> NoReturn:
-    click.echo(click.style(f"\n{message}", fg="red"), err=True)
+    say(f"\n{message}", fg="red", err=True)
     sys.exit(1)
 
 
@@ -763,15 +754,15 @@ def _usable_token(value: object) -> str | None:
 
 def _login_failed(error: Exception) -> None:
     """Say why, what to do, and that a retry isn't free: each counts toward Auto Block (#454)."""
-    click.echo(click.style(f"Login failed: {error}", fg="red"), err=True)
+    say(f"Login failed: {error}", fg="red", err=True)
     code = getattr(error, "code", None)
     suggestion = getattr(error, "suggestion", None)
     # Those say to run setup, that a re-login will follow or that another session displaced this
     # one: none fits a login.
     if suggestion and code not in (403, 106, 107, 119):
-        click.echo(suggestion, err=True)
+        say(suggestion, err=True)
     if code in (400, 403, 404):
-        click.echo(
+        say(
             "Each failed login counts toward DSM's Auto Block (on by default: 10 within 5 minutes "
             "blocks this computer's IP address), so verify the password or code before retrying.",
             err=True,
@@ -812,7 +803,7 @@ async def _attempt_login(
     except SynologyError as e:
         if e.code == 403:
             # 2FA required
-            click.echo("2FA is required. Enter the OTP code from your authenticator app.")
+            say("2FA is required. Enter the OTP code from your authenticator app.")
             otp_code = click.prompt("OTP code")
             try:
                 data = await client.request(
@@ -852,11 +843,9 @@ async def _attempt_login(
     # Without a session it isn't a login, whatever the reply says, so nothing gets stored (#454).
     sid = data.get("sid") if isinstance(data, dict) else None
     if not isinstance(sid, str) or not sid.strip():
-        click.echo(
-            click.style(
-                f"Login failed: the server's reply had no session ID. {NOT_DSM_HINT}",
-                fg="red",
-            ),
+        say(
+            f"Login failed: the server's reply had no session ID. {NOT_DSM_HINT}",
+            fg="red",
             err=True,
         )
         return result
@@ -864,18 +853,16 @@ async def _attempt_login(
     if needs_token and not device_id:
         # An account known to need a code, with nothing that would let the server skip it. Client
         # has the session, so the caller's logout still runs.
-        click.echo(
-            click.style(
-                "DSM accepted the code but sent no usable 2FA device token, so the server couldn't "
-                "log in without a code. With a token from elsewhere, the server needs a config "
-                "file plus SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD and SYNOLOGY_DEVICE_ID. Please "
-                "report your DSM version: https://github.com/cmeans/mcp-synology/issues",
-                fg="red",
-            ),
+        say(
+            "DSM accepted the code but sent no usable 2FA device token, so the server couldn't "
+            "log in without a code. With a token from elsewhere, the server needs a config "
+            "file plus SYNOLOGY_USERNAME, SYNOLOGY_PASSWORD and SYNOLOGY_DEVICE_ID. Please "
+            "report your DSM version: https://github.com/cmeans/mcp-synology/issues",
+            fg="red",
             err=True,
         )
         return result
-    click.echo(click.style("Login successful!", fg="green"))
+    say("Login successful!", fg="green")
     if device_id:
         result["device_id"] = device_id
     result["success"] = True
@@ -914,7 +901,7 @@ def _ask_username(config_username: str | None) -> str:
         ).strip()
         if answer == fixed.strip():
             return fixed
-        click.echo(
+        say(
             f"{where} {shown}, and that's the account the server logs in as, so its password "
             "is the one to store here. Answer that name exactly, or stop (Ctrl-C) and change "
             "that setting first to use another account. Nothing was sent or stored.",
@@ -924,7 +911,7 @@ def _ask_username(config_username: str | None) -> str:
 
 def _exit_nothing_changed() -> NoReturn:
     """After a failed login, which has said why: nothing was written, and a script can tell."""
-    click.echo("Nothing was changed.", err=True)
+    say("Nothing was changed.", err=True)
     sys.exit(1)
 
 
@@ -974,7 +961,7 @@ async def _connect_and_login(
                     dsm_info = await client.fetch_dsm_info()
                 except Exception as e:  # noqa: BLE001 - a bad reply too; only the type is shown
                     logger.debug("Hostname read failed", exc_info=True)
-                    click.echo(f"Couldn't read the NAS's hostname ({type(e).__name__}).")
+                    say(f"Couldn't read the NAS's hostname ({type(e).__name__}).")
                     dsm_info = {}
             finally:
                 await _logout(client)
@@ -1074,5 +1061,5 @@ def _emit_claude_desktop_snippet(
         server_entry.setdefault("env", {}).update(credentials_env)
 
     snippet = {"mcpServers": {f"synology-{config.display_name}": server_entry}}
-    click.echo("\nAdd this to your Claude Desktop config (claude_desktop_config.json):\n")
-    click.echo(json.dumps(snippet, indent=2))
+    say("\nAdd this to your Claude Desktop config (claude_desktop_config.json):\n")
+    say(json.dumps(snippet, indent=2))

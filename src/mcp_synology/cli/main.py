@@ -9,6 +9,7 @@ import click
 
 from mcp_synology import __version__
 from mcp_synology.cli.logging_ import _init_early_logging
+from mcp_synology.cli.output import say
 from mcp_synology.cli.startup import load_or_exit
 from mcp_synology.cli.version import (
     _check_for_update,
@@ -55,9 +56,9 @@ def main(
         if latest:
             # The same text the update notice and `check` give (#314): the upgrade command
             # for this install, and whether it's a security release.
-            click.echo(update_notice(latest, security=security, for_model=False))
+            say(update_notice(latest, security=security, for_model=False))
         else:
-            click.echo(f"You are running the latest version ({current}).")
+            say(f"You are running the latest version ({current}).")
         ctx.exit()
 
     if auto_upgrade is not None:
@@ -66,7 +67,7 @@ def main(
             state["auto_upgrade"] = auto_upgrade == "enable"
             _save_global_state(state)
         status = "enabled" if state["auto_upgrade"] else "disabled"
-        click.echo(f"Auto-upgrade {status}.")
+        say(f"Auto-upgrade {status}.")
         ctx.exit()
 
     if revert is not None:
@@ -94,7 +95,7 @@ def main(
             _do_auto_upgrade()
 
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
+        say(ctx.get_help())
 
 
 @main.command()
@@ -116,7 +117,7 @@ def serve(config: str | None) -> None:
         # stdin, and joining it at interpreter exit would hang forever (#402). Flush
         # the logs and leave without joining it.
         if e.code is not None and not isinstance(e.code, int):
-            click.echo(str(e.code), err=True)
+            say(str(e.code), err=True)
         logging.shutdown()
         os._exit(0 if e.code is None else e.code if isinstance(e.code, int) else 1)
 

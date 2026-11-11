@@ -264,8 +264,16 @@ def _mask_authority(url: str) -> str:
     return _AUTHORITY_AT.sub(lambda m: f"{m.group(1)}{MASK}@", url)
 
 
+# A value that is only a placeholder in angle brackets.
+_PLACEHOLDER = re.compile(r"<[^<>\n]{1,64}>")
+
+
 def _masked_value(value: str, quote: str) -> str:
-    """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number."""
+    """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number.
+    A placeholder (`"<your password>"`, as `setup`'s client snippet prints) is kept: it holds no
+    secret, and the user fills it in."""
+    if _PLACEHOLDER.fullmatch(value.strip("'\"")):
+        return value
     if quote not in ("'", '"') or not value.startswith(quote):
         return MASK
     closed = len(value) > 1 and value.endswith(quote) and not value.endswith("\\" + quote)

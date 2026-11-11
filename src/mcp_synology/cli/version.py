@@ -20,6 +20,7 @@ import click
 import yaml
 
 from mcp_synology import __version__
+from mcp_synology.cli.output import say
 
 logger = logging.getLogger(__name__)
 
@@ -492,22 +493,22 @@ def _do_auto_upgrade() -> bool:
     elif installer == "pipx":
         cmd = ["pipx", "upgrade", _PYPI_PACKAGE]
     else:
-        click.echo(
+        say(
             "Cannot detect package manager (uv or pipx). "
             f"Upgrade manually: uv tool upgrade {_PYPI_PACKAGE}"
         )
         return False
 
-    click.echo(f"Upgrading {_PYPI_PACKAGE} via {installer}...")
+    say(f"Upgrading {_PYPI_PACKAGE} via {installer}...")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         with _with_global_state_lock():
             state = _load_global_state()
             state["previous_version"] = current
             _save_global_state(state)
-        click.echo(click.style("Upgrade complete — takes effect on next run.", fg="green"))
+        say("Upgrade complete — takes effect on next run.", fg="green")
         return True
-    click.echo(click.style(f"Upgrade failed: {result.stderr.strip()}", fg="red"), err=True)
+    say(f"Upgrade failed: {result.stderr.strip()}", fg="red", err=True)
     return False
 
 
@@ -522,14 +523,14 @@ def _do_revert(target_version: str | None = None) -> None:
     else:
         prev = state.get("previous_version")
         if not prev:
-            click.echo("No previous version recorded — nothing to revert to.")
-            click.echo(f"Tip: specify a version explicitly: {_PYPI_PACKAGE} --revert 0.1.0")
+            say("No previous version recorded — nothing to revert to.")
+            say(f"Tip: specify a version explicitly: {_PYPI_PACKAGE} --revert 0.1.0")
             return
 
     _validate_version_string(prev)
 
     if prev == current:
-        click.echo(f"Already running {current} — nothing to do.")
+        say(f"Already running {current} — nothing to do.")
         return
 
     installer = _detect_installer()
@@ -539,14 +540,14 @@ def _do_revert(target_version: str | None = None) -> None:
     elif installer == "pipx":
         cmd = ["pipx", "install", "--force", f"{_PYPI_PACKAGE}=={prev}"]
     else:
-        click.echo(
+        say(
             f"Cannot detect package manager. Install manually:\n"
             f"  uv tool install --force {_PYPI_PACKAGE}=={prev}\n"
             f"  pipx install --force {_PYPI_PACKAGE}=={prev}"
         )
         return
 
-    click.echo(f"Reverting from {current} to {prev}...")
+    say(f"Reverting from {current} to {prev}...")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         with _with_global_state_lock():
@@ -554,8 +555,8 @@ def _do_revert(target_version: str | None = None) -> None:
             fresh["previous_version"] = None
             fresh["auto_upgrade"] = False
             _save_global_state(fresh)
-        click.echo(click.style(f"Reverted to {prev}. Takes effect on next run.", fg="green"))
-        click.echo("Auto-upgrade has been disabled to prevent immediately re-upgrading.")
-        click.echo(f"Re-enable with: {_PYPI_PACKAGE} --auto-upgrade enable")
+        say(f"Reverted to {prev}. Takes effect on next run.", fg="green")
+        say("Auto-upgrade has been disabled to prevent immediately re-upgrading.")
+        say(f"Re-enable with: {_PYPI_PACKAGE} --auto-upgrade enable")
     else:
-        click.echo(click.style(f"Revert failed: {result.stderr.strip()}", fg="red"), err=True)
+        say(f"Revert failed: {result.stderr.strip()}", fg="red", err=True)
