@@ -161,6 +161,7 @@ A class of bug is fixed once, in one place, with a guard test that keeps it fixe
 ## Common Tasks
 
 ### Adding a new tool to an existing module
+0. Name it in at most 24 characters (`tests/test_tool_names.py` `MAX_TOOL_NAME`, #682). Claude's tool search refuses a tool whose full name is over 64 characters, and the client puts the server's name in front of ours (`mcp__remote-devices__<server>__<tool>` in Claude Desktop), so a longer name shortens every user's server name: the README states the limits, computed by that test
 1. Add handler in the appropriate domain file (`listing.py`, `search.py`, `metadata.py`, or `operations.py`)
 2. Add `ToolInfo` entry to `MODULE_INFO.tools` in the module's `__init__.py`
 3. Register in `register()`, gated by permission tier

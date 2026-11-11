@@ -110,6 +110,8 @@ claude mcp add synology -- uvx mcp-synology serve --config ~/.config/mcp-synolog
 
 **Other clients:** any client that starts a local (stdio) server: the command is `uvx` (its full path, which `which uvx` prints, for an app started outside a shell), with the arguments `mcp-synology serve --config <your config file>`.
 
+**Keep the server's name short.** Claude finds a server's tools through tool search, which refuses a tool whose full name is over 64 characters, and the client builds that name from the server's name and the tool's: `mcp__<server>__<tool>` in Claude Code, and `mcp__remote-devices__<server>__<tool>` when Claude Desktop reaches a server on your computer. The longest tool name is `restore_from_recycle_bin` (24 characters), so the server's name can be at most 17 characters in Claude Desktop (`synology-` plus an alias, or without one the instance ID, of up to 8: `synology-HomeNAS` fits) and 33 in Claude Code. Once Claude loads a tool whose full name is too long, the conversation fails with an API error saying a string "should have at most 64 characters". `setup` and `check` warn when the name `setup` suggests is too long: rename the key in the snippet (`synology-nas`, say) or set a shorter alias.
+
 On Linux, the server auto-detects the D-Bus session socket for keyring access. If auto-detection fails, add `"env": {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/<uid>/bus"}` to the Claude Desktop config. The setup command includes this in the generated snippet.
 
 ### 3. Verify
@@ -508,7 +510,7 @@ Set `alias` to give Claude a display name for the connection:
 alias: HomeNAS
 ```
 
-The alias appears in the MCP server name (e.g., `synology-HomeNAS`) so Claude knows which NAS it's talking to.
+The alias appears in the MCP server name (e.g., `synology-HomeNAS`) so Claude knows which NAS it's talking to. Keep it to 8 characters when File Station's write tools are on, so the name fits Claude Desktop's limit (see [Add it to your MCP client](#2-add-it-to-your-mcp-client)); `setup` and `check` warn when it doesn't.
 
 ### Custom instructions
 

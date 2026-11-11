@@ -329,6 +329,7 @@ def _setup_interactive(verbose: bool, not_loaded: str | None = None) -> None:
         and nas_hostname
         and not alias
         and not alias_problem(nas_hostname)
+        and _hostname_alias_fits(config_dict, nas_hostname)
     ):
         use_hostname = click.confirm(
             f'NAS reports hostname "{nas_hostname}". Use as alias?', default=True
@@ -1031,6 +1032,23 @@ async def _logout(client: Any) -> None:
         logger.debug("Setup logout failed: %s: %s", type(e).__name__, e)
 
 
+def _hostname_alias_fits(config_dict: dict[str, Any], hostname: str) -> bool:
+    """Whether the NAS's host name, as the alias, keeps the server name `setup` suggests within
+    Claude Desktop's limit (#682). If not, it isn't offered, and setup says why: it would be
+    offered and then warned about under the snippet."""
+    from mcp_synology.core.config import AppConfig
+    from mcp_synology.server import server_name_problem, suggested_server_name
+
+    candidate = AppConfig(**{**config_dict, "alias": hostname})
+    if not server_name_problem(candidate):
+        return True
+    say(
+        f"NAS reports hostname {hostname!r}; not offered as the alias: the server name it "
+        f"gives, {suggested_server_name(candidate)!r}, is too long for Claude Desktop."
+    )
+    return False
+
+
 def _emit_claude_desktop_snippet(
     config: Any, config_path: Path, credentials_env: dict[str, str] | None = None
 ) -> None:
@@ -1060,6 +1078,11 @@ def _emit_claude_desktop_snippet(
     if credentials_env:
         server_entry.setdefault("env", {}).update(credentials_env)
 
-    snippet = {"mcpServers": {f"synology-{config.display_name}": server_entry}}
+    from mcp_synology.server import server_name_problem, suggested_server_name
+
+    snippet = {"mcpServers": {suggested_server_name(config): server_entry}}
     say("\nAdd this to your Claude Desktop config (claude_desktop_config.json):\n")
     say(json.dumps(snippet, indent=2))
+    problem = server_name_problem(config)
+    if problem:
+        say(f"\nWarning: {problem}", fg="yellow", err=True)
