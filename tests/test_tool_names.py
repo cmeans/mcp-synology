@@ -13,8 +13,25 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from mcp_synology.server import _MODULE_REGISTRY
+import pytest
+from click.testing import CliRunner
+
+from mcp_synology.cli import main
+from mcp_synology.cli.setup import _emit_claude_desktop_snippet
+from mcp_synology.server import (
+    _MODULE_REGISTRY,
+    DESKTOP_PREFIX,
+    TOOL_SEARCH_LIMIT,
+    _module_plan,
+    server_name_problem,
+    suggested_server_name,
+)
+from tests.conftest import make_test_config
+
+if TYPE_CHECKING:
+    from mcp_synology.core.config import AppConfig
 
 README = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
 
@@ -78,3 +95,71 @@ def test_the_readme_states_the_server_name_limits() -> None:
     assert int(app_text) == app and int(code_text) == code
     assert int(alias) == app - len("synology-")
     assert len(example) <= app
+
+
+# --- the warning `setup` and `check` give (maintainer, 2026-11-11) ---
+
+WRITE_FILES = {"filestation": {"enabled": True, "permission": "write"}}
+
+
+def _config(**overrides: object) -> AppConfig:
+    return make_test_config(**{"modules": WRITE_FILES, **overrides})
+
+
+def test_the_constants_are_the_servers() -> None:
+    assert (TOOL_SEARCH_LIMIT, DESKTOP_PREFIX) == (API_LIMIT, APP_PREFIX)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "fits"),
+    [
+        ({"alias": "HomeNAS"}, True),  # synology-HomeNAS, 16
+        ({"instance_id": "home-nas"}, True),  # synology-home-nas, 17: exactly the limit
+        ({"instance_id": "diskstation"}, False),  # DSM's default host name: 20
+        ({"instance_id": "192-168-1-100"}, False),  # an IP address as the host: 22
+        # Only the tools this config serves count: read-only File Station's longest is shorter.
+        ({"instance_id": "diskstation", "modules": {"filestation": {"enabled": True}}}, True),
+    ],
+)
+def test_the_suggested_server_name_is_checked(overrides: dict[str, object], fits: bool) -> None:
+    config = _config(**overrides)
+    problem = server_name_problem(config)
+    assert (problem is None) == fits, problem
+    served = [t for *_, allowed in _module_plan(config) for t in allowed]
+    full = len(DESKTOP_PREFIX) + len(suggested_server_name(config)) + 2 + max(map(len, served))
+    assert (full <= API_LIMIT) == fits
+
+
+def test_the_warning_says_what_to_do() -> None:
+    problem = server_name_problem(_config(instance_id="diskstation"))
+    assert problem == (
+        "the server name 'synology-diskstation' is 20 characters: in Claude Desktop, with "
+        "restore_from_recycle_bin (24 characters), a tool's full name would be over Claude's "
+        "64-character limit, and every conversation would fail once Claude loads it. Set a "
+        "shorter alias in the config (up to 8 characters, e.g. alias: nas), or name the server "
+        "17 characters or fewer in your MCP client's config."
+    )
+
+
+def test_check_warns(tmp_path: Path) -> None:
+    """`check` prints it with the config's other warnings, before it tries to log in."""
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "schema_version: 1\ninstance_id: diskstation\n"
+        # A closed local port: the login fails at once, after the warning.
+        "connection:\n  host: 127.0.0.1\n  port: 1\n  timeout: 1\n"
+        "auth:\n  username: x\n  password: y\n"
+        "modules:\n  filestation:\n    enabled: true\n    permission: write\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(main, ["check", "-c", str(config)])
+    assert "Warning: the server name 'synology-diskstation' is 20 characters" in result.output
+
+
+def test_setup_warns_under_its_snippet(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    _emit_claude_desktop_snippet(_config(instance_id="diskstation"), tmp_path / "c.yaml")
+    out, err = capsys.readouterr()
+    assert '"synology-diskstation"' in out
+    assert "Warning: the server name 'synology-diskstation' is 20 characters" in err
+    _emit_claude_desktop_snippet(_config(alias="HomeNAS"), tmp_path / "c.yaml")
+    assert "Warning" not in capsys.readouterr().err

@@ -1073,6 +1073,11 @@ def _emit_claude_desktop_snippet(
     if credentials_env:
         server_entry.setdefault("env", {}).update(credentials_env)
 
-    snippet = {"mcpServers": {f"synology-{config.display_name}": server_entry}}
+    from mcp_synology.server import server_name_problem, suggested_server_name
+
+    snippet = {"mcpServers": {suggested_server_name(config): server_entry}}
     click.echo("\nAdd this to your Claude Desktop config (claude_desktop_config.json):\n")
     click.echo(json.dumps(snippet, indent=2))
+    problem = server_name_problem(config)
+    if problem:
+        click.echo(click.style(f"\nWarning: {problem}", fg="yellow"), err=True)

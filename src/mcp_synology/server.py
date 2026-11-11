@@ -1149,9 +1149,68 @@ def _read_instructions_file(config: AppConfig) -> tuple[str | None, str | None]:
     )
 
 
+def _module_plan(config: AppConfig) -> _ModulePlan:
+    """Each enabled, known module with its config and the tools its permission allows."""
+    plan: _ModulePlan = []
+    for mod_name, mod_config in config.modules.items():
+        if not mod_config.enabled:
+            logger.debug("Module %r is disabled, skipping", mod_name)
+            continue
+        module = _MODULE_REGISTRY.get(mod_name)
+        if module is None:  # named by _unknown_keys
+            continue
+        tier = PermissionTier(mod_config.permission)
+        plan.append(
+            (
+                mod_name,
+                module,
+                mod_config,
+                filter_tools_by_permission(module.MODULE_INFO.tools, tier),
+            )
+        )
+    return plan
+
+
+# Claude loads a server's tools through tool search, which refuses a tool whose full name is
+# over 64 characters (the API's own limit is 128). Claude Desktop names a local server's tools
+# `mcp__remote-devices__<server>__<tool>`, the longest prefix of the clients (#682; confirmed on
+# claude.ai, 2026-11-11). `tests/test_tool_names.py` computes the README's limits from these.
+TOOL_SEARCH_LIMIT = 64
+DESKTOP_PREFIX = "mcp__remote-devices__"
+
+
+def suggested_server_name(config: AppConfig) -> str:
+    """The name `setup` gives the server in its client snippet, and the server gives itself."""
+    return f"synology-{config.display_name}"
+
+
+def server_name_problem(config: AppConfig) -> str | None:
+    """A warning when the suggested server name leaves a tool's full name in Claude Desktop
+    over Claude's 64-character limit, which fails the conversation (#682); None when it fits.
+    Counts only the tools this config serves."""
+    tools = [tool for *_, allowed in _module_plan(config) for tool in allowed]
+    if not tools:
+        return None
+    name = suggested_server_name(config)
+    longest = max(tools, key=len)
+    budget = TOOL_SEARCH_LIMIT - len(DESKTOP_PREFIX) - len("__") - len(longest)
+    if len(name) <= budget:
+        return None
+    room = budget - len("synology-")
+    return (
+        f"the server name {name!r} is {len(name)} characters: in Claude Desktop, with "
+        f"{longest} ({len(longest)} characters), a tool's full name would be over Claude's "
+        f"{TOOL_SEARCH_LIMIT}-character limit, and every conversation would fail once Claude "
+        f"loads it. Set a shorter alias in the config (up to {room} characters, e.g. "
+        f"alias: nas), or name the server {budget} characters or fewer in your MCP client's "
+        "config."
+    )
+
+
 def config_notices(config: AppConfig) -> list[str]:
     """Warnings for what the config asks for and the server will do without: keys this
-    version doesn't know (misspelled or newer), and an instructions file it can't read.
+    version doesn't know (misspelled or newer), an instructions file it can't read, and a
+    server name too long for Claude Desktop (`server_name_problem`, #682).
 
     An unknown module name, or an unknown key in a module's `settings`, would otherwise
     be ignored without a word (an `allowed_local_paths` typo left the Downloads default in
@@ -1161,7 +1220,12 @@ def config_notices(config: AppConfig) -> list[str]:
     module are errors (`ModuleConfig`, extra="forbid").
     """
     _, instructions_problem = _read_instructions_file(config)
-    return [*([instructions_problem] if instructions_problem else []), *_unknown_keys(config)]
+    name_problem = server_name_problem(config)
+    return [
+        *([instructions_problem] if instructions_problem else []),
+        *_unknown_keys(config),
+        *([name_problem] if name_problem else []),
+    ]
 
 
 def _unknown_keys(config: AppConfig) -> list[str]:
@@ -1402,27 +1466,11 @@ def create_server(config: AppConfig) -> MCPServer:
         else str(Path.home()),
         "platform": _platform_label(),
     }
-    server_name = f"synology-{config.display_name}"
+    server_name = suggested_server_name(config)
 
     # Resolve each enabled module's tools first, so the instructions can include only the
     # enabled modules' sections and say which tools this connection withholds.
-    plan: _ModulePlan = []
-    for mod_name, mod_config in config.modules.items():
-        if not mod_config.enabled:
-            logger.debug("Module %r is disabled, skipping", mod_name)
-            continue
-        module = _MODULE_REGISTRY.get(mod_name)
-        if module is None:  # named by _unknown_keys above
-            continue
-        tier = PermissionTier(mod_config.permission)
-        plan.append(
-            (
-                mod_name,
-                module,
-                mod_config,
-                filter_tools_by_permission(module.MODULE_INFO.tools, tier),
-            )
-        )
+    plan = _module_plan(config)
 
     # The built-in instructions: the core file, then each enabled module's own section, and
     # its WRITE-tool guidance when those tools are registered (#318).
