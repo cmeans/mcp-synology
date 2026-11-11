@@ -67,37 +67,43 @@ _PLAN_TOKEN = object()
 
 
 class Plan:
-    """The sources a batch may run (#512's Q2b, #684): built only by `plan_landings`, after the
-    landing checks (`refuse_planted_bin`, `refuse_same_names`) passed, and the only thing
-    `batch.run_batch` takes, so no batch runs a source that skipped them. ``sources``: the
-    checked paths, as `resolve_paths` or `resolve_bin_items` gave them."""
+    """What a batch may run (#512's Q2b, #684): each checked source with where it lands
+    (None for a delete). Built only by `plan_landings` (after `refuse_planted_bin` and
+    `refuse_same_names` passed) or `plan_deletes`, and the only thing `batch.run_batch` takes,
+    which refuses an item whose source and landing the plan doesn't hold."""
 
-    __slots__ = ("sources",)
+    __slots__ = ("_runs",)
 
-    def __init__(self, sources: frozenset[str], token: object) -> None:
+    def __init__(self, runs: frozenset[tuple[str, str | None]], token: object) -> None:
         if token is not _PLAN_TOKEN:
-            raise TypeError("A Plan is built only by paths.plan_landings")
-        self.sources = sources
+            raise TypeError("A Plan is built only by paths.plan_landings or paths.plan_deletes")
+        self._runs = runs
+
+    def allows(self, source: str, dest: str | None) -> bool:
+        """``source`` landing at ``dest`` (None for a delete) is one this plan checked."""
+        return (source, dest) in self._runs
 
 
 def plan_landings(
     tool: str,
     given: Sequence[str],
     resolved: Sequence[str],
-    landings: Sequence[str] | None,
+    landings: Sequence[str],
     *,
     overwrite: bool,
     dest_given: bool = True,
 ) -> Plan:
-    """Check where each of ``resolved`` lands (``landings``, one per source; None for a delete,
-    which lands nowhere) and return the `Plan` a batch runs. Run before any DSM request, so a
-    refusal comes where it always did: ``given`` are the caller's own values, quoted in it."""
-    if landings is not None:
-        refuse_planted_bin(tool, given, resolved, landings)
-        refuse_same_names(
-            tool, given, resolved, landings, overwrite=overwrite, dest_given=dest_given
-        )
-    return Plan(frozenset(resolved), _PLAN_TOKEN)
+    """Check where each of ``resolved`` lands (``landings``, one per source) and return the
+    `Plan` a copy, move or restore batch runs. Run before any DSM request, so a refusal comes
+    where it always did: ``given`` are the caller's own values, quoted in it."""
+    refuse_planted_bin(tool, given, resolved, landings)
+    refuse_same_names(tool, given, resolved, landings, overwrite=overwrite, dest_given=dest_given)
+    return Plan(frozenset(zip(resolved, landings, strict=True)), _PLAN_TOKEN)
+
+
+def plan_deletes(resolved: Sequence[str]) -> Plan:
+    """The `Plan` of a delete, which lands nowhere, so it has no landing checks."""
+    return Plan(frozenset((path, None) for path in resolved), _PLAN_TOKEN)
 
 
 class PathRole(enum.Enum):

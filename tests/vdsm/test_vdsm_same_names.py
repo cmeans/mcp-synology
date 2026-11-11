@@ -35,15 +35,13 @@ pytestmark = pytest.mark.vdsm
 @pytest.fixture(autouse=True)
 def _behind_the_landing_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests probe what DSM does when sources share a landing, so they run the
-    operations with the landing checks skipped. Since #684 those checks run in the operation's
+    operations with the two landing checks skipped. Since #684 they run in the operation's
     plan (`paths.plan_landings`), not in the tool layer, so a plain call would be refused first.
-    The plan still lists the sources, so `run_batch`'s check that it ran them holds."""
-    from mcp_synology.modules.filestation import operations, paths
+    The plan still holds every source and landing, so `run_batch`'s check holds."""
+    from mcp_synology.modules.filestation import paths
 
-    def unchecked(tool: str, given: Any, resolved: Any, landings: Any, **kwargs: Any) -> Any:
-        return paths.plan_landings(tool, given, resolved, None, overwrite=False)
-
-    monkeypatch.setattr(operations, "plan_landings", unchecked)
+    monkeypatch.setattr(paths, "refuse_same_names", lambda *args, **kwargs: None)
+    monkeypatch.setattr(paths, "refuse_planted_bin", lambda *args, **kwargs: None)
 
 
 class Tree:

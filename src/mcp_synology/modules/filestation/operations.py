@@ -61,6 +61,7 @@ from mcp_synology.modules.filestation.paths import (
     ResolvedPath,
     bin_index,
     bin_item_origin,
+    plan_deletes,
     plan_landings,
     refuse_bad_name,
     resolve_bin_items,
@@ -871,8 +872,6 @@ def _refuse_no_paths(operation: str, paths: Sequence[str]) -> None:
 async def _copy_move(
     client: DsmClient,
     *,
-    tool: str,
-    given: Sequence[str],
     paths: Sequence[str],
     dest_folder: str,
     overwrite: bool,
@@ -885,6 +884,8 @@ async def _copy_move(
     fresh: Sequence[str] = (),
     share_name: str = "",
     plan: Plan | None = None,
+    tool: str = "",
+    given: Sequence[str] = (),
 ) -> tuple[str, bool]:
     """Shared implementation for copy and move operations, and a restore to one place.
 
@@ -900,15 +901,18 @@ async def _copy_move(
     Returns ``(text, handed_off)``. When a path's task outlives ``timeout`` it is
     handed off (#245): the text is the handoff reply, and the remaining paths are listed as not
     started. ``fresh``: folders this call re-created, so nothing in them was already there.
-    ``plan``: a restore's, which checked every item's landing already; otherwise this checks
-    them, before any DSM request (#684). ``given``: the caller's own text, which a refusal
-    quotes.
+    ``plan``: a restore's, which checked every item's landing already; or, with none, this
+    checks them before any DSM request, as ``tool`` with the caller's own text ``given`` (which a
+    refusal quotes): one or the other, never both (#684).
     """
     _refuse_no_paths(operation, paths)
     dest = normalize_path(dest_folder)
     sources = [normalize_path(p) for p in paths]
     if plan is None:
+        assert tool and given, "_copy_move: a plan, or the tool and the caller's text"
         plan = plan_landings(tool, given, sources, [dest] * len(sources), overwrite=overwrite)
+    else:
+        assert not tool and not given, "_copy_move: a plan, or the tool and its text, not both"
     normalized = _collapse_overlaps(sources, drop_nested=remove_src)
     items = [Item(p, dest) for p in normalized]
     adapter = CopyMoveAdapter(
@@ -1674,7 +1678,7 @@ async def delete_files(
     _refuse_no_paths("Delete", paths)
     # A delete lands nowhere: its plan only says which sources the batch may run (#684).
     sources = [normalize_path(p) for p in paths]
-    plan = plan_landings("delete_files", paths, sources, None, overwrite=False)
+    plan = plan_deletes(sources)
     normalized = _collapse_overlaps(sources)
     adapter = DeleteAdapter(
         client,
@@ -2026,8 +2030,6 @@ async def restore_from_recycle_bin(
         actual_dest = dest_folder or restore_destinations[0]
         result, _ = await _copy_move(
             client,
-            tool="restore_from_recycle_bin",
-            given=paths,
             plan=plan,
             paths=full_paths,
             dest_folder=actual_dest,

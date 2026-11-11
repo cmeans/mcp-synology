@@ -2347,24 +2347,53 @@ class TestPlanIsTheOnlyWayIntoABatch:
         assert files <= {"paths.py"}, files
 
     def test_only_a_delete_plans_without_landings(self) -> None:
-        unchecked = []
-        for file, call in self._calls("plan_landings"):
-            tool, landings = call.args[0], call.args[3] if len(call.args) > 3 else None
-            if isinstance(landings, ast.Constant) and landings.value is None:
-                unchecked.append((file.name, getattr(tool, "value", None)))
-        assert unchecked == [("operations.py", "delete_files")], unchecked
+        """`plan_landings` requires landings (mypy holds it), and only `delete_files` calls
+        `plan_deletes`."""
+        callers = {
+            (file.name, self._enclosing(file, call)) for file, call in self._calls("plan_deletes")
+        }
+        assert callers == {("operations.py", "delete_files")}, callers
 
-    def test_a_plan_cant_be_built_by_hand(self) -> None:
-        from mcp_synology.modules.filestation.paths import Plan
+    def _enclosing(self, file: Path, call: ast.Call) -> str:
+        """The top-level function holding ``call`` (by its line)."""
+        functions = (ast.AsyncFunctionDef, ast.FunctionDef)
+        for node in ast.parse(file.read_text()).body:
+            lines = {n.lineno for n in ast.walk(node) if isinstance(n, ast.Call)}
+            if isinstance(node, functions) and call.lineno in lines:
+                return node.name
+        return ""
+
+    def test_a_plan_cant_be_built_by_hand_or_changed(self) -> None:
+        from mcp_synology.modules.filestation.paths import Plan, plan_deletes
 
         with pytest.raises(TypeError, match="only by paths.plan_landings"):
-            Plan(frozenset({"/s/a"}), object())
+            Plan(frozenset({("/s/a", None)}), object())
+        plan = plan_deletes(["/s/a"])
+        with pytest.raises(AttributeError):
+            plan.runs = frozenset()  # type: ignore[attr-defined]
 
-    async def test_run_batch_refuses_an_item_the_plan_didnt_check(self) -> None:
+    async def test_run_batch_refuses_an_item_landing_elsewhere(self) -> None:
+        """Pre-QA r1: the plan holds each source with its landing, so a source checked for one
+        folder can't run to another."""
         from mcp_synology.modules.filestation.batch import Budget, Item, run_batch
         from mcp_synology.modules.filestation.paths import plan_landings
 
-        plan = plan_landings("delete_files", ["/s/a"], ["/s/a"], None, overwrite=False)
+        plan = plan_landings("copy_files", ["/s/a"], ["/s/a"], ["/s/d"], overwrite=False)
+        with pytest.raises(RuntimeError, match="didn't check"):
+            await run_batch(
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+                plan,
+                [Item("/s/a", "/s/other")],
+                budget=Budget(1.0),
+                records=None,
+            )
+
+    async def test_run_batch_refuses_an_item_the_plan_didnt_check(self) -> None:
+        from mcp_synology.modules.filestation.batch import Budget, Item, run_batch
+        from mcp_synology.modules.filestation.paths import plan_deletes
+
+        plan = plan_deletes(["/s/a"])
         with pytest.raises(RuntimeError, match="didn't check"):
             await run_batch(
                 None,  # type: ignore[arg-type]

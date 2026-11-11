@@ -6451,7 +6451,7 @@ async def test_a_restore_to_several_places_keeps_its_record_until_it_returns(
 
 @respx.mock
 async def test_a_calls_own_finished_task_isnt_a_clash_for_its_next_source(
-    mock_client: DsmClient, no_poll_wait: None
+    mock_client: DsmClient, no_poll_wait: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """vdsm on #597: two sources of one call landing one name were refused by its own record."""
     calls: list[dict[str, str]] = []
@@ -6459,21 +6459,11 @@ async def test_a_calls_own_finished_task_isnt_a_clash_for_its_next_source(
         side_effect=_dsm_with_running(_a_task_landing("/none"), calls)
     )
     # The record check alone: refuse_same_names (in the operation's plan since #684) refuses
-    # this call first, so the plan here skips the landing checks to reach the record.
-    from mcp_synology.modules.filestation.operations import _copy_move
-    from mcp_synology.modules.filestation.paths import plan_landings
+    # this call first, so it's skipped here to reach the record.
+    from mcp_synology.modules.filestation import paths
 
-    await _copy_move(
-        mock_client,
-        tool="move_files",
-        given=["/a/n", "/b/n"],
-        plan=plan_landings("move_files", ["/a/n", "/b/n"], ["/a/n", "/b/n"], None, overwrite=True),
-        paths=["/a/n", "/b/n"],
-        dest_folder="/d",
-        overwrite=True,
-        remove_src=True,
-        operation="Move",
-    )
+    monkeypatch.setattr(paths, "refuse_same_names", lambda *args, **kwargs: None)
+    await move_files(mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", overwrite=True)
     assert [c["path"] for c in calls if c.get("method") == "start"] == ["/a/n", "/b/n"]
 
 

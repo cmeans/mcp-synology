@@ -279,11 +279,11 @@ async def run_batch(
     on_progress: ProgressCallback | None = None,
 ) -> BatchOutcome:
     """Run ``items`` one task at a time, stopping at the first that doesn't finish. ``plan``:
-    the landing checks' result (`paths.plan_landings`, #684); every item's source must be one
-    it checked, so no batch runs a source that skipped them."""
-    unchecked = [item.source for item in items if item.source not in plan.sources]
+    the landing checks' result (`paths.plan_landings`, #684); every item's source and landing
+    must be one it checked, so no batch runs a source that skipped them."""
+    unchecked = [(x.source, x.dest) for x in items if not plan.allows(x.source, x.dest)]
     if unchecked:
-        raise RuntimeError(f"run_batch: sources the plan didn't check: {unchecked!r}")
+        raise RuntimeError(f"run_batch: items the plan didn't check: {unchecked!r}")
     # One progress token per tool call: keep its values increasing across items (#245).
     progress = MonotonicProgress.wrap(on_progress)
     batch = BatchOutcome(budget=budget)
