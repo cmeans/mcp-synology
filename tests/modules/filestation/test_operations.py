@@ -2926,12 +2926,12 @@ class TestCopyMoveHandoff:
         records = TaskRecords()
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
-        real = operations._finish_copy_move
+        real = operations._copy_move_result
 
-        async def skips_a(client: DsmClient, path: str, taskid: str, **kwargs: Any) -> Any:
-            return (0, True) if path == "/s/a" else await real(client, path, taskid, **kwargs)
+        def skips_a(status: Any, path: str, *args: Any, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else real(status, path, *args, **kwargs)
 
-        monkeypatch.setattr(operations, "_finish_copy_move", skips_a)
+        monkeypatch.setattr(operations, "_copy_move_result", skips_a)
         await copy_files(
             mock_client, paths=["/s/a", "/s/b"], dest_folder="/s/dst", timeout=1, records=records
         )
@@ -2989,12 +2989,12 @@ class TestCopyMoveHandoff:
 
         calls: list[dict[str, str]] = []
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm(calls, finish={"a"}))
-        real = operations._finish_copy_move
+        real = operations._copy_move_result
 
-        async def skips_a(client: DsmClient, path: str, taskid: str, **kwargs: Any) -> Any:
-            return (0, True) if path == "/s/a" else await real(client, path, taskid, **kwargs)
+        def skips_a(status: Any, path: str, *args: Any, **kwargs: Any) -> Any:
+            return (0, True) if path == "/s/a" else real(status, path, *args, **kwargs)
 
-        monkeypatch.setattr(operations, "_finish_copy_move", skips_a)
+        monkeypatch.setattr(operations, "_copy_move_result", skips_a)
         result = await copy_files(
             mock_client, paths=["/s/a", "/s/b", "/s/x/a"], dest_folder="/s/dst", timeout=1
         )

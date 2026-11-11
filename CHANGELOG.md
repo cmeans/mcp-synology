@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **A scenario matrix for File Station's multi-path tasks** (#678, #512): `tests/modules/filestation/test_batch.py` runs `delete_files`, `copy_files`, `move_files` and `restore_from_recycle_bin` (to one folder and to the items' original folders) against a scripted DSM (`fake_dsm.py`), for each way an item's task can end (finished, a DSM error or no answer on the start, a finished task's error, a DSM error on a status read, a stalled, unanswered, proxied or lost status read, the wait running out, a cancel, a task already running, a skip, a later path refused because another task lands the same name there, #587) at the first, middle and last of three paths. Each cell checks one outcome per path, a handle and a task record exactly when a task may still run, stops only on cancellation or a DSM error, no request after a hand-off, the hand-off's stated reason, and that the reply names what was done and what wasn't started; the cells today's replies get wrong are listed with the issue that fixes them (#482, #452). A structural test fails on a poll of these tasks outside the runner, a stop or a task record written outside it and `tasks.py`, a start, status read or stop sent there, directly or through `task_request` with the method written out, for any API but Search's and DirSize's named in full (so an API in a variable counts), and those functions imported under another name or reached through `getattr`.
+
+### Changed
+
+- **One runner for File Station's multi-path tasks** (#678, #512, the first of three steps): the per-path loop of `delete_files`, `copy_files`, `move_files` and `restore_from_recycle_bin` (start each path's DSM task, wait, hand off with a handle and a task record, list what wasn't started) is now `filestation/batch.py`, with each tool's checks and replies in an adapter. A restore to several original folders runs as one batch instead of one copy per item. Replies and behavior are unchanged, except that a Delete task's ID is always sent back as text, as CopyMove's already was (DSM sends text): the existing tests pass as they were, apart from two that now patch the finished-status reader instead of a removed helper.
+
 ## 0.11.0 (2026-11-10)
 
 **Security release:** a password saved in the OS keyring could be sent to a different NAS. Keyring entries were found by instance ID alone, and an instance ID derived from the host is only its first part, so `nas.home` and `nas.office`, or two NAS behind one name on different ports, shared one entry (#559, #570; closes #536, #562). 0.11.0 ties each keyring entry to its host and port and refuses any other before a credential is sent. Anyone who keeps mcp-synology credentials in the keyring should upgrade.

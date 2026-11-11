@@ -874,8 +874,8 @@ def tracked_landings(client: DsmClient) -> Iterator[Callable[[RunningTask], None
     function that records a task, to call with the destination's lock held."""
     outer = _TRACKING.get()
     if outer is not None:
-        # Inside a call that tracks already (a restore to several places runs one per item):
-        # its tasks stay until that call returns.
+        # Inside a call that tracks already (a restore records its landings before its batch
+        # runs): its tasks stay until that call returns.
         yield outer[0]
         return
     landings = _LANDINGS.setdefault(client, {})
