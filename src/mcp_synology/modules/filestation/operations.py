@@ -133,7 +133,8 @@ async def create_folder(
     lines = [format_status(f"Created {len(folders):,} folder(s):")]
     for f in folders:
         path = f.get("path", "")
-        lines.append(f"  \U0001f4c1 {path}")
+        # A reply naming what a call acted on quotes what wouldn't show (#519, #688).
+        lines.append(f"  \U0001f4c1 {shown(path)}")
 
     return "\n".join(lines)
 
@@ -220,11 +221,10 @@ async def rename(
     files = data.get("files", [])
     if files:
         new_path = files[0].get("path", "")
-        old_dir = "/".join(normalized.split("/")[:-1])
-        old_name = normalized.split("/")[-1]
-        return format_status(f"Renamed:\n  {old_dir}/{old_name} \u2192 {new_path}")
+        # Quoted when padding or a hidden character wouldn't show (#519, #688).
+        return format_status(f"Renamed:\n  {shown(normalized)} \u2192 {shown(new_path)}")
 
-    return format_status(f"Renamed {normalized} to {new_name}")
+    return format_status(f"Renamed {shown(normalized)} to {shown(new_name)}")
 
 
 async def copy_files(

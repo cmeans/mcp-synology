@@ -156,7 +156,7 @@ async def upload_file(
     def already_exists() -> NoReturn:
         error_response(
             ErrorCode.ALREADY_EXISTS,
-            f"Upload failed: File '{effective_name}' already exists in {shown(dest)}.",
+            f"Upload failed: File {shown(effective_name)} already exists in {shown(dest)}.",
             retryable=False,
             # The conflict is the file name, passed or not, as download_file reports it (#189).
             param="filename",
@@ -211,16 +211,21 @@ async def upload_file(
     if progress_callback:
         await progress_callback(file_size, file_size)
 
-    result = format_status(f"Uploaded {effective_name} ({format_size(file_size)}) to {dest}/")
+    # Quoted when padding or a hidden character wouldn't show (#519, #688).
+    result = format_status(
+        f"Uploaded {shown(effective_name)} ({format_size(file_size)}) to {shown(dest)}/"
+    )
     if replaced:
         # Whether DSM's Upload keeps the old file in the recycle bin isn't probed; say what
         # copy, move and restore say (QA round 1 on #623).
         result += (
-            f"\n    It replaced the {effective_name} that was there. A file replaced this way "
-            "may not be in the recycle bin."
+            f"\n    It replaced the {shown(effective_name)} that was there. A file replaced this "
+            "way may not be in the recycle bin."
         )
     elif unchecked:
-        result += f"\n    Couldn't check whether a file named {effective_name} was already there."
+        result += (
+            f"\n    Couldn't check whether a file named {shown(effective_name)} was already there."
+        )
 
     if file_size >= _LARGE_FILE_THRESHOLD:
         result += (
@@ -356,7 +361,7 @@ async def download_file(
         # A share's top level: DSM can't send it (502, or 404 as admin; vdsm 7.1, 7.2.2).
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"Download failed: {nas_path} is a whole shared folder, which DSM can't send "
+            f"Download failed: {shown(nas_path)} is a whole shared folder, which DSM can't send "
             "as one download.",
             retryable=False,
             param="path",
@@ -495,14 +500,17 @@ async def download_file(
                 "Use the filename parameter to specify a compatible name."
             ),
         )
+    # The local file's name quoted as the NAS name is (#688); its folder as the OS writes it
+    # (shown() reads '/' as the only separator, and repr doubles a Windows backslash).
+    written = os.path.join(str(dest_file.parent), shown(dest_file.name))
     if is_folder:
         result = format_status(
-            f"Downloaded the folder {nas_path} as a ZIP archive of it "
-            f"({format_size(bytes_written)}) to {dest_file}"
+            f"Downloaded the folder {shown(nas_path)} as a ZIP archive of it "
+            f"({format_size(bytes_written)}) to {written}"
         )
     else:
         result = format_status(
-            f"Downloaded {effective_name} ({format_size(bytes_written)}) to {dest_file}"
+            f"Downloaded {shown(effective_name)} ({format_size(bytes_written)}) to {written}"
         )
 
     # The server log, too, says which local file was written and whether one was replaced
@@ -510,11 +518,11 @@ async def download_file(
     logger.debug("Downloaded %s to %s (replaced a file there: %s)", nas_path, dest_file, replaced)
     if replaced_link:
         result += (
-            f"\n    It replaced the symlink {dest_file.name} that was there (its target is "
+            f"\n    It replaced the symlink {shown(dest_file.name)} that was there (its target is "
             "untouched)."
         )
     elif replaced:
-        result += f"\n    It replaced the {dest_file.name} that was there."
+        result += f"\n    It replaced the {shown(dest_file.name)} that was there."
 
     if bytes_written >= _LARGE_FILE_THRESHOLD:
         result += (

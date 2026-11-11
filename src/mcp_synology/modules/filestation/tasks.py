@@ -1069,7 +1069,8 @@ def _where_to_look(gerund: str, dest: str, sources: list[str]) -> str:
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     """``deleting /s/a`` or ``moving /s/b to /s/d/``."""
     where = ", ".join(map(shown, paths)) or "(path unknown)"
-    to = f" to {shown(f'{dest}/')}" if dest and kind != "delete" else ""
+    # The folder quoted, then its slash, as the tools' summaries write it (#688).
+    to = f" to {shown(dest)}/" if dest and kind != "delete" else ""
     return f"{_GERUND[kind]} {where}{to}"
 
 
@@ -1134,7 +1135,7 @@ async def _list_reply(client: DsmClient, records: TaskRecords) -> str:
     for task in tasks:
         start = taskid_started(task.handle.taskid)
         started = format_timestamp(start) if start is not None else "unknown"
-        to = f" -> {shown(f'{task.dest}/')}" if task.dest and task.handle.kind != "delete" else ""
+        to = f" -> {shown(task.dest)}/" if task.dest and task.handle.kind != "delete" else ""
         rows.append(
             [
                 f"`{task.handle}`",

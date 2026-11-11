@@ -196,7 +196,7 @@ async def search_files(
     filters = [f"pattern: {pattern}"] if pattern else []
     if exclude_pattern:
         filters.append(f"excluding: {exclude_pattern}")
-    title = f"Search results in {normalized}"
+    title = f"Search results in {shown(normalized)}"
     if filters:
         title += f" ({', '.join(filters)})"
 

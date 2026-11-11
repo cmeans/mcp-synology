@@ -219,7 +219,7 @@ def _format_single_info(file_data: dict[str, Any]) -> str:
     if perm.get("posix"):
         pairs.append(("Permissions", str(perm["posix"])))
 
-    return format_key_value(pairs, title=f"File Info: {path}")
+    return format_key_value(pairs, title=f"File Info: {shown(path)}")
 
 
 def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str, int]]) -> None:
@@ -376,7 +376,7 @@ async def get_dir_size(
                         ("Files", f"{num_file:,}"),
                         ("Directories", f"{num_dir:,}"),
                     ],
-                    title=f"Directory Size: {normalized}",
+                    title=f"Directory Size: {shown(normalized)}",
                 )
                 break
 

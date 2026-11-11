@@ -1337,6 +1337,79 @@ class TestPaddedPathsAreShownQuoted:
         )
         assert f"(skipped items are still in {'/video/a '!r}/)" in text, text
 
+    async def test_rename_reply(self) -> None:
+        """#688: rename's reply quotes a padded source (a new name can't be padded)."""
+        from mcp_synology.modules.filestation.operations import rename
+
+        client = _FakeClient({PADDED}, methods={"rename": {"files": [{"path": "/video/x/bar"}]}})
+        text = await rename(client, path=PADDED, new_name="bar")  # type: ignore[arg-type]
+        assert f"{QUOTED} \u2192 /video/x/bar" in text, text
+
+    async def test_rename_reply_padded_parent(self) -> None:
+        """#688: a padded parent pads the new path too, so it's quoted as well."""
+        from mcp_synology.modules.filestation.operations import rename
+
+        client = _FakeClient(
+            {"/video/x /foo"}, methods={"rename": {"files": [{"path": "/video/x /bar"}]}}
+        )
+        text = await rename(client, path="/video/x /foo", new_name="bar")  # type: ignore[arg-type]
+        assert f"{'/video/x /foo'!r} \u2192 {'/video/x /bar'!r}" in text, text
+
+    async def test_rename_reply_without_dsms_path(self) -> None:
+        """#688: the fallback line, when DSM's reply names no path, quotes both too."""
+        from mcp_synology.modules.filestation.operations import rename
+
+        client = _FakeClient({PADDED}, methods={"rename": {"files": []}})
+        name = "b\tr"
+        text = await rename(client, path=PADDED, new_name=name)  # type: ignore[arg-type]
+        assert f"Renamed {QUOTED} to {name!r}" in text, text
+
+    async def test_get_dir_size_title(self) -> None:
+        """#688: get_dir_size's title names the folder it measured, quoted when padded."""
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        client = _FakeClient(
+            {PADDED},
+            methods={
+                "start": {"taskid": "t1"},
+                "status": {"finished": True, "num_dir": 1, "num_file": 0, "total_size": 0},
+            },
+        )
+        text = await get_dir_size(client, path=PADDED)  # type: ignore[arg-type]
+        assert f"Directory Size: {QUOTED}" in text, text
+
+    async def test_list_files_title(self) -> None:
+        """#690 (pre-QA r3): a listing's title names the folder the caller asked about."""
+        from mcp_synology.modules.filestation.listing import list_files
+
+        client = _FakeClient({PADDED}, methods={"list": {"files": [], "total": 0, "offset": 0}})
+        text = await list_files(client, path=PADDED)  # type: ignore[arg-type]
+        assert f"Contents of {QUOTED} (0 items)" in text, text
+
+    async def test_list_files_title_with_items(self) -> None:
+        """#690: the title of a listing with items quotes the folder too."""
+        from mcp_synology.modules.filestation.listing import list_files
+
+        listed = {"files": [{"name": "a", "path": f"{PADDED}/a", "isdir": False}], "total": 1}
+        client = _FakeClient({PADDED}, methods={"list": {**listed, "offset": 0}})
+        text = await list_files(client, path=PADDED)  # type: ignore[arg-type]
+        assert f"Contents of {QUOTED} (1 items)" in text, text
+
+    async def test_get_file_info_title(self) -> None:
+        """#690 (pre-QA r3): get_file_info's title names the path asked about, quoted."""
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        text = await get_file_info(_FakeClient({PADDED}), paths=[PADDED])  # type: ignore[arg-type, list-item]
+        assert f"File Info: {QUOTED}" in text, text
+
+    async def test_create_folder_reply(self) -> None:
+        """#688: create_folder's reply quotes a padded folder DSM made."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        client = _FakeClient(methods={"create": {"folders": [{"path": "/video/x/new "}]}})
+        text = await create_folder(client, paths=["/video/x/new "])  # type: ignore[arg-type,list-item]
+        assert f"  \U0001f4c1 {'/video/x/new '!r}" in text.splitlines(), text
+
     def test_partial_delete_lists(self) -> None:
         from mcp_synology.core.formatting import error_response
 

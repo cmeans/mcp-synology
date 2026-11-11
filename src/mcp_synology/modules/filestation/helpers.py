@@ -656,9 +656,13 @@ def shown(path: str) -> str:
     error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible), and so does a reply
     naming what a call acted on, successful or not: a delete's, copy's, move's or restore's
-    summary and its skipped list (#519), since those are the paths a model will act on next.
+    summary and its skipped list (#519), a rename's, upload's, download's or create_folder's
+    reply and get_dir_size's title (#688), since those are the paths a model will act on next.
+    A folder written with its trailing slash is ``{shown(folder)}/``: the folder quoted, then
+    the slash (#688).
     Listings of what's on the NAS (list_files, search_files, list_recycle_bin, get_file_info)
-    show names as DSM does, escaped by the client (#604)."""
+    show the names DSM returns as DSM does, escaped by the client (#604); their titles, which
+    name the path the caller asked about, use ``shown`` (#690)."""
     for part in path.split("/"):
         if not part:
             continue

@@ -250,6 +250,77 @@ class TestUploadFile:
         assert "[+]" in result
         assert "test.txt" in result
 
+    @respx.mock
+    async def test_a_padded_destination_is_quoted(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688: the reply names the folder it uploaded to, quoted when padded (#519's rule)."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        missing = {"files": [{"code": 408, "path": "/v /test.txt"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": missing})
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        result = await upload_file(mock_client, local_path=str(local_file), dest_folder="/v ")
+        assert result.startswith(f"[+] Uploaded test.txt (7 B) to {'/v '!r}/"), result
+
+    @respx.mock
+    async def test_a_name_with_a_tab_is_quoted_in_every_line(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA): a tab is allowed in a name, and the reply's lines all quote it."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        there = {"files": [{"isdir": False, "path": "/v/a\tb.txt"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": there})
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        name = "a\tb.txt"
+        result = await upload_file(
+            mock_client,
+            local_path=str(local_file),
+            dest_folder="/v",
+            filename=name,
+            overwrite=True,
+        )
+        assert result.startswith(f"[+] Uploaded {name!r} (7 B) to /v/"), result
+        assert f"It replaced the {name!r} that was there." in result, result
+        assert "\t" not in result, result
+
+    @respx.mock
+    async def test_couldnt_check_quotes_a_name_with_a_tab(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA): the note for a lookup that failed names the file as line 1 does."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        name = "a\tb.txt"
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        result = await upload_file(
+            mock_client, local_path=str(local_file), dest_folder="/v", filename=name, overwrite=True
+        )
+        assert f"Couldn't check whether a file named {name!r} was already there." in result, result
+
+    @respx.mock
+    async def test_already_exists_quotes_a_name_with_a_tab(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA): the refusal names the file as the reply would, quoted."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        name = "a\tb.txt"
+        # DSM skips an upload whose name is there (overwrite=false): blSkip.
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"blSkip": True}}
+        )
+        with pytest.raises(ToolError) as refused:
+            await upload_file(
+                mock_client, local_path=str(local_file), dest_folder="/v", filename=name
+            )
+        message = json.loads(str(refused.value))["error"]["message"]
+        assert message == f"Upload failed: File {name!r} already exists in /v.", message
+
     @pytest.mark.parametrize(
         ("there", "said"),
         [(True, True), (False, False), (None, False), ("folder", False)],
@@ -672,6 +743,46 @@ class TestDownloadFile:
         assert "Downloaded the folder /video/shows as a ZIP archive of it" in out
         assert str(tmp_path / "shows.zip") in out
         assert out.splitlines()[-1] == DOWNLOADED_CONTENTS_ARE_DATA  # #640
+
+    @respx.mock
+    async def test_a_padded_folder_is_quoted(self, mock_client: DsmClient, tmp_path: Path) -> None:
+        """#688: the reply names the folder it downloaded, quoted when padded (#519's rule)."""
+        self._route(self._folder_info("/video/shows "), httpx.Response(200, content=b"PK\x03\x04"))
+        out = await download_file(mock_client, path="/video/shows ", dest_folder=str(tmp_path))
+        assert f"Downloaded the folder {'/video/shows '!r} as a ZIP archive of it" in out, out
+
+    @respx.mock
+    async def test_a_name_with_a_tab_is_quoted_in_every_line(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA r2): the NAS name, the local file's name and the replaced line quote a
+        tab alike; the local folder stays as the OS writes it."""
+        name = "a\tb.txt"
+        (tmp_path / name).write_text("old")
+        file_info = {"path": f"/video/{name}", "name": name, "isdir": False}
+        self._route(
+            httpx.Response(200, json={"success": True, "data": {"files": [file_info]}}),
+            httpx.Response(200, content=b"new"),
+        )
+        out = await download_file(
+            mock_client, path=f"/video/{name}", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert f"Downloaded {name!r} (3 B) to {tmp_path}{os.sep}{name!r}" in out, out
+        assert f"It replaced the {name!r} that was there." in out, out
+        assert "\t" not in out, out
+
+    @respx.mock
+    async def test_a_padded_share_root_is_quoted(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA r2): the whole-shared-folder refusal quotes a padded share too."""
+        self._route(self._folder_info("/video "), httpx.Response(502))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video ", dest_folder=str(tmp_path))
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.startswith(f"Download failed: {'/video '!r} is a whole shared folder"), (
+            message
+        )
 
     @respx.mock
     async def test_download_folder_name_too_long_with_zip(
@@ -1372,6 +1483,26 @@ class TestDownloadFile:
         assert (tmp_path / "real.txt").read_bytes() == b"keep"
         assert not (tmp_path / "report.txt").is_symlink()
         assert (tmp_path / "report.txt").read_bytes() == b"new"
+
+    @respx.mock
+    async def test_a_replaced_symlink_with_a_tab_in_its_name_is_quoted(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """QA round 1 on #690: the replaced-symlink line quotes the name as line 1 does."""
+        name = "a\tb.txt"
+        (tmp_path / "real.txt").write_bytes(b"keep")
+        (tmp_path / name).symlink_to(tmp_path / "real.txt")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            content=b"new", headers={"content-type": "application/octet-stream"}
+        )
+        result = await download_file(
+            mock_client, path=f"/docs/{name}", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert (
+            f"    It replaced the symlink {name!r} that was there (its target is untouched)."
+            in result.splitlines()
+        ), result
+        assert "\t" not in result, result
 
     @pytest.mark.parametrize("overwrite", [False, True])
     @respx.mock

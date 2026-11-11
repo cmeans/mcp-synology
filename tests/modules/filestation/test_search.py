@@ -332,6 +332,24 @@ class TestSearchFiles:
         assert "a.mkv" in result and "a.torrent" not in result
 
     @respx.mock
+    async def test_heading_quotes_a_padded_folder(self, mock_client: DsmClient) -> None:
+        """#690 (pre-QA r3): the heading names the folder the caller asked about, quoted when
+        padded (`shown`)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = dict(request.url.params).get("method")
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "s-8"}})
+            if method == "list":
+                done = {"files": [], "finished": True, "total": 0}
+                return httpx.Response(200, json={"success": True, "data": done})
+            return httpx.Response(200, json={"success": True, "data": {}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        result = await search_files(mock_client, folder_path="/video ", pattern="x")  # type: ignore[arg-type]
+        assert result.splitlines()[0].startswith(f"Search results in {'/video '!r}"), result
+
+    @respx.mock
     async def test_search_size_dash_when_not_requested(self, mock_client: DsmClient) -> None:
         """QA on #146: a file DSM sends without "size" must not show as "0 B"."""
 
