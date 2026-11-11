@@ -190,7 +190,9 @@ def test_check_warns(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     result = CliRunner().invoke(main, ["check", "-c", str(config)])
-    assert "Warning: the server name setup suggests, 'synology-diskstation'" in result.output
+    # On stderr, with the config's other warnings.
+    assert "Warning: the server name setup suggests, 'synology-diskstation'" in result.stderr
+    assert "the server name setup suggests" not in result.stdout
 
 
 def test_setup_warns_under_its_snippet(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:

@@ -1346,11 +1346,11 @@ def suggested_server_name(config: AppConfig) -> str:
     return f"synology-{config.display_name}"
 
 
-def server_name_problem(config: AppConfig) -> str | None:
+def server_name_problem(config: AppConfig, plan: _ModulePlan | None = None) -> str | None:
     """A warning when the suggested server name leaves a tool's full name in Claude Desktop
     over Claude's 64-character limit, which fails the conversation (#682); None when it fits.
     Counts only the tools this config serves."""
-    tools = [tool for *_, allowed in _module_plan(config) for tool in allowed]
+    tools = [tool for *_, allowed in (plan or _module_plan(config)) for tool in allowed]
     if not tools:
         return None
     name = suggested_server_name(config)
@@ -1613,8 +1613,6 @@ def create_server(config: AppConfig) -> MCPServer:
     for notice in _unknown_keys(config):
         logger.warning("%s", notice)
     # Logged by serve too: the client's MCP log is where a broken conversation sends people.
-    if name_problem := server_name_problem(config):
-        logger.warning("%s", name_problem)
     # One read. An ERROR: the model gets other instructions than the config names, and that
     # must show at `logging.level: error` too.
     instructions_text, instructions_problem = _read_instructions_file(config)
@@ -1640,6 +1638,10 @@ def create_server(config: AppConfig) -> MCPServer:
     # Resolve each enabled module's tools first, so the instructions can include only the
     # enabled modules' sections and say which tools this connection withholds.
     plan = _module_plan(config)
+    # Logged by serve too: the client's MCP log is where a broken conversation sends people.
+    # The same plan, so a disabled module's DEBUG line is logged once.
+    if name_problem := server_name_problem(config, plan):
+        logger.warning("%s", name_problem)
 
     # The built-in instructions: the core file, then each enabled module's own section, and
     # its WRITE-tool guidance when those tools are registered (#318).
