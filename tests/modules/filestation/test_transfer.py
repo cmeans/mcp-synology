@@ -286,6 +286,23 @@ class TestUploadFile:
         assert "\t" not in result, result
 
     @respx.mock
+    async def test_couldnt_check_quotes_a_name_with_a_tab(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA): the note for a lookup that failed names the file as line 1 does."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        name = "a\tb.txt"
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 119}}
+        )
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(json={"success": True, "data": {}})
+        result = await upload_file(
+            mock_client, local_path=str(local_file), dest_folder="/v", filename=name, overwrite=True
+        )
+        assert f"Couldn't check whether a file named {name!r} was already there." in result, result
+
+    @respx.mock
     async def test_already_exists_quotes_a_name_with_a_tab(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
