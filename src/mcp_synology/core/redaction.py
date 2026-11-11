@@ -8,7 +8,11 @@ here first.
 
 Rules, chosen so the host stays visible and nothing secret-shaped survives:
 
-- userinfo becomes ``***@``
+- userinfo becomes ``***@``: found by a scan after each ``://`` (a 256-character window on one line,
+  ending at the next ``://``), ending at the first ``@`` followed by a whole host, else the last
+  ``@`` before a host, so a password holding a space, ``/``, ``#`` or ``@`` is masked
+- a host followed by text a host can't hold (``c&token=…``) keeps the host and masks the rest,
+  and ``&key=value`` in a path is masked as a query item (#466)
 - every query value becomes ``***`` (keys are kept); a bare query item becomes ``***``
 - path parameters (``;key=value``) are masked like query items
 - a token inside a path segment becomes ``***``: a run of ``[A-Za-z0-9_-]`` holding
@@ -16,6 +20,8 @@ Rules, chosen so the host stays visible and nothing secret-shaped survives:
   (``<passkey>.torrent`` becomes ``***.torrent``), or a UUID. Names made of short
   words, like ``announce`` or ``ubuntu-24-04-desktop-amd64``, are kept
 - the fragment is dropped
+- a wrapped link (``thunder:``, ``flashget:``, ``qqdl:`` with a base64 body) is masked whole; an
+  opaque link's query (``ed2k:foo?token=…``, ``ed2k:foo&token=…``) is masked
 - a magnet keeps only ``xt`` / ``dn`` / ``xl`` / ``kt`` as they are, redacts its
   URL-valued parameters in turn, and masks every other value. A tracker URL
   pasted unencoded splits on ``&``, so its own query items land at the top level
