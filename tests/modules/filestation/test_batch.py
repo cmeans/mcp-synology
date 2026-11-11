@@ -1302,3 +1302,30 @@ async def test_a_copy_cut_short_bounds_its_group_summary(
     text = await asyncio.wait_for(tool.call(mock_client, TaskRecords()), 5)
     assert "ran out after 1 of 3" in text, text
     assert "skipped in whole or in part" in text, text
+
+
+async def test_the_out_of_time_line_quotes_a_comma_name(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+) -> None:
+    """#685 (pre-QA): the out-of-time reply's Not started list quotes a name holding ", ", so
+    "Run them in another call" can't read it as two paths."""
+    FakeDsm({}).mount(respx_mock)
+    comma = "/s/a, photos/family"
+    adapter = operations.DeleteAdapter(
+        mock_client,
+        ["/s/d0", comma],
+        paths_arg=["/s/d0", comma],
+        recursive=True,
+        recycle_bin_status={"s": True},
+    )
+    outcome = BatchOutcome(
+        items=[
+            batch.ItemOutcome(batch.Item("/s/d0", None), "done"),
+            batch.ItemOutcome(batch.Item(comma, None), "not_started"),
+        ],
+        out_of_time=WAIT,
+    )
+    text = await batch.batch_reply(adapter, outcome)
+    assert text.rstrip().splitlines()[-1] == f"Not started: {comma!r}. Run it in another call.", (
+        text
+    )

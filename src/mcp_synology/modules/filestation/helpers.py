@@ -648,13 +648,14 @@ def shown(path: str) -> str:
     """``path`` for a message: as is, or quoted (`_escaped_repr`) when a part has whitespace
     at its start or end, a character that doesn't print (a tab, a no-break space) or one
     `invisible_problem` refuses, so a stray space or a hidden character is visible once
-    paths are taken exactly (#488, #489, #515).
+    paths are taken exactly (#488, #489, #515), or when the path holds ``", "`` (#685, below).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
     error or list that names a path the server checked or got
-    from DSM uses ``shown`` (plain unless something would be invisible), and so does a reply
+    from DSM uses ``shown`` (plain unless something would be invisible or the path holds
+    ``", "``), and so does a reply
     naming what a call acted on, successful or not: a delete's, copy's, move's or restore's
     summary and its skipped list (#519), a rename's, upload's, download's or create_folder's
     reply and get_dir_size's title (#688), since those are the paths a model will act on next.
