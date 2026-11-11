@@ -97,42 +97,49 @@ _NETLOC_ITEM = re.compile(r"([&;])([^\s=&?;#/]+)=[^\s&;#/]*")
 # Started where a URL scheme can start (not after a scheme character, as `redact_urls` reads
 # it), the body standard or URL-safe base64, ending at anything else.
 _WRAPPED_IN_TEXT = re.compile(
-    r"""(?i)(?<![A-Za-z0-9+])(thunder|flashget|qqdl):(//)[A-Za-z0-9+=\-_][A-Za-z0-9+/=\-_]*"""
+    r"""(?i)(?<![A-Za-z0-9+])(thunder|flashget|qqdl)(://|%3A%2F%2F)"""
+    r"""[A-Za-z0-9+=\-_%][A-Za-z0-9+/=\-_%]*"""
 )
 # A wrapped link's body: base64, not starting with `/` (so `//` is the separator, never body).
-_WRAPPED_BODY = re.compile(r"//[A-Za-z0-9+=\-_][A-Za-z0-9+/=\-_]*")
+_WRAPPED_BODY = re.compile(r"//[A-Za-z0-9+=\-_%][A-Za-z0-9+/=\-_%]*")
 
 # Credential parameters, as a query or form item after `?`, `&` or `;`, or as a JSON member.
 # The keys DSM and this server use for a password, a session, a 2FA code or device, and the
 # passkeys private trackers put in a URL. Case is ignored.
 _CREDENTIAL_KEYS = (
-    "passwd|password|pwd|_sid|sid|synotoken|otp_code|device_id|device_name|passkey|authkey|"
+    "passwd|password|pwd|_sid|sid|synotoken|otp_code|device_id|passkey|authkey|"
     "torrent_pass|token|access_token|api_key|api-key|apikey|did"
 )
 # A key may carry a prefix ending in `_` (`refresh_token`, `user_password`), never letters
 # alone (`insid`, `passwordless` are other words).
-_KEY = rf"(?:[A-Za-z0-9]{{1,32}}[_-]){{0,3}}(?:{_CREDENTIAL_KEYS})"
+# A paging cursor (`page_token`, `next_token`) is no credential: a model told it's `***` would
+# page wrongly (QA round 1 on #680).
+_PAGING = r"(?!(?:page|next|continuation|cursor)[_-])"
+_KEY = rf"{_PAGING}(?:[A-Za-z0-9]{{1,32}}[_-]){{0,3}}(?:{_CREDENTIAL_KEYS})"
 # Only where query or form syntax puts an item: after `?`, `&` or `;`. A bare `sid=1.pdf` or
 # `/share/token=abc/file.txt` is a name (decided in pre-QA r6 on #514); a logged form body is
 # masked by parameter name (`client._log_safe`). A prefix joins with `_` or `-` (`access-token`).
-_CREDENTIAL_PARAM = re.compile(
-    rf"""(?i)(?<=[?&;])({_KEY}=)("[^"\n]{{0,4096}}"?|'[^'\n]{{0,4096}}'?|[^\s&;#"'<>]+)"""
-)
+_CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<=[?&;])({_KEY}=)("[^"\n]*"?|'[^'\n]*'?|[^\s&;#"'<>]+)""")
 # DSM's CSRF header, as a log line or an error quotes it.
-_CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
-# The session as DSM's `id` cookie (#176), in a `Cookie:` header a log line or error quotes.
-_SESSION_COOKIE = re.compile(
-    r"(?i)(cookie:(?:(?!cookie:)[^\n]){0,256}?(?<![A-Za-z0-9_])id=)[^;\s]+"
+_CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,64})\S+")
+# A cookie header, as a log line, a dict repr or JSON writes it (`Cookie: …`, `{'Cookie': '…'}`,
+# `"cookie": "…"`): DSM's session is its `id` cookie (#176), and every credential key among the
+# `;`-separated items is masked (QA round 1 on #680).
+_COOKIE = re.compile(r"""(?i)(cookie['"]?\s{0,64}[:=]\s{0,64}['"]?)([^\n'"]{0,4096})""")
+_COOKIE_ITEM = re.compile(rf"(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)([^;\s]*)")
+# A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`).
+_CREDENTIAL_JSON_ESCAPED = re.compile(
+    rf"""(?i)(\\"{_KEY}\\"\s{{0,64}}:\s{{0,64}}\\")((?:[^"\\\n]|\\[^"\n])*)"""
 )
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
 # A number is masked too (`{"otp_code": 123456}`). Not a bare `key: value` in YAML or prose:
 # `password: try again` is a sentence as often as a secret.
 _CREDENTIAL_JSON = re.compile(
-    rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}})("(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+    rf"""(?i)("{_KEY}"\s{{0,64}}:\s{{0,64}})("(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
 )
 _CREDENTIAL_REPR = re.compile(
-    rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}}b?)('(?:[^'\\\n]|\\.)*'?|"(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+    rf"""(?i)('{_KEY}'\s{{0,64}}:\s{{0,64}}b?)('(?:[^'\\\n]|\\.)*'?|"(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
 )
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
@@ -143,7 +150,10 @@ _USERINFO_TRIES = 8
 _HOST_START = re.compile(r"[A-Za-z0-9\[]")
 # An authority with userinfo left in it: `://`, then anything but a path, query, fragment or
 # backslash, to its last `@` (the greedy class stops at the first of those).
-_AUTHORITY_AT = re.compile(r"(://)[^/?#\\\s]*@")
+_AUTHORITY = re.compile(r"(://)([^/?#\s]*)")
+# What JSON writes for one character: `\uXXXX`, `\\`, `\/` (`json.dumps` of a URI list writes
+# `jörg` as `j\u00f6rg`). Any other backslash before an `@` makes the host ambiguous.
+_JSON_ESCAPE = re.compile(r"\\(?:u[0-9A-Fa-f]{4}|[\\/])")
 _PORT_THEN_PATH = re.compile(r"\d*[/\\]")
 
 
@@ -165,9 +175,8 @@ def _is_userinfo(span: str) -> bool:
     """
     user, colon, rest = span.partition(":")
     if not colon:
-        return not any(c in "/?#[]\\" for c in span)
-    # A backslash reads as `/` to a browser (WHATWG): `https://evil\\@nas` is evil's host.
-    if any(c in "/?#[]\\" for c in user) or (len(user) == 1 and rest[:1] in ("/", "\\")):
+        return not any(c in "/?#[]" for c in span)
+    if any(c in "/?#[]" for c in user) or (len(user) == 1 and rest[:1] in ("/", "\\")):
         return False
     return _PORT_THEN_PATH.match(rest) is None
 
@@ -196,6 +205,16 @@ def _userinfo_masked(url: str) -> str:
         begin = start + 3
         # A window of `_USERINFO_WINDOW` characters, ending before the next `://`.
         window = url[begin : begin + _USERINFO_WINDOW].partition("://")[0]
+        authority = _AUTHORITY.match(url, start)
+        if authority and _ambiguous(authority.group(2)):
+            # A backslash before the `@`: a browser reads it as `/` (WHATWG), so which part is the
+            # host isn't clear. The whole authority is masked, never left as it is (QA round 1
+            # on #680: `CORP\\jdoe:pw@ftp.example` was shown).
+            out.append(url[pos:begin])
+            out.append(MASK)
+            pos = authority.end()
+            start = url.find("://", pos)
+            continue
         end = _userinfo_end(window)
         if end is not None:
             out.append(url[pos:begin])
@@ -229,9 +248,15 @@ def _userinfo_end(window: str) -> int | None:
     return None
 
 
+def _ambiguous(authority: str) -> bool:
+    """Whether a backslash that isn't a JSON escape comes before ``authority``'s last ``@``."""
+    user, at, _ = authority.rpartition("@")
+    return bool(at) and "\\" in _JSON_ESCAPE.sub("", user)
+
+
 def _mask_wrapped(text: str) -> str:
     """``text`` with every ``thunder://``, ``flashget://`` or ``qqdl://`` link masked whole."""
-    return _WRAPPED_IN_TEXT.sub(lambda m: f"{m.group(1)}:{m.group(2) or ''}{MASK}", text)
+    return _WRAPPED_IN_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}", text)
 
 
 def redact_secrets(text: str) -> str:
@@ -251,7 +276,13 @@ def redact_secrets(text: str) -> str:
         lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
     )
     text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
-    text = _SESSION_COOKIE.sub(lambda m: f"{m.group(1)}{MASK}", text)
+    text = _COOKIE.sub(
+        lambda m: (
+            m.group(1) + _COOKIE_ITEM.sub(lambda i: f"{i.group(1)}{i.group(2)}{MASK}", m.group(2))
+        ),
+        text,
+    )
+    text = _CREDENTIAL_JSON_ESCAPED.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
     return _CREDENTIAL_REPR.sub(
         lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text
@@ -260,8 +291,17 @@ def redact_secrets(text: str) -> str:
 
 def _mask_authority(url: str) -> str:
     """``url`` with any userinfo still in an authority masked: each ``://``'s authority up to its
-    first ``/``, ``?``, ``#`` or backslash, to its last ``@`` (a URL nested in a query too)."""
-    return _AUTHORITY_AT.sub(lambda m: f"{m.group(1)}{MASK}@", url)
+    first ``/``, ``?`` or ``#``, to its last ``@`` (a URL nested in a query too). An ambiguous
+    authority (`_ambiguous`) was masked whole by `_mask_userinfo` already."""
+
+    def masked(m: re.Match[str]) -> str:
+        authority = m.group(2)
+        # Even after an earlier mask (`***@ss,1@nas`): only what follows the last `@` stays.
+        if "@" not in authority:
+            return m.group(0)
+        return f"{m.group(1)}{MASK}@{authority.rpartition('@')[2]}"
+
+    return _AUTHORITY.sub(masked, url)
 
 
 def _masked_value(value: str, quote: str) -> str:
@@ -348,8 +388,8 @@ def redact_url(url: str) -> str:
     netloc = parts.netloc
     # Not when a backslash comes before the `@`: a browser reads `https://evil\\@nas` as evil's
     # host, so masking it would show `nas` as the host (WHATWG).
-    if "@" in netloc and "\\" not in netloc.rpartition("@")[0]:
-        netloc = f"{MASK}@{netloc.rpartition('@')[2]}"
+    if "@" in netloc:
+        netloc = MASK if _ambiguous(netloc) else f"{MASK}@{netloc.rpartition('@')[2]}"
     # A query glued to the host once a comma split the URL (`b://c&token=…`, #466): its items
     # are masked as a query's. Only `&key=value`: an ed2k link's `|file|name|…|` netloc, or a
     # host before prose punctuation (`https://nas.local).`), is left as it is.

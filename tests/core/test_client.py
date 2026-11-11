@@ -2278,6 +2278,11 @@ def test_log_safe_redacts_list_items() -> None:
     assert logged["n"] == 2
     assert logged["uri"][0] == "https://***@h/x"
     assert _log_safe({"t": ("https://u:CANARY@h/x",)})["t"] == ["https://***@h/x"]
+    nested = _log_safe(
+        {"c": {"k": "https://u:CANARY@h/x"}, "Passwd": "x", "b": b"https://u:CANARY@h/"}
+    )
+    assert "CANARY" not in str(nested)
+    assert nested["Passwd"] == "***"
 
 
 def test_log_safe_keeps_a_uri_list_with_an_at_in_a_name() -> None:
