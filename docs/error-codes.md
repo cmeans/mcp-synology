@@ -715,7 +715,7 @@ Fix:
    [Synology File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf)
    for that specific code.
 3. **Code 402 ("System too busy") and 421 (file in use):** wait and retry. These
-   are transient, often resolving on its own within a minute, so they're marked
+   are transient, often resolving on their own within a minute, so they're marked
    `retryable=true` (#490). Code 401 ("Unknown error") isn't: check **Log Center**.
    A failure partway through a multi-path copy, move, restore or delete is never
    retryable once something ran: retry only what the message lists as not done.

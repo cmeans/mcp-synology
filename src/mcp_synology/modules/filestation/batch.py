@@ -633,20 +633,32 @@ def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcom
         error = _with_not_started(error, rest)
     if outcome.started:
         # Its own task ran, maybe partly: not retryable, whatever the cause's flag (402 and 421
-        # say to wait and retry, #490), as for a call where earlier items were done (Q5).
-        error = _not_retryable(error)
+        # say to wait and retry, #490), as for a call where earlier items were done (Q5). The
+        # advice says why, unless an earlier item's note already says to check (pre-QA r2).
+        error = _not_retryable(error, None if done else failed)
     return _with_stop(error, outcome)
 
 
-def _not_retryable(error: ToolError) -> ToolError:
+def _not_retryable(error: ToolError, check: str | None) -> ToolError:
+    """``error`` not retryable; with ``check``, advice to check that path first, since its task
+    may be partly done."""
     try:
         body = json.loads(str(error))
         details = body["error"]
     except (ValueError, KeyError, TypeError):
         return error
-    if not details.get("retryable"):
-        return error
     details["retryable"] = False
+    original = str(details.get("suggestion") or "").strip()
+    if check is not None and not CHECKS_WITH_LIST_FILES.search(original):
+        note = (
+            f"It may be partly done: check {shown(check)} with list_files before running it again."
+        )
+        if not original:
+            details["suggestion"] = note
+        elif original[-1] in ".!?)":
+            details["suggestion"] = f"{original} {note}"
+        else:
+            details["suggestion"] = f"{note} {original}"
     return rewrapped_error(body)
 
 

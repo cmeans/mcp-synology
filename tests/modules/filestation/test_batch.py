@@ -1127,3 +1127,22 @@ async def test_a_copy_summary_out_of_time_doesnt_wait_on_the_skip_lookup(
     monkeypatch.setattr(operations, "paths_isdir", hang)
     text = await asyncio.wait_for(tool.call(mock_client, TaskRecords()), WAIT + 3)
     assert "skipped in whole or in part" in text, text
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_a_busy_failure_after_its_task_started_says_to_check_first(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool
+) -> None:
+    """Pre-QA r2 on #687: "Wait and retry" beside retryable false read as a plain retry. The
+    task had started, so the advice says it may be partly done and to check first."""
+    scripts = {src: PathScript() for src in tool.sources}
+    scripts[tool.sources[0]].statuses = [RUNNING, 402]
+    FakeDsm(scripts).mount(respx_mock)
+    with pytest.raises(ToolError) as raised:
+        await tool.call(mock_client, TaskRecords())
+    error = json.loads(str(raised.value))["error"]
+    assert error["retryable"] is False
+    assert error["suggestion"] == (
+        "The NAS is too busy. Wait and retry. It may be partly done: check "
+        f"{tool.sources[0]} with list_files before running it again."
+    ), error["suggestion"]
