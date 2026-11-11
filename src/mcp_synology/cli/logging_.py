@@ -20,6 +20,7 @@ class RedactingFormatter(logging.Formatter):
 
         return redact_secrets(super().format(record))
 
+
 # More than a config load usually logs at any level; the cap matters for a `setup` or `check -v`
 # that never replays them.
 _EARLY_RECORDS_CAP = 1000

@@ -7,7 +7,7 @@ Every line the CLI prints goes through `say`. It does two things before styling:
   feed and carriage return), so text from a config file or the NAS can't move the cursor,
   recolor the terminal or forge a line (#486).
 
-Styling comes after, from the caller's ``fg``/``bold``, so the escaping never touches the
+Styling comes after, from the caller's ``fg``, so the escaping never touches the
 CLI's own colors. ``tests/test_redaction_sinks.py`` fails on a ``click.echo``, ``click.secho``
 or ``print`` anywhere else in ``src/``.
 """
@@ -15,7 +15,6 @@ or ``print`` anywhere else in ``src/``.
 from __future__ import annotations
 
 import re
-from typing import Any
 
 import click
 
@@ -34,16 +33,10 @@ def say(
     message: object = "",
     *,
     fg: str | None = None,
-    bold: bool | None = None,
     err: bool = False,
     nl: bool = True,
 ) -> None:
     """Write ``message`` to stdout (or stderr with ``err``), redacted, with control characters
-    made visible, then styled with ``fg``/``bold``."""
+    made visible, then colored ``fg``."""
     text = visible(redact_secrets("" if message is None else str(message)))
-    style: dict[str, Any] = {}
-    if fg is not None:
-        style["fg"] = fg
-    if bold is not None:
-        style["bold"] = bold
-    click.echo(click.style(text, **style) if style else text, err=err, nl=nl)
+    click.echo(click.style(text, fg=fg) if fg is not None else text, err=err, nl=nl)
