@@ -285,6 +285,25 @@ class TestUploadFile:
         assert f"It replaced the {name!r} that was there." in result, result
         assert "\t" not in result, result
 
+    @respx.mock
+    async def test_already_exists_quotes_a_name_with_a_tab(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA): the refusal names the file as the reply would, quoted."""
+        local_file = tmp_path / "test.txt"
+        local_file.write_text("content")
+        name = "a\tb.txt"
+        # DSM skips an upload whose name is there (overwrite=false): blSkip.
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"blSkip": True}}
+        )
+        with pytest.raises(ToolError) as refused:
+            await upload_file(
+                mock_client, local_path=str(local_file), dest_folder="/v", filename=name
+            )
+        message = json.loads(str(refused.value))["error"]["message"]
+        assert message == f"Upload failed: File {name!r} already exists in /v.", message
+
     @pytest.mark.parametrize(
         ("there", "said"),
         [(True, True), (False, False), (None, False), ("folder", False)],
