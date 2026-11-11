@@ -13,6 +13,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
 import anyio
@@ -50,6 +51,14 @@ HandleKind = Literal["delete", "copy", "move", "restore"]
 _KINDS: tuple[str, ...] = get_args(HandleKind)
 _TASKID_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
+
+
+def monotonic() -> float:
+    """This module's clock: poll_task's deadlines and the batch runner's budget read it, so a
+    test's fake clock moves both."""
+    return time.monotonic()
+
+
 # How long a stop waits for DSM's answer before the task's status decides (#630). DSM 7.1
 # sometimes answers a stop only after ~60 s (a Delete on vdsm; a CopyMove to a USB drive on a
 # real NAS: 60.10 s), although the stop takes effect at once, and claude.ai stops waiting for a
@@ -262,29 +271,58 @@ class TaskRecords:
         record.final_status = status
 
 
+class StopResult(Enum):
+    """How a stop request ended (#512, #497). Only ``CONFIRMED`` means DSM said it stopped;
+    ``UNANSWERED`` reached DSM, or may have, and DSM 7.1 often answers a stop only after about
+    a minute though it took effect at once (#630); ``REFUSED`` is DSM's error code; ``NOT_SENT``
+    never left this machine (its connection couldn't be opened, or the request was too long)."""
+
+    CONFIRMED = "confirmed"
+    UNANSWERED = "unanswered"
+    REFUSED = "refused"
+    NOT_SENT = "not_sent"
+
+
 async def _stop_background_task(
     client: DsmClient,
     api: str,
     taskid: str,
     version: int,
     task_logger: logging.Logger,
-) -> bool:
+) -> StopResult:
     """Stop a background task (CopyMove, Delete). Logs warnings on failure.
 
-    Returns whether DSM confirmed the stop, so an error message never claims a task
-    was stopped when DSM, stalled, didn't answer the stop either (QA R1 on #239).
-    """
+    Says how the stop ended, so an error message never claims a task was stopped when DSM,
+    stalled, didn't answer the stop either (QA R1 on #239), and a stop that may have reached
+    DSM is told from one that never left (#497)."""
     try:
         await client.request(
             api, "stop", version=version, params={"taskid": taskid}, read_timeout=STOP_WAIT
         )
+    except RequestTooLongError as e:
+        task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
+        return StopResult.NOT_SENT
+    except (DsmHttpError, DsmReplyError) as e:
+        # A proxy's 502/504 or page: the stop reached it and may have reached DSM.
+        task_logger.warning("%s task cleanup unanswered for %s: %s", api, taskid, e)
+        return StopResult.UNANSWERED
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
+        # 401 and 599 included: neither shows the task ended (#521; spec), so it may still run.
+        return StopResult.REFUSED
+    except httpx.TransportError as e:
+        task_logger.warning(
+            "%s task cleanup %s for %s: %s",
+            api,
+            "not sent" if never_sent(e) else "unanswered",
+            taskid,
+            type(e).__name__,
+        )
+        return StopResult.NOT_SENT if never_sent(e) else StopResult.UNANSWERED
     except Exception:
         task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
-    else:
-        return True
-    return False
+        return StopResult.UNANSWERED
+    return StopResult.CONFIRMED
 
 
 ProgressCallback = Callable[[float, float | None, str], Awaitable[None]]
@@ -342,7 +380,8 @@ class PollResult:
     status: dict[str, Any]
     outcome: Literal["finished", "handoff", "poll_error", "stalled", "lost"]
     error: Exception | None = None
-    stopped: bool = False
+    # A ``poll_error``'s stop: how DSM answered it (#497).
+    stop: StopResult | None = None
 
 
 @dataclass
@@ -450,6 +489,9 @@ _LOST_TASK_WAIT = 0.5
 # Past this, no more reads, so slow 599s are less likely to outlast a client's reply limit, which
 # cancels. It's checked after each read, so a slow read can still run past it.
 _LOST_TASK_BOUND = 10.0
+# The least a status read waits for its answer when the wait is nearly over (a DSM busy with a
+# huge delete can be slow to answer even a status; a read past the wait is a stall, #496).
+_MIN_READ = 1.0
 
 
 async def poll_task(
@@ -463,6 +505,7 @@ async def poll_task(
     on_progress: ProgressCallback | None = None,
     interval: float = 0.5,
     progress_every: float = 2.0,
+    on_cancel_stop: Callable[[StopResult], None] | None = None,
 ) -> PollResult:
     """Poll a File Station task until it finishes or ``wait`` seconds pass.
 
@@ -474,10 +517,13 @@ async def poll_task(
     decision 2026-10-17). A DSM error code on a status request stops the task; so does
     cancellation, which then propagates. The exception is 599, "no such task", which isn't a
     verdict on a task this call just started: it's read again a few times, then reported as
-    ``lost`` (#521). The deadline is wall-clock (#237).
+    ``lost`` (#521). The deadline is wall-clock (#237), and each status read waits at most what's
+    left of it (but at least ``_MIN_READ``), so a slow read can outlast the wait by at most one
+    resent read (#496): a read that times out is a stall, handed off. ``on_cancel_stop`` hears
+    how a cancel's stop ended, so the runner can record a task that may still run (#512).
     """
     quoted = dsm_str(taskid)
-    deadline = time.monotonic() + wait
+    deadline = monotonic() + wait
     status: dict[str, Any] = {}
     last_progress: float | None = None
     last_numbers: tuple[int, int] | None = None
@@ -486,15 +532,19 @@ async def poll_task(
     missing_since = 0.0
     last_missing: SynologyError | None = None
 
-    async def stop() -> bool:
+    async def stop() -> StopResult:
         return await _stop_background_task(client, api, quoted, version, logger)
 
     try:
-        while time.monotonic() < deadline:
-            asked = time.monotonic()
+        while monotonic() < deadline:
+            asked = monotonic()
             try:
                 reply: Any = await client.request(
-                    api, "status", version=version, params={"taskid": quoted}
+                    api,
+                    "status",
+                    version=version,
+                    params={"taskid": quoted},
+                    read_timeout=max(deadline - asked, _MIN_READ),
                 )
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
@@ -528,7 +578,7 @@ async def poll_task(
                     missing_since = asked
                 if (
                     missing_reads >= _LOST_TASK_READS
-                    or time.monotonic() - missing_since >= _LOST_TASK_BOUND
+                    or monotonic() - missing_since >= _LOST_TASK_BOUND
                 ):
                     return PollResult(status, "lost", e)
                 await asyncio.sleep(interval)
@@ -553,7 +603,7 @@ async def poll_task(
                 return PollResult(status, "finished")
 
             if report is not None:
-                now = time.monotonic()
+                now = monotonic()
                 if last_progress is None or now - last_progress >= progress_every:
                     numbers = _progress_numbers(status)
                     if numbers is not None:
@@ -571,7 +621,9 @@ async def poll_task(
         # anyio cancel scopes (the MCP SDK's) are level-triggered: shield the stop or
         # it is canceled again at once and the NAS task is orphaned.
         with anyio.CancelScope(shield=True):
-            await stop()
+            stopped = await stop()
+            if on_cancel_stop is not None:
+                on_cancel_stop(stopped)
         raise
     # The wait ended during the re-reads: the path check and the reply follow what DSM last said.
     if missing_reads:

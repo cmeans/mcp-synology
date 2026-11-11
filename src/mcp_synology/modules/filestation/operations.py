@@ -1244,6 +1244,11 @@ class CopyMoveAdapter:
         }
 
     async def end_group(self, items: Sequence[Item]) -> None:
+        # ``items``: the group's items that ran, all of them unless the call's wait ran out
+        # partway (#496), so a summary never names one that wasn't started.
+        ran = [x.source for x in items]
+        cut_short = len(ran) < len(self.group)
+        self.group = [p for p in self.group if p in ran]
         text = await _copy_move_summary(
             self.client,
             self.group,
@@ -1251,7 +1256,8 @@ class CopyMoveAdapter:
             self.remove_src,
             self.total,
             self.skipped_paths,
-            only_named_sources_removed=self.multi,
+            # Cut short by the call's wait: only the named sources went (pre-QA r2).
+            only_named_sources_removed=self.multi or cut_short,
             # A restore's earlier items at this destination; for any other call, none.
             earlier=[
                 q
@@ -1556,7 +1562,9 @@ class DeleteAdapter:
         return None
 
     async def summary(self, batch: BatchOutcome) -> str:
-        return await _delete_summary(self.client, self.normalized, self.recycle_bin_status)
+        # Only what ran: the call's wait may have run out before the rest (#496).
+        ran = [o.item.source for o in batch.items if o.state == "done"]
+        return await _delete_summary(self.client, ran, self.recycle_bin_status)
 
     def handoff_text(self, outcome: ItemOutcome, batch: BatchOutcome) -> str:
         assert outcome.handoff is not None
@@ -1999,7 +2007,7 @@ async def restore_from_recycle_bin(
                 records=records,
                 on_progress=on_progress,
             )
-            return await batch_reply(adapter, outcome) + note
+            return await batch_reply(adapter, outcome, note)
 
         # Use the first destination (or provided dest_folder)
         actual_dest = dest_folder or restore_destinations[0]

@@ -88,7 +88,8 @@ says where the token comes from.
 ### A delete, copy, move or restore returns a handle instead of a result
 
 **Why:** it's still running on the NAS. The call waits up to `delete_timeout` or
-`copy_move_timeout` (default 30 s), then hands the operation off rather than stopping it (#245).
+`copy_move_timeout` (default 30 s, for all its paths together), then hands the operation off
+rather than stopping it (#245, #496).
 The same happens if the NAS stops answering status requests during the wait.
 
 **What to do:** check on it with `file_task` and the handle (`file_task` with no handle lists the

@@ -19,20 +19,25 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import anyio
 import httpx
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.modules.filestation import batch, operations
+from mcp_synology.core.errors import DsmReplyError, RequestTooLongError
+from mcp_synology.modules.filestation import batch, operations, tasks
 from mcp_synology.modules.filestation.batch import BATCH_TOOLS, BatchOutcome
 from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.filestation.tasks import TaskRecords, parse_handle
 from tests.modules.filestation.fake_dsm import (
     CANCEL,
+    FINISHED,
+    HOLD,
     RUNNING,
     FakeClock,
     FakeDsm,
@@ -160,6 +165,32 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
         "failed",
     ),
     "poll_dsm_error": (lambda t, i, s: setattr(s, "statuses", [RUNNING, 400]), "failed"),
+    # The stop sent after that error isn't confirmed: the task may still run, so the failure
+    # gives its handle and file_task knows it (#497).
+    "poll_dsm_error_stop_unanswered": (
+        lambda t, i, s: (
+            setattr(s, "statuses", [RUNNING, 400]),
+            setattr(s, "stop", httpx.ReadTimeout("no answer")),
+        ),
+        "failed",
+    ),
+    "poll_dsm_error_stop_refused": (
+        lambda t, i, s: (setattr(s, "statuses", [RUNNING, 400]), setattr(s, "stop", 400)),
+        "failed",
+    ),
+    # DSM answers the stop that it has no such task (401): that doesn't show it ended (#521), so
+    # it's refused like any other, with a handle.
+    "poll_dsm_error_stop_gone": (
+        lambda t, i, s: (setattr(s, "statuses", [RUNNING, 400]), setattr(s, "stop", 401)),
+        "failed",
+    ),
+    "poll_dsm_error_stop_not_sent": (
+        lambda t, i, s: (
+            setattr(s, "statuses", [RUNNING, 400]),
+            setattr(s, "stop", httpx.ConnectError("refused")),
+        ),
+        "failed",
+    ),
     "stall_transport": (
         lambda t, i, s: setattr(s, "statuses", [RUNNING, httpx.ReadTimeout("no answer")]),
         "handed_off",
@@ -225,16 +256,30 @@ POSITIONS = {"first": 0, "middle": 1, "last": 2}
 # Cells today's behavior gets wrong, by (tool, scenario, position): the invariants broken, each
 # kept until the issue named fixes it. Restore's two forms share copy's and move's gaps.
 _COPY_FAMILY = ("copy_files", "move_files", "restore_flat", "restore_origin")
+_POLL_ERRORS = (
+    "poll_dsm_error",
+    "poll_dsm_error_stop_unanswered",
+    "poll_dsm_error_stop_refused",
+    "poll_dsm_error_stop_not_sent",
+    "poll_dsm_error_stop_gone",
+)
+# The poll errors whose task may still run: a stop DSM didn't confirm and didn't say was moot.
+_MAY_RUN = (
+    "poll_dsm_error_stop_unanswered",
+    "poll_dsm_error_stop_refused",
+    "poll_dsm_error_stop_not_sent",
+    "poll_dsm_error_stop_gone",
+)
 
 
 def _gaps() -> dict[tuple[str, str, str], frozenset[str]]:
     gaps: dict[tuple[str, str, str], frozenset[str]] = {}
     for tool in _COPY_FAMILY:
-        for scenario in ("start_dsm_error", "poll_dsm_error", "finished_with_error"):
+        for scenario in ("start_dsm_error", *_POLL_ERRORS, "finished_with_error"):
             for position in ("first", "middle"):
                 # #482: a failure doesn't list what wasn't started.
                 gaps[(tool, scenario, position)] = frozenset({"names_not_started"})
-        for scenario in ("start_dsm_error", "poll_dsm_error"):
+        for scenario in ("start_dsm_error", *_POLL_ERRORS):
             for position in ("middle", "last"):
                 # #482: a DSM error on the start or a status read doesn't say what was done.
                 gaps[(tool, scenario, position)] = gaps.get(
@@ -348,7 +393,7 @@ async def test_matrix(
     broken: set[str] = set()
     # Stops only on cancellation or a DSM error code, never after a hand-off (CLAUDE.md, #245).
     stops = len(dsm.stops())
-    if stops != (1 if scenario in ("poll_dsm_error", "cancel_mid_poll") else 0):
+    if stops != (1 if scenario in (*_POLL_ERRORS, "cancel_mid_poll") else 0):
         broken.add("stops")
 
     if expected == "canceled":
@@ -370,14 +415,25 @@ async def test_matrix(
         broken.add("states")
 
     last = outcome.last
-    # A handle exactly when an item may still be running: and then a record for it.
+    # A handle exactly when an item may still be running: handed off, or failed with a stop DSM
+    # didn't confirm (#497); and then a record for it, with a stop note when the stop may have
+    # reached DSM (#660).
     handles = [line for line in text.splitlines() if line.startswith("Handle: `")]
-    if (last is not None and last.state == "handed_off") != bool(handles):
+    if error is not None and error.get("handle"):
+        handles.append(f"Handle: `{error['handle']}`")
+    may_run = last is not None and (last.state == "handed_off" or scenario in _MAY_RUN)
+    if may_run != bool(handles):
         broken.add("handle")
     for line in handles:
         handle = parse_handle(line.removeprefix("Handle: "))
-        if records.get(handle) is None:
+        record = records.get(handle)
+        if record is None:
             broken.add("record")
+        elif (record.stop is not None) != (scenario == "poll_dsm_error_stop_unanswered"):
+            broken.add("stop_note")
+    if may_run and error is not None and error.get("retryable"):
+        # Its task may still change things: running the call again now could meet it.
+        broken.add("retryable")
     if last is not None and last.state == "handed_off":
         # No DSM request between the hand-off and the reply: the call that decided it (the
         # task's last status read, or the task list that showed it already running) is the last.
@@ -426,6 +482,347 @@ async def test_matrix(
         states,
         text,
     )
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_the_wait_is_the_calls_not_each_items(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool
+) -> None:
+    """#496: the first item runs for most of the wait and finishes; the second, still running,
+    is handed off when the call's time is up, not after a wait of its own, and the third isn't
+    started. The call's waiting stays within the setting (and the least an item gets)."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    slow = int((WAIT * 0.75) / 0.5)  # status reads at poll_task's 0.5 s interval
+    scripts[tool.sources[0]].statuses = [RUNNING] * slow + [dict(FINISHED)]
+    scripts[tool.sources[1]].statuses = [RUNNING]
+    FakeDsm(scripts).mount(respx_mock)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "Handle: `" in text, text
+    assert shown(tool.sources[2]) in text  # not started, and said so
+    assert clock.now <= WAIT + batch.MIN_ITEM_WAIT, clock.now
+
+
+@pytest.mark.parametrize("how", ["task", "anyio"])
+@pytest.mark.parametrize("stop", ["ok", 401, 400, httpx.ReadTimeout("no answer")])
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_a_call_canceled_during_a_start_stops_what_it_started(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    tool: Tool,
+    stop: Any,
+    how: str,
+) -> None:
+    """#394 C3: the call is canceled while DSM is still answering a start. The start's answer
+    is awaited anyway, the task it started is stopped, and unless DSM confirmed that, the task
+    is recorded (noted as stopped-but-unconfirmed when the stop may have reached DSM), so no
+    task is left running that nothing knows of."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    scripts[tool.sources[1]].start = HOLD
+    scripts[tool.sources[1]].stop = stop
+    dsm = FakeDsm(scripts)
+    dsm.mount(respx_mock)
+    records = TaskRecords()
+    if how == "task":
+        call = asyncio.ensure_future(tool.call(mock_client, records))
+        await asyncio.wait_for(dsm.holding.wait(), 5)
+        call.cancel()
+        await asyncio.sleep(0)
+        dsm.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+    else:
+        # As the MCP SDK cancels: a level-triggered anyio scope, so an unshielded cleanup's
+        # first await would be canceled again at once.
+        async def run() -> None:
+            await tool.call(mock_client, records)
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(run)
+            await asyncio.wait_for(dsm.holding.wait(), 5)
+            asyncio.get_running_loop().call_later(0.05, dsm.release.set)
+            group.cancel_scope.cancel()
+    assert len(dsm.starts()) == 2  # the third was never started
+    stops = dsm.stops()
+    assert len(stops) == 1, dsm.methods()
+    taskid = stops[0].params["taskid"].strip('"')
+    record = records.get(parse_handle(f"{tool.kind}:{taskid}"))
+    if stop == "ok":
+        assert record is None  # stopped, as DSM confirmed: nothing to follow up
+    else:
+        assert record is not None and record.paths == [tool.sources[1]]
+        assert (record.stop is not None) == isinstance(stop, httpx.ReadTimeout)
+
+
+@pytest.mark.parametrize(
+    ("stop", "says", "handle"),
+    [
+        ("ok", "DSM confirmed the stop of /s/d0's task", False),
+        (
+            httpx.ReadTimeout("x"),
+            "a stop was sent for /s/d0's task, and DSM hasn't confirmed it",
+            True,
+        ),
+        (400, "DSM refused the stop of /s/d0's task, so it may still be running", True),
+        (401, "DSM refused the stop of /s/d0's task, so it may still be running", True),
+        (httpx.ConnectError("x"), "the stop for /s/d0's task couldn't be sent", True),
+    ],
+)
+async def test_a_poll_errors_reply_says_how_the_stop_ended(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    stop: Any,
+    says: str,
+    handle: bool,
+) -> None:
+    """#497: only a stop DSM confirmed is called one; otherwise the error gives the handle and
+    the follow-up, and isn't retryable."""
+    tool = TOOLS[0]
+    scripts = {src: PathScript() for src in tool.sources}
+    # 416 (disk full) is retryable by its own flag: the unconfirmed stop must override it.
+    scripts[tool.sources[0]].statuses = [RUNNING, 416]
+    scripts[tool.sources[0]].stop = stop
+    FakeDsm(scripts).mount(respx_mock)
+    with pytest.raises(ToolError) as raised:
+        await tool.call(mock_client, TaskRecords())
+    error = json.loads(str(raised.value))["error"]
+    assert says in error["message"], error["message"]
+    assert bool(error.get("handle")) == handle
+    if handle:
+        assert error["retryable"] is False
+        assert f"file_task(handle={error['handle']!r})" in error["suggestion"]
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_no_item_starts_once_the_calls_wait_is_over(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool
+) -> None:
+    """#496: the first item takes 1.5 s of the 2 s wait; the second, started with 0.5 s left,
+    gets its least wait and finishes at 2 s. The call's wait is then over, so the third isn't
+    started: the reply says so, names nothing as running, and names only what ran as done."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    scripts[tool.sources[0]].statuses = [RUNNING, RUNNING, RUNNING, dict(FINISHED)]
+    scripts[tool.sources[1]].statuses = [RUNNING, dict(FINISHED)]
+    dsm = FakeDsm(scripts)
+    dsm.mount(respx_mock)
+    text = await tool.call(mock_client, TaskRecords())
+    assert len(dsm.starts()) == 2, dsm.methods()
+    assert clock.now <= WAIT + batch.MIN_ITEM_WAIT, clock.now
+    setting = "delete_timeout" if tool.kind == "delete" else "copy_move_timeout"
+    assert text.startswith(f"[!] This call's wait (2 s, {setting}) ran out after 2 of 3"), text
+    assert text.endswith(f"Not started: {shown(tool.sources[2])}. Run it in another call."), text
+    assert "Handle: `" not in text  # nothing is running
+    # What wasn't started isn't named as done, nor its folder as emptied.
+    done_part = text[: text.index("Not started:")]
+    assert tool.sources[2].rsplit("/", 1)[-1] not in done_part, text
+    assert "have been removed from" not in text, text
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_no_item_starts_when_the_checks_before_it_use_up_the_wait(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    tool: Tool,
+) -> None:
+    """QA round 1 on #686: the BackgroundTask list checked before the second item's start takes
+    the rest of the wait: that item isn't started, and the reply says the wait ran out."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+
+    class SlowList(FakeDsm):
+        ran_slow = False
+
+        def _answer(self, request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if request.content:
+                params.update(dict(httpx.QueryParams(request.content.decode())))
+            listing = params.get("api") == "SYNO.FileStation.BackgroundTask"
+            if listing and len(self.starts()) == 1 and not self.ran_slow:
+                self.ran_slow = True
+                clock.now += WAIT  # the list took the rest of the wait
+            return super()._answer(request)
+
+    dsm = SlowList(scripts)
+    dsm.mount(respx_mock)
+    text = await tool.call(mock_client, TaskRecords())
+    assert len(dsm.starts()) == 1, dsm.methods()
+    assert "ran out after 1 of 3" in text, text
+    assert "Handle: `" not in text
+
+
+async def test_a_restores_recreated_folder_note_comes_before_not_started(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA r3 on #686: a restore to several places cut short by the wait keeps its
+    ``Not started:`` line last, as the first line's "(listed last)" says."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    scripts = {src: PathScript() for src in tool.sources}
+
+    class SlowList(FakeDsm):
+        ran_slow = False
+
+        def _answer(self, request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if request.content:
+                params.update(dict(httpx.QueryParams(request.content.decode())))
+            listing = params.get("api") == "SYNO.FileStation.BackgroundTask"
+            if listing and len(self.starts()) == 1 and not self.ran_slow:
+                self.ran_slow = True
+                clock.now += WAIT
+            return super()._answer(request)
+
+    SlowList(scripts).mount(respx_mock)
+
+    async def recreated(client: Any, destinations: Any) -> tuple[list[str], list[str]]:
+        return ["/s/o2"], []
+
+    monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "Re-created /s/o2 (no longer there)" in text, text
+    assert text.rstrip().splitlines()[-1].startswith("Not started:"), text
+
+
+async def test_an_item_started_near_the_end_still_gets_its_least_wait(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+) -> None:
+    """``MIN_ITEM_WAIT``: the second item starts with 0.5 s of the call's wait left and finishes
+    on its second read, 0.5 s later, inside its least wait: it's done, not handed off."""
+    tool = TOOLS[0]
+    scripts = {src: PathScript() for src in tool.sources}
+    scripts[tool.sources[0]].statuses = [RUNNING, RUNNING, RUNNING, dict(FINISHED)]
+    scripts[tool.sources[1]].statuses = [RUNNING, dict(FINISHED)]
+    FakeDsm(scripts).mount(respx_mock)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "Handle: `" not in text, text
+    assert shown(tool.sources[1]) in text
+
+
+async def test_a_start_still_unanswered_after_a_cancel_is_given_up(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The cancel's wait for the start's answer is bounded (``STOP_WAIT``): past it, the start
+    is given up and logged (no task ID, so nothing can be stopped), and nothing is recorded."""
+    monkeypatch.setattr(batch, "STOP_WAIT", 0.05)
+    tool = TOOLS[0]
+    scripts = {src: PathScript() for src in tool.sources}
+    scripts[tool.sources[0]].start = HOLD
+    dsm = FakeDsm(scripts)
+    dsm.mount(respx_mock)
+    records = TaskRecords()
+    call = asyncio.ensure_future(tool.call(mock_client, records))
+    await asyncio.wait_for(dsm.holding.wait(), 5)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert dsm.stops() == []
+    assert "unanswered after a cancel" in caplog.text
+
+
+@pytest.mark.parametrize("after", [400, httpx.ConnectError("x")])
+async def test_a_start_that_fails_after_a_cancel_stops_nothing(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, after: Any
+) -> None:
+    """A start that answers with a DSM error, or fails, while the call is being canceled
+    started no task: nothing is stopped or recorded."""
+    tool = TOOLS[0]
+    scripts = {src: PathScript() for src in tool.sources}
+    scripts[tool.sources[0]].start = HOLD
+    dsm = FakeDsm(scripts)
+    dsm.after_hold = after
+    dsm.mount(respx_mock)
+    records = TaskRecords()
+    call = asyncio.ensure_future(tool.call(mock_client, records))
+    await asyncio.wait_for(dsm.holding.wait(), 5)
+    call.cancel()
+    await asyncio.sleep(0)
+    dsm.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert dsm.stops() == []
+
+
+@pytest.mark.parametrize("stop", [httpx.ReadTimeout("no answer"), 400, "ok", 401])
+async def test_a_cancel_mid_poll_records_a_task_that_may_still_run(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, stop: Any
+) -> None:
+    """A canceled call's stop that DSM didn't confirm leaves the task recorded (noted when
+    the stop may have reached DSM), as a cancel during the start does (#497)."""
+    tool = TOOLS[0]
+    scripts = {src: PathScript() for src in tool.sources}
+    scripts[tool.sources[0]].statuses = [RUNNING, CANCEL]
+    scripts[tool.sources[0]].stop = stop
+    dsm = FakeDsm(scripts)
+    dsm.mount(respx_mock)
+    records = TaskRecords()
+    with pytest.raises(asyncio.CancelledError):
+        await tool.call(mock_client, records)
+    taskid = dsm.stops()[0].params["taskid"].strip('"')
+    record = records.get(parse_handle(f"delete:{taskid}"))
+    if stop == "ok":
+        assert record is None
+    else:
+        assert record is not None
+        assert (record.stop is not None) == isinstance(stop, httpx.ReadTimeout)
+
+
+def test_a_path_ending_in_a_dot_keeps_it() -> None:
+    """Only the message's own period goes: `/s/report.` stays `/s/report.` (pre-QA on #512 PR 2)."""
+    error = ToolError(
+        json.dumps(
+            {
+                "error": {
+                    "message": "Failed on: /s/d0. Not started: /s/report..",
+                    "suggestion": "Check /s/d0.",
+                }
+            }
+        )
+    )
+    outcome = batch.ItemOutcome(
+        batch.Item("/s/d0", None), "failed", stop=tasks.StopResult.CONFIRMED
+    )
+    message = json.loads(str(batch._with_stop(error, outcome)))["error"]["message"]
+    assert message == (
+        "Failed on: /s/d0. Not started: /s/report.; DSM confirmed the stop of /s/d0's task."
+    )
+
+
+def test_an_error_that_isnt_an_envelope_is_left_as_it_is() -> None:
+    error = ToolError("plain text")
+    outcome = batch.ItemOutcome(
+        batch.Item("/s/a", None), "failed", stop=tasks.StopResult.UNANSWERED
+    )
+    assert batch._with_stop(error, outcome) is error
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (RequestTooLongError("too long"), "not_sent"),
+        (RuntimeError("odd"), "unanswered"),
+        (DsmReplyError("not DSM"), "unanswered"),
+    ],
+)
+async def test_stop_results_for_errors_outside_dsm(raised: Exception, expected: str) -> None:
+    class Client:
+        async def request(self, *args: Any, **kwargs: Any) -> Any:
+            raise raised
+
+    result = await tasks._stop_background_task(
+        Client(),  # type: ignore[arg-type]
+        "SYNO.FileStation.Delete",
+        '"t"',
+        2,
+        logging.getLogger("test"),
+    )
+    assert result is tasks.StopResult(expected)
 
 
 def test_known_gaps_name_real_cells() -> None:

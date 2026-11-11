@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 # A status read answers one of these: a status dict, a DSM error code, an exception to raise, an
 # HTTP response, or CANCEL (the call is canceled during that read).
 CANCEL = "cancel"
+HOLD = "hold"
 
 RUNNING: dict[str, Any] = {"finished": False, "processed_num": 1, "total": 10, "progress": 0.1}
 FINISHED: dict[str, Any] = {"finished": True, "processed_size": 10, "progress": 1}
@@ -41,10 +42,13 @@ class PathScript:
     exists: bool = True
     isdir: bool = False
     gone_after: bool = True
-    # The start: "ok", a DSM error code, or an exception to raise.
+    # The start: "ok", a DSM error code, an exception to raise, or HOLD (it answers "ok" only
+    # once the test sets ``FakeDsm.release``, so the call can be canceled while it's in flight).
     start: Any = "ok"
     # The status reads, in order; the last one repeats.
     statuses: list[Any] = field(default_factory=lambda: [dict(FINISHED)])
+    # A stop of its task: "ok", a DSM error code, an exception to raise, or an HTTP response.
+    stop: Any = "ok"
     # A task for this path already running (listed by BackgroundTask list).
     running: dict[str, Any] | None = None
     # Once DSM has lost its task (599), getinfo of the path answers this instead: a code for it
@@ -102,9 +106,25 @@ class FakeDsm:
         self._next = 0
         # Tasks of other calls that DSM lists once this many starts were sent: (starts, task).
         self.later_tasks: list[tuple[int, dict[str, Any]]] = []
+        # A HOLD start answers once this is set; ``holding`` is set when one is waiting.
+        self.release = asyncio.Event()
+        self.holding = asyncio.Event()
+        # What a released HOLD start answers: "ok", a DSM error code or an exception.
+        self.after_hold: Any = "ok"
 
     def mount(self, router: respx.Router | Any) -> None:
-        router.route(url__startswith=f"{BASE_URL}/webapi/").mock(side_effect=self._answer)
+        router.route(url__startswith=f"{BASE_URL}/webapi/").mock(side_effect=self._answer_async)
+
+    async def _answer_async(self, request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if request.content:
+            params.update(dict(httpx.QueryParams(request.content.decode())))
+        script = self.scripts.get(params.get("path", ""))
+        if params.get("method") == "start" and script is not None and script.start == HOLD:
+            self.holding.set()
+            await self.release.wait()
+            script.start = self.after_hold
+        return self._answer(request)
 
     def methods(self, api: str | None = None) -> list[str]:
         return [c.method for c in self.calls if api is None or c.api == api]
@@ -143,7 +163,7 @@ class FakeDsm:
             if method == "status":
                 return self._status(params["taskid"].strip('"'))
             if method == "stop":
-                return self._ok({})
+                return self._stop(params["taskid"].strip('"'))
         if api == "SYNO.FileStation.CreateFolder":
             return self._ok({"folders": [{"path": params.get("folder_path", "")}]})
         return self._ok({})
@@ -190,6 +210,17 @@ class FakeDsm:
         taskid = f"FileStation_{prefix}_{self._next}"
         self._tasks[taskid] = path
         return self._ok({"taskid": taskid})
+
+    def _stop(self, taskid: str) -> httpx.Response:
+        script = self.scripts.get(self._tasks.get(taskid, ""), PathScript())
+        answer = script.stop
+        if isinstance(answer, BaseException):
+            raise answer
+        if isinstance(answer, httpx.Response):
+            return answer
+        if isinstance(answer, int):
+            return self._err(answer)
+        return self._ok({})
 
     def _status(self, taskid: str) -> httpx.Response:
         path = self._tasks.get(taskid, "")
