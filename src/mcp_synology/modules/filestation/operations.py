@@ -499,6 +499,11 @@ async def _refuse_missing_destination(
         )
 
 
+def _upper_first(text: str) -> str:
+    """``text`` with its first character upper-cased and the rest as written."""
+    return text[:1].upper() + text[1:]
+
+
 def _code_text(code: object) -> str:
     """``DSM error 415: Disk quota exceeded``, or just the code when it isn't known.
 
@@ -1271,7 +1276,9 @@ class CopyMoveAdapter:
                 value=p,
                 # Where it may have left something, not its source: a copy doesn't change it
                 # (pre-QA r4 on #687).
-                suggestion=f"{self.check_clause(outcome.item).capitalize()}, or file_task with "
+                # Only the first letter: str.capitalize() lower-cases the rest, paths included
+                # (QA round 2 on #687).
+                suggestion=f"{_upper_first(self.check_clause(outcome.item))}, or file_task with "
                 "no handle, before running it again.",
             )
         if isinstance(e, ToolError):

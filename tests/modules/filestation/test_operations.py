@@ -4071,6 +4071,27 @@ async def test_an_unanswered_start_on_the_last_path_names_what_was_done(
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("tool", "where"),
+    [(copy_files, "/Media/Dst"), (move_files, "/Media/Movies/A.mkv and /Media/Dst")],
+    ids=["copy", "move"],
+)
+async def test_an_unanswered_starts_advice_keeps_the_paths_case(
+    mock_client: DsmClient, no_poll_wait: None, tool: Any, where: str
+) -> None:
+    """QA round 2 on #687: str.capitalize() lower-cased the paths in the advice."""
+    calls: list[dict[str, str]] = []
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_unanswered_start(calls, "/Media/Movies/A.mkv")
+    )
+    with pytest.raises(ToolError) as refused:
+        await tool(mock_client, paths=["/Media/Movies/A.mkv"], dest_folder="/Media/Dst")
+    assert json.loads(str(refused.value))["error"]["suggestion"] == (
+        f"Check {where} with list_files, or file_task with no handle, before running it again."
+    )
+
+
+@respx.mock
 async def test_an_unanswered_only_start_isnt_retryable(
     mock_client: DsmClient, no_poll_wait: None
 ) -> None:
