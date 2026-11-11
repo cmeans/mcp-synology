@@ -51,6 +51,14 @@ HandleKind = Literal["delete", "copy", "move", "restore"]
 _KINDS: tuple[str, ...] = get_args(HandleKind)
 _TASKID_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _DECORATION = " \t\r\n`'\"*.,;:()[]<>"
+
+
+def monotonic() -> float:
+    """This module's clock: poll_task's deadlines and the batch runner's budget read it, so a
+    test's fake clock moves both."""
+    return time.monotonic()
+
+
 # How long a stop waits for DSM's answer before the task's status decides (#630). DSM 7.1
 # sometimes answers a stop only after ~60 s (a Delete on vdsm; a CopyMove to a USB drive on a
 # real NAS: 60.10 s), although the stop takes effect at once, and claude.ai stops waiting for a

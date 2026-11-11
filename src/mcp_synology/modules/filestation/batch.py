@@ -37,6 +37,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import rewrapped_error
+from mcp_synology.modules.filestation import tasks as _tasks
 from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.filestation.tasks import (
     Handle,
@@ -66,16 +67,36 @@ logger = logging.getLogger(__name__)
 BATCH_TOOLS = ("delete_files", "copy_files", "move_files", "restore_from_recycle_bin")
 
 
-@dataclass(frozen=True)
-class Budget:
-    """How long a call waits on its tasks. Each item gets the whole setting today (#496 makes it
-    the call's)."""
+# The least an item's task is waited on when the call's budget is nearly spent: two status reads
+# at poll_task's interval, so a task that ends at once is still reported as done.
+MIN_ITEM_WAIT = 1.0
 
-    per_item: float
+
+def _now() -> float:
+    # The task module's clock, which the tests' fake clock replaces.
+    return _tasks.monotonic()
+
+
+@dataclass
+class Budget:
+    """How long a call waits on its tasks, all of them together (#496): ``delete_timeout`` or
+    ``copy_move_timeout``. An item gets what's left when it starts (at least ``MIN_ITEM_WAIT``);
+    a task still running when the call's time is up is handed off, and the rest are listed as
+    not started."""
+
+    per_call: float
+    deadline: float | None = None
+
+    def start(self) -> None:
+        """The call's wait begins (once)."""
+        if self.deadline is None:
+            self.deadline = _now() + self.per_call
 
     def for_item(self) -> float:
         """The wait for the item about to be polled."""
-        return self.per_item
+        self.start()
+        assert self.deadline is not None
+        return max(self.deadline - _now(), MIN_ITEM_WAIT)
 
 
 @dataclass(frozen=True)
@@ -208,6 +229,7 @@ async def run_batch(
     # One progress token per tool call: keep its values increasing across items (#245).
     progress = MonotonicProgress.wrap(on_progress)
     batch = BatchOutcome()
+    budget.start()
     with adapter.batch_scope():
         for i, item in enumerate(items):
             first_of_group = i == 0 or items[i - 1].group != item.group

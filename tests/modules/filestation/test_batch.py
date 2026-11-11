@@ -33,6 +33,7 @@ from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.filestation.tasks import TaskRecords, parse_handle
 from tests.modules.filestation.fake_dsm import (
     CANCEL,
+    FINISHED,
     RUNNING,
     FakeClock,
     FakeDsm,
@@ -463,6 +464,24 @@ async def test_matrix(
         states,
         text,
     )
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_the_wait_is_the_calls_not_each_items(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool
+) -> None:
+    """#496: the first item runs for most of the wait and finishes; the second, still running,
+    is handed off when the call's time is up, not after a wait of its own, and the third isn't
+    started. The call's waiting stays within the setting (and the least an item gets)."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    slow = int((WAIT * 0.75) / 0.5)  # status reads at poll_task's 0.5 s interval
+    scripts[tool.sources[0]].statuses = [RUNNING] * slow + [dict(FINISHED)]
+    scripts[tool.sources[1]].statuses = [RUNNING]
+    FakeDsm(scripts).mount(respx_mock)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "Handle: `" in text, text
+    assert shown(tool.sources[2]) in text  # not started, and said so
+    assert clock.now <= WAIT + batch.MIN_ITEM_WAIT, clock.now
 
 
 def test_known_gaps_name_real_cells() -> None:
