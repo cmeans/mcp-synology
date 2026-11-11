@@ -2277,3 +2277,12 @@ def test_log_safe_redacts_list_items() -> None:
     assert "CANARY" not in str(logged)
     assert logged["n"] == 2
     assert logged["uri"][0] == "https://***@h/x"
+
+
+def test_log_safe_keeps_a_uri_list_with_an_at_in_a_name() -> None:
+    """A DS2 create list as one JSON string: an `@` in a magnet's name isn't userinfo of the
+    URL before it (pre-QA r5 on #514)."""
+    from mcp_synology.core.client import _log_safe
+
+    uris = '["https://mirror.example","magnet:?xt=urn:btih:abc&dn=Show@Group"]'
+    assert "mirror.example" in _log_safe({"url": uris})["url"]

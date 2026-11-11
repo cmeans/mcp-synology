@@ -315,6 +315,9 @@ def test_redact_secrets_masks_only_the_credential(text: str, expected: str) -> N
         # A key that starts a path segment is a file name (#514 PR 1, decided in pre-QA r3).
         "/share/token=abc/sub/file.txt",
         "| /docs/sid=1/report.pdf |",
+        "/share/my-token=abc/file.txt",
+        "/share/v1.token=abc/file.txt",
+        "/home/x/.token=abc/y",
         "",
     ],
 )
@@ -394,6 +397,20 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
             "http://10.0.0.2:5000 timed out; mail it@corp.com",
         ),
         ("https://h:5001, see a@b.c", "https://h:5001, see a@b.c"),
+        # The scan ends where the URL does: a quote, `<`, `>`, or a comma before another URI
+        # (pre-QA r5 on #514), so JSON and URI lists after a host aren't its userinfo.
+        (
+            '{"url":"https://nas.local:5001","owner":"admin@example.com"}',
+            '{"url":"https://nas.local:5001","owner":"admin@example.com"}',
+        ),
+        (
+            "https://mirror.example,magnet:?xt=urn:btih:abc&dn=Show@Group",
+            "https://mirror.example,magnet:?xt=urn:btih:abc&dn=Show@Group",
+        ),
+        ("https://nas,ftp://u:p@h/x", "https://nas,ftp://***@h/x"),
+        # A comma inside a password is part of the URL.
+        ("https://u:p,w@h/x", "https://***@h/x"),
+        ("https://admin:p@ss,1@nas/x", "https://***@nas/x"),
         # A password holding `@` before an `@` in the path: the first whole host counts.
         ("https://u:p@x@h.example/@name", "https://***@h.example/@name"),
         (
@@ -516,6 +533,8 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ('{"data": {"did": "DEVTOKEN", "sid": "S1"}}', '{"data": {"did": "***", "sid": "***"}}'),
         ("Cookie: lang=en; id=SESSION; x=1", "Cookie: lang=en; id=***; x=1"),
         ("candid=1", "candid=1"),
+        # A prefix joined by `-`.
+        ("x?access-token=CANARY", "x?access-token=***"),
         ("{'otp_code': 123456, 'x': 1}", "{'otp_code': ***, 'x': 1}"),
         # Quoted `key=value`, a repr of a password holding `'` (double quotes), bytes.
         ('passwd="CANARY"', 'passwd="***"'),

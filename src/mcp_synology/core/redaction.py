@@ -8,13 +8,14 @@ here first.
 
 Rules, chosen so the host stays visible and nothing secret-shaped survives:
 
-- userinfo becomes ``***@``: found by a scan after each ``://`` (a 256-character window on one line,
-  ending at the next ``://``), ending at the first ``@`` followed by a whole host, else the last
-  ``@`` before a host, so a password holding a ``/``, ``#`` or ``@`` is masked. The window ends at
-  whitespace, as a URL does (RFC 3986): prose after a host is never userinfo, and a password with
-  a space isn't masked
-- a host followed by text a host can't hold (``c&token=…``) keeps the host and masks the rest,
-  and ``&key=value`` in a path is masked as a query item (#466)
+- userinfo becomes ``***@``: found by a scan inside each URL match (a 256-character window after
+  its ``://``, ending at the next ``://``), ending at the first ``@`` followed by a whole host,
+  else the last ``@`` before a host. So a password holding a ``/``, ``#`` or ``@`` is masked,
+  unless an ``@`` in it is followed later by a ``/``, ``?`` or ``#`` (that reads as
+  ``https://u:p@medium.com/@name``). A URL match ends at whitespace, a quote, ``<``, ``>`` or a
+  comma before another URI, so a password with a space or a quote isn't masked
+- ``&key=value`` and ``;key=value`` items glued to the host (``c&token=…``) or in a path are masked
+  as a query's; nothing else after the host is (#466)
 - every query value becomes ``***`` (keys are kept); a bare query item becomes ``***``
 - path parameters (``;key=value``) are masked like query items
 - a token inside a path segment becomes ``***``: a run of ``[A-Za-z0-9_-]`` holding
@@ -106,10 +107,11 @@ _CREDENTIAL_KEYS = (
 )
 # A key may carry a prefix ending in `_` (`refresh_token`, `user_password`), never letters
 # alone (`insid`, `passwordless` are other words).
-_KEY = rf"(?:[A-Za-z0-9]+_)?(?:{_CREDENTIAL_KEYS})"
-# Not at the start of a path segment: `/share/token=abc/file.txt` is a file name.
+_KEY = rf"(?:[A-Za-z0-9]+[_-])?(?:{_CREDENTIAL_KEYS})"
+# Not at the start of a path segment, nor after a `.` or `-` in one: `/share/token=abc/file.txt`
+# and `/share/my-token=abc/x` are file names. A prefix joins with `_` or `-` (`access-token`).
 _CREDENTIAL_PARAM = re.compile(
-    rf"""(?i)(?<![A-Za-z0-9_/])({_KEY}=)("[^"\n]{{0,4096}}"?|'[^'\n]{{0,4096}}'?|[^\s&;#"'<>]+)"""
+    rf"""(?i)(?<![A-Za-z0-9_/.\-])({_KEY}=)("[^"\n]{{0,4096}}"?|'[^'\n]{{0,4096}}'?|[^\s&;#"'<>]+)"""
 )
 # DSM's CSRF header, as a log line or an error quotes it.
 _CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
@@ -135,7 +137,6 @@ _USERINFO_TRIES = 8
 # A character a host can start with, after the `@` that ends userinfo.
 _HOST_START = re.compile(r"[A-Za-z0-9\[]")
 _PORT_THEN_PATH = re.compile(r"\d+/")
-_BLANK = re.compile(r"\s")
 
 
 # A query item or path parameter glued to a title: ``?key=value``, ``&key=value``
@@ -165,30 +166,25 @@ def _is_userinfo(span: str) -> bool:
 def _mask_userinfo(text: str) -> str:
     """``text`` with the userinfo of every ``scheme://user:password@host`` masked, found by a
     scan rather than ``urlsplit``, so a password holding a ``/``, ``#`` or ``@`` is masked too
-    (#458). Each ``://`` gets a window of ``_USERINFO_WINDOW`` characters on its line, so the
-    scan is linear in ``text``."""
-    if "@" not in text:
+    (#458). The scan runs inside each URL that `_URL_IN_TEXT` matches, so it ends where that
+    match does: at whitespace, a quote, ``<`` or ``>``, or a comma before another URI. Prose,
+    JSON and URI lists after a host are never read as its userinfo, and a password holding a
+    space or a quote isn't masked (#458 keeps the space open). Linear in ``text``."""
+    if "@" not in text or "://" not in text:
         return text
-    out: list[str] = []
-    pos = 0
-    start = text.find("://")
-    while start >= 0:
-        begin = start + 3
-        # Userinfo ends the line's text before another URL starts: it never holds a `://`.
-        window = text[begin : begin + _USERINFO_WINDOW].partition("://")[0]
-        # A URL holds no whitespace (RFC 3986): userinfo ends before it, so prose after a host
-        # is never read as userinfo. A password with a space isn't masked (#458 keeps that open).
-        blank = _BLANK.search(window)
-        if blank:
-            window = window[: blank.start()]
-        end = _userinfo_end(window)
-        if end is not None:
-            out.append(text[pos:begin])
-            out.append(MASK)
-            pos = begin + end
-        start = text.find("://", max(begin, pos))
-    out.append(text[pos:])
-    return "".join(out)
+    return _URL_IN_TEXT.sub(lambda m: _userinfo_masked(m.group(0)), text)
+
+
+def _userinfo_masked(url: str) -> str:
+    """One matched URL with its userinfo masked, if `_userinfo_end` finds any."""
+    start = url.find("://")
+    if start < 0 or "@" not in url:
+        return url
+    begin = start + 3
+    # A window of `_USERINFO_WINDOW` characters, ending before another `://`.
+    window = url[begin : begin + _USERINFO_WINDOW].partition("://")[0]
+    end = _userinfo_end(window)
+    return url if end is None else f"{url[:begin]}{MASK}{url[begin + end :]}"
 
 
 def _userinfo_end(window: str) -> int | None:
@@ -250,7 +246,7 @@ def _mask_authority(url: str) -> str:
         return url
     end = next((i for i, c in enumerate(rest) if c in "/?#"), len(rest))
     authority = rest[:end]
-    if "@" not in authority or authority.startswith(f"{MASK}@"):
+    if "@" not in authority:
         return url
     return f"{scheme}://{MASK}@{authority.rpartition('@')[2]}{rest[end:]}"
 
@@ -315,8 +311,6 @@ def redact_url(url: str) -> str:
         return _redact_magnet(url)
     scheme, colon, rest = url.partition(":")
     if colon and scheme.lower() in _WRAPPED:
-        if rest.startswith((MASK, f"//{MASK}")):
-            return url  # masked already (`redact_urls` masks wrapped links first)
         body = _WRAPPED_BODY.match(rest)
         # With `//` the body ends at punctuation (`thunder://…=.`); without, it's the whole rest.
         if body and (body.group(1) or body.end() == len(rest)):
