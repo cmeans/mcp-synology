@@ -35,6 +35,7 @@ from mcp.types import (
     CallToolResult,
     EmbeddedResource,
     ImageContent,
+    InputRequiredResult,
     ResourceLink,
     TextContent,
     TextResourceContents,
@@ -195,6 +196,17 @@ def test_an_input_request_is_scrubbed() -> None:
 
     request = TextContent(type="text", text=f"Sign in at {LEAKS[0]}")
     assert CANARY not in _scrubbed_model(request, "t", "input request").text
+    # What a client hands back or opens is kept as it is (pre-QA r6 on #681).
+    state = InputRequiredResult(request_state='{"token": "opaque-state-123"}')
+    assert _scrubbed_model(state, "t", "input request").request_state == state.request_state
+
+
+def test_a_url_elicitation_keeps_its_link() -> None:
+    from mcp_synology.server import _passed_through
+
+    link = "https://auth.example/connect?state=abc&token=T0K"
+    assert _passed_through("url", {"mode": "url", "url": link})
+    assert not _passed_through("url", {"url": link})
 
 
 # File and folder names that look like query items: the model must be able to repeat them, so a
@@ -570,6 +582,8 @@ _WRITERS = {
     "click.get_text_stream",
     "click.get_binary_stream",
     "builtins.print",
+    "pprint.pprint",
+    "click.echo_via_pager",
     "os.write",
     "traceback.print_exc",
     "traceback.print_exception",
@@ -593,14 +607,35 @@ _MCP_SENDERS = {
     "elicit",
     "elicit_url",
 }
-_CONTEXT_LOG = {"debug", "info", "warning", "error", "log"}
+# `fail` is click's: `ctx.fail("x")` raises a UsageError click prints itself.
+_CONTEXT_LOG = {"debug", "info", "warning", "error", "log", "fail"}
 # click's exceptions print their own message, not through `say`. Each one raised on purpose is
 # listed, with what its message holds.
-_CLICK_ERRORS = {"ClickException", "UsageError", "BadParameter", "FileError", "BadOptionUsage"}
+_CLICK_ERRORS = {
+    "ClickException",
+    "UsageError",
+    "BadParameter",
+    "FileError",
+    "BadOptionUsage",
+    "BadArgumentUsage",
+    "MissingParameter",
+    "NoSuchOption",
+}
 _KNOWN_CLICK_ERRORS = {
     # A version string the user typed, quoted with `!r`.
     ("mcp_synology/cli/version.py", "ClickException"),
 }
+
+
+def _numeric(node: ast.expr) -> bool:
+    """A number, or arithmetic whose leaves are numbers and names (`128 + signum`)."""
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, int) and not isinstance(node.value, bool)
+    if isinstance(node, ast.BinOp):
+        return all(_numeric(side) or isinstance(side, ast.Name) for side in (node.left, node.right))
+    if isinstance(node, ast.UnaryOp):
+        return _numeric(node.operand)
+    return False
 
 
 def _output_paths(rel: str, tree: ast.Module) -> list[str]:
@@ -660,15 +695,10 @@ def _output_paths(rel: str, tree: ast.Module) -> list[str]:
         ):
             found.append(f"{here} getattr {node.args[1].value}")
         # An exit with anything but a number prints it to stderr as it is.
-        # (`SystemExit(128 + signum)` is a number; a name or a call may be text.)
+        # Only a number or arithmetic passes (`sys.exit(1)`, `SystemExit(128 + signum)`): a
+        # name, attribute, subscript or call may hold text (pre-QA r6 on #681).
         if resolved in ("sys.exit", "SystemExit", "exit", "quit") and any(
-            isinstance(a, ast.Name)
-            or any(
-                isinstance(n, ast.JoinedStr | ast.Call)
-                or (isinstance(n, ast.Constant) and isinstance(n.value, str))
-                for n in ast.walk(a)
-            )
-            for a in node.args
+            not _numeric(a) for a in node.args
         ):
             found.append(f"{here} with a message")
         if (
@@ -730,13 +760,19 @@ async def more(self, req_ctx):
     click.get_binary_stream("stdout").write(b"x")
 class Refusal(click.ClickException):
     pass
+def even_more(ctx, exc):
+    sys.exit(exc.message)
+    raise SystemExit(exc.args[0])
+    ctx.fail("x")
+    click.echo_via_pager("x")
+    raise click.MissingParameter("x")
 """
 
 
 def test_the_guard_names_every_way_around_a_sink() -> None:
     found = _output_paths("mcp_synology/modules/fake.py", ast.parse(_BYPASSES))
     expected_lines = {6, 7, 8, 9, 10, 11, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
-    expected_lines |= {25, 26, 27, 29, 30, 31, 32}
+    expected_lines |= {25, 26, 27, 29, 30, 31, 32, 35, 36, 37, 38, 39}
     assert {int(f.split(":")[1].split()[0]) for f in found} == expected_lines, "\n".join(found)
 
 

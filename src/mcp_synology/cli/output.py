@@ -14,10 +14,10 @@ Styling comes after, from the caller's ``fg``, so the escaping never touches the
 CLI's own colors. Not through it: a prompt's text (`click.prompt`, `click.confirm`), which the
 CLI builds from its own words and values escaped at the source (``repr``, `core.client._loads`);
 click's own rendering of a `ClickException`; and Python's traceback for an unhandled crash.
-``tests/test_redaction_sinks.py`` fails on a ``click.echo``, ``click.secho``, ``print``, a
-``sys.stdout``/``sys.stderr`` write (``.buffer`` and ``__stderr__`` too), ``os.write`` or a
-``traceback.print_*`` anywhere else in ``src/``; a stream held in a variable can't be told
-apart from another object's ``write``, so that one is review's to catch.
+``tests/test_redaction_sinks.py`` fails on any other terminal write in ``src/`` (``click.echo``,
+``print``, a stream write, an exit with a message, a click exception, …: CLAUDE.md's class
+entry point bullet lists them); a stream held in a variable can't be told apart from another
+object's ``write``, so that one is review's to catch.
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ import anyio
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
-from mcp.shared.exceptions import MCPError
+from mcp.shared.exceptions import MCPError, UrlElicitationRequiredError
 from mcp.types import CallToolResult, Icon, TextContent
 from pydantic import ValidationError
 
@@ -478,7 +478,12 @@ class _SynologyServer(MCPServer):
             # A protocol error a tool raised goes to the client as it is: its message and data
             # are scrubbed here (QA round 1 on #681). No tool raises one today.
             message = f"{REPLY_LABEL}\n{_scrubbed(exc.error.message, 'error', name)}"
-            data = _redacted_strings(exc.error.data)
+            # A URL elicitation's data is the link the user must open: kept as it is.
+            data = (
+                exc.error.data
+                if isinstance(exc, UrlElicitationRequiredError)
+                else _redacted_strings(exc.error.data)
+            )
             if data != exc.error.data:
                 _warn_masked("error data", name)
             exc.error = exc.error.model_copy(update={"message": message, "data": data})
@@ -730,10 +735,10 @@ def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:
     every `_meta`: the result's and each block's."""
     content = [
         _scrubbed_model(
-            c.model_copy(update={"text": _scrubbed(c.text, "reply", name)}), name, "text block"
+            c.model_copy(update={"text": _scrubbed(c.text, "reply", name)}), name, "block"
         )
         if isinstance(c, TextContent)
-        else _scrubbed_model(c, name, "content block")
+        else _scrubbed_model(c, name, "block")
         for c in result.content
     ]
     update: dict[str, Any] = {"content": content}
@@ -765,7 +770,7 @@ def _scrubbed_model(model: Any, name: str, what: str) -> Any:
         if isinstance(value, dict):
             return {
                 k: value[k]
-                if binary and k in _BINARY_FIELDS
+                if (binary and k in _BINARY_FIELDS) or _passed_through(k, value)
                 else walk(value[k], binary=binary and k == "resource")
                 for k in value
             }
@@ -778,8 +783,15 @@ def _scrubbed_model(model: Any, name: str, what: str) -> Any:
     redacted = walk(raw, binary=True)
     if redacted == raw:
         return model
-    _warn_masked(f"{raw.get('type', what)} {what}" if "type" in raw else what, name)
+    _warn_masked(f"{raw['type']} {what}" if "type" in raw else what, name)
     return type(model).model_validate(redacted)
+
+
+def _passed_through(key: str, parent: dict[str, Any]) -> bool:
+    """Fields a client hands back or opens as they are (pre-QA r6 on #681): an input
+    request's `requestState` ("opaque state to pass back verbatim") and a URL elicitation's
+    `url`, which a mask would break, as a Photos share link's passphrase is kept."""
+    return key == "requestState" or (key == "url" and parent.get("mode") == "url")
 
 
 def _warn_masked(sink: str, name: str) -> None:

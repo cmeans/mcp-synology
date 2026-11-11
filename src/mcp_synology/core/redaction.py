@@ -125,7 +125,7 @@ _CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<=[?&;])({_KEY}=)("[^"\n]*"?|'[^'\n]*'
 # `(b'Name', b'value')`), with any quote, `b` prefix or JSON escape around the value.
 _HEADER_GAP = r"""\\?['"]?\s{0,64}[:=,]\s{0,64}b?\\?['"]?"""
 _CREDENTIAL_HEADER = re.compile(
-    rf"""(?i)(?<![A-Za-z0-9_-])(x-syno-token{_HEADER_GAP})[^\s'"\\,)\]}}]+"""
+    rf"""(?i)(?<![A-Za-z0-9_-])(x-syno-token{_HEADER_GAP})[^\s'"\\,)]+"""
 )
 # A cookie header, as a log line, a dict repr or JSON writes it (`Cookie: …`, `{'Cookie': '…'}`,
 # `"cookie": "…"`): DSM's session is its `id` cookie (#176), and every credential key among the
@@ -145,7 +145,7 @@ _COOKIE = re.compile(
     r"""|((?:(?<==)"[^"\n]{0,1024}"?|[^\n'"\\]){0,4096}))"""
 )
 _COOKIE_ITEM = re.compile(
-    rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s\]}}]*)"""
+    rf"""(?i)(^|;\s{{0,8}})((?:id|{_KEY})=)(\\{{0,3}}"[^"\n;]{{0,1024}}"?|[^;\s]*)"""
 )
 # A JSON member inside a JSON string, its quotes escaped (`{\\"passwd\\":\\"x\\"}`): a quoted
 # value, or a number.
@@ -354,9 +354,16 @@ def redact_secrets(text: str, *, names: bool = False) -> str:
         if names
         else (_CREDENTIAL_JSON_ESCAPED, _CREDENTIAL_JSON, _CREDENTIAL_REPR)
     )
-    text = escaped.sub(
-        lambda m: m.group(1) + (f'\\"{MASK}' if m.group(2).startswith('\\"') else MASK), text
-    )
+
+    def escaped_value(m: re.Match[str]) -> str:
+        value = m.group(2)
+        if not value.startswith('\\"'):
+            return m.group(1) + MASK
+        # Names mode takes the closing `\"` into the value: it's given back (pre-QA r6).
+        closed = names and len(value) > 2 and value.endswith('\\"')
+        return f'{m.group(1)}\\"{MASK}{chr(92) + chr(34) if closed else ""}'
+
+    text = escaped.sub(escaped_value, text)
     text = member.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
     return item.sub(lambda m: m.group(1) + _masked_value(m.group(2), m.group(2)[:1]), text)
 
@@ -370,7 +377,10 @@ def _header_context(m: re.Match[str]) -> bool:
     character before it, so it stays linear."""
     text, start = m.string, m.start()
     head = m.group(1)
-    if re.match(r"(?i)(?:set-)?(?:cookie|x-syno-token)\\?['\"]", head):
+    # Quoted on both sides: `/share/cookie', 'id=42.txt'` ends a quoted path, not a key.
+    if re.match(r"(?i)(?:set-)?(?:cookie|x-syno-token)\\?['\"]", head) and (
+        start > 0 and text[start - 1] in "'\""
+    ):
         return True
     return start == 0 or text[start - 1] == "\n"
 

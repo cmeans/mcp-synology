@@ -586,6 +586,9 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
             "input_value={'passwd': '***': 'abcdefghij'}",
         ),
         ("{'token': 5, 'a': 1}", "{'token': ***, 'a': 1}"),
+        # A header or cookie value is masked to its end in logs, brackets included (pre-QA r6).
+        ("Cookie: passwd=ab}cd; x=1", "Cookie: passwd=***; x=1"),
+        ("X-SYNO-Token: ab]cd", "X-SYNO-Token: ***"),
         ('{"passwd": "x" }', '{"passwd": "***" }'),
         # An unterminated value ending in an escaped quote keeps one quote.
         ('{"passwd": "a\\"', '{"passwd": "***'),
@@ -719,8 +722,18 @@ def test_a_nested_url_with_long_userinfo_is_masked() -> None:
         ("'Cookie: id=42 recipe.txt' not found", "'Cookie: id=42 recipe.txt' not found"),
         ("a.txt, Cookie: id=42.txt", "a.txt, Cookie: id=42.txt"),
         ("  x-syno-token = notes.txt", "  x-syno-token = notes.txt"),
-        # A value stops at a bracket either way.
         ("[(b'Cookie', b'id=SEC')]", "[(b'Cookie', b'id=***')]"),
+        # Escaped JSON keeps its closing quote (pre-QA r6 on #681).
+        ('{\\"passwd\\": \\"SECRET1\\"}', '{\\"passwd\\": \\"***\\"}'),
+        ('{\\"passwd\\":\\"S\\",\\"a\\":1}', '{\\"passwd\\":\\"***\\",\\"a\\":1}'),
+        ('{\\"X-SYNO-Token\\": \\"S\\"}', '{\\"X-SYNO-Token\\": \\"***\\"}'),
+        # A quoted path that ends in the header's name is a path, not a key.
+        ("['/share/cookie', 'id=42.txt']", "['/share/cookie', 'id=42.txt']"),
+        (
+            "Can't copy '/a/fortune cookie' = 'id=3.txt'",
+            "Can't copy '/a/fortune cookie' = 'id=3.txt'",
+        ),
+        ("['/a/x-syno-token', 'notes.txt']", "['/a/x-syno-token', 'notes.txt']"),
     ],
 )
 def test_names_mode_masks_query_items_only_inside_urls(text: str, expected: str) -> None:
