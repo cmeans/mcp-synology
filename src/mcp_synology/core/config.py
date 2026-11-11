@@ -1651,7 +1651,7 @@ def format_validation_error(exc: Any) -> str:
 
     Replaces pydantic's default multi-line traceback-style block with a
     list of `<dotted.location>: <message>` lines under a one-line header.
-    Caller still wraps in a `click.echo(... fg='red')` + `sys.exit(1)` to
+    Caller still wraps in a `say(..., fg='red', err=True)` + `sys.exit(1)` to
     match the project's standard CLI error envelope.
     """
     errors = exc.errors()

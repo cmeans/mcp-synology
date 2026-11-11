@@ -2186,7 +2186,8 @@ def test_every_dsm_reply_is_read_through_one_parser() -> None:
                     # reply.
                     r"json\.loads\(str\((e|error)\)\)|escape_nas_text\(json\.loads\("
                     r"|stack\.append\(\(key, json\.loads\(value\)\)\)"
-                    r"|parsed = json\.loads\(value\)  # a tool argument",
+                    r"|parsed = json\.loads\(value\)  # a tool argument"
+                    r"|json\.loads\(text\[start:\]\)  # this server's own error envelope",
                     line,
                 ), f"{path.name}: {line.strip()}"
 

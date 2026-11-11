@@ -13,7 +13,9 @@ class RedactingFormatter(logging.Formatter):
     """A formatter that masks credentials in the whole formatted record, traceback included
     (#514): `core.redaction.redact_secrets` on what `logging.Formatter` produces, so a URL with
     userinfo in an exception's text or a `passwd=` in a message can't reach stderr or the log
-    file. Every handler the CLI sets up uses it (`tests/test_redaction_sinks.py`)."""
+    file. Every handler the CLI sets up uses it (`tests/test_redaction_sinks.py`). One path it
+    doesn't cover: a malformed logging call (the wrong number of arguments) makes the handler
+    print the raw arguments through `Handler.handleError`, which no formatter sees."""
 
     def format(self, record: logging.LogRecord) -> str:
         from mcp_synology.core.redaction import redact_secrets

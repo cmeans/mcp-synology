@@ -667,7 +667,7 @@ def _json_strings_redacted(text: str) -> str:
     if start < 0:
         return text
     try:
-        body = json.loads(text[start:])
+        body = json.loads(text[start:])  # this server's own error envelope
     except ValueError:
         return text
 
