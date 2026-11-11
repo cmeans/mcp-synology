@@ -1386,6 +1386,15 @@ class TestPaddedPathsAreShownQuoted:
         text = await list_files(client, path=PADDED)  # type: ignore[arg-type]
         assert f"Contents of {QUOTED} (0 items)" in text, text
 
+    async def test_list_files_title_with_items(self) -> None:
+        """#690: the title of a listing with items quotes the folder too."""
+        from mcp_synology.modules.filestation.listing import list_files
+
+        listed = {"files": [{"name": "a", "path": f"{PADDED}/a", "isdir": False}], "total": 1}
+        client = _FakeClient({PADDED}, methods={"list": {**listed, "offset": 0}})
+        text = await list_files(client, path=PADDED)  # type: ignore[arg-type]
+        assert f"Contents of {QUOTED} (1 items)" in text, text
+
     async def test_get_file_info_title(self) -> None:
         """#690 (pre-QA r3): get_file_info's title names the path asked about, quoted."""
         from mcp_synology.modules.filestation.metadata import get_file_info
