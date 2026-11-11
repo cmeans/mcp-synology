@@ -624,27 +624,66 @@ async def test_no_item_starts_when_the_checks_before_it_use_up_the_wait(
     mock_client: DsmClient,
     clock: FakeClock,
     respx_mock: respx.Router,
-    monkeypatch: pytest.MonkeyPatch,
     tool: Tool,
 ) -> None:
-    """QA round 1 on #686: the wait runs out during the second item's checks before its start
-    (a slow BackgroundTask list): it isn't started, and the reply says the wait ran out."""
+    """QA round 1 on #686: the BackgroundTask list checked before the second item's start takes
+    the rest of the wait: that item isn't started, and the reply says the wait ran out."""
     scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
-    FakeDsm(scripts).mount(respx_mock)
-    real = batch._run_item
-    calls = 0
 
-    async def slow_checks(*args: Any, **kwargs: Any) -> Any:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            clock.now += WAIT  # the list took the rest of the wait
-        return await real(*args, **kwargs)
+    class SlowList(FakeDsm):
+        ran_slow = False
 
-    monkeypatch.setattr(batch, "_run_item", slow_checks)
+        def _answer(self, request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if request.content:
+                params.update(dict(httpx.QueryParams(request.content.decode())))
+            listing = params.get("api") == "SYNO.FileStation.BackgroundTask"
+            if listing and len(self.starts()) == 1 and not self.ran_slow:
+                self.ran_slow = True
+                clock.now += WAIT  # the list took the rest of the wait
+            return super()._answer(request)
+
+    dsm = SlowList(scripts)
+    dsm.mount(respx_mock)
     text = await tool.call(mock_client, TaskRecords())
+    assert len(dsm.starts()) == 1, dsm.methods()
     assert "ran out after 1 of 3" in text, text
     assert "Handle: `" not in text
+
+
+async def test_a_restores_recreated_folder_note_comes_before_not_started(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA r3 on #686: a restore to several places cut short by the wait keeps its
+    ``Not started:`` line last, as the first line's "(listed last)" says."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    scripts = {src: PathScript() for src in tool.sources}
+
+    class SlowList(FakeDsm):
+        ran_slow = False
+
+        def _answer(self, request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if request.content:
+                params.update(dict(httpx.QueryParams(request.content.decode())))
+            listing = params.get("api") == "SYNO.FileStation.BackgroundTask"
+            if listing and len(self.starts()) == 1 and not self.ran_slow:
+                self.ran_slow = True
+                clock.now += WAIT
+            return super()._answer(request)
+
+    SlowList(scripts).mount(respx_mock)
+
+    async def recreated(client: Any, destinations: Any) -> tuple[list[str], list[str]]:
+        return ["/s/o2"], []
+
+    monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "Re-created /s/o2 (no longer there)" in text, text
+    assert text.rstrip().splitlines()[-1].startswith("Not started:"), text
 
 
 async def test_an_item_started_near_the_end_still_gets_its_least_wait(

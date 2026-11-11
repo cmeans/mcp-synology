@@ -492,8 +492,9 @@ def _record(
     records.add(record)
 
 
-async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
-    """The call's reply: the adapter's summary, hand-off text or error (raised)."""
+async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome, note: str = "") -> str:
+    """The call's reply: the adapter's summary, hand-off text or error (raised). ``note`` (a
+    line starting with a newline) follows the summary, before a ``Not started:`` line."""
     last = batch.last
     if last is None:
         text = await adapter.summary(batch)
@@ -508,12 +509,14 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
                 f"after {ran:,} of "
                 f"{len(batch.items):,} item(s); the rest weren't started (listed last).\n"
                 + text
+                + note
                 + f"\nNot started: {', '.join(shown(x.source) for x in rest)}. Run {them} in "
                 "another call."
             )
-        return text
+            return text
+        return text + note
     if last.state == "handed_off":
-        return adapter.handoff_text(last, batch)
+        return adapter.handoff_text(last, batch) + note
     try:
         adapter.failure(last, batch)
     except ToolError as e:

@@ -518,9 +518,9 @@ async def poll_task(
     cancellation, which then propagates. The exception is 599, "no such task", which isn't a
     verdict on a task this call just started: it's read again a few times, then reported as
     ``lost`` (#521). The deadline is wall-clock (#237), and each status read waits at most what's
-    left of it (but at least ``_MIN_READ``), so a slow read can't outlast the wait (#496): a read
-    that times out is a stall, handed off. ``on_cancel_stop`` hears how a cancel's stop ended,
-    so the runner can record a task that may still run (#512).
+    left of it (but at least ``_MIN_READ``), so a slow read can outlast the wait by at most one
+    resent read (#496): a read that times out is a stall, handed off. ``on_cancel_stop`` hears
+    how a cancel's stop ended, so the runner can record a task that may still run (#512).
     """
     quoted = dsm_str(taskid)
     deadline = monotonic() + wait

@@ -2007,7 +2007,7 @@ async def restore_from_recycle_bin(
                 records=records,
                 on_progress=on_progress,
             )
-            return await batch_reply(adapter, outcome) + note
+            return await batch_reply(adapter, outcome, note)
 
         # Use the first destination (or provided dest_folder)
         actual_dest = dest_folder or restore_destinations[0]
