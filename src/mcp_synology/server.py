@@ -471,7 +471,7 @@ class _SynologyServer(MCPServer):
             result = await self._call_tool(name, arguments, context)
         except ToolError as exc:
             notice = await self._take_update_notice()
-            text = _scrubbed(str(exc), "error", name)
+            text = _scrubbed(_json_strings_redacted(str(exc)), "error", name, original=str(exc))
             raise type(exc)(f"{REPLY_LABEL}\n{text}{notice}") from exc.__cause__
         if not isinstance(result, CallToolResult):
             return result
@@ -643,19 +643,45 @@ _VALIDATION_MESSAGES = {
 }
 
 
-def _scrubbed(text: str, sink: str, where: str) -> str:
-    """``text`` as it may leave the server: credentials masked by `redact_secrets` (#514). A
-    credential reaching here means a call site let it through, so that's logged once per text
-    at WARNING, naming the sink and the tool, never the text (#514 Q2)."""
+def _scrubbed(text: str, sink: str, where: str, *, original: str | None = None) -> str:
+    """``text`` as it may leave the server: credentials masked by `redact_secrets` (#514). That
+    it masked anything is logged once per text at WARNING, naming the sink and the tool, never
+    the text (#514 Q2): usually a call site let a credential through. ``original`` is the text
+    before an earlier pass (`_json_strings_redacted`), for the comparison."""
     out = redact_secrets(text)
-    if out != text:
+    if out != (original if original is not None else text):
         logger.warning(
-            "A credential reached the %s of %s and was masked there (#514): a call site let "
-            "it through.",
+            "The %s of %s held text that looked like a credential, masked there (#514); if it "
+            "was one, a call site let it through.",
             sink,
             where,
         )
     return out
+
+
+def _json_strings_redacted(text: str) -> str:
+    """A structured error's text with every string in its JSON envelope run through
+    `redact_secrets` first: JSON inside the message is escaped there (`\\"passwd\\": …`), and
+    each string decoded is plain again. Text that isn't a JSON envelope is returned as it is."""
+    start = text.find("{")
+    if start < 0:
+        return text
+    try:
+        body = json.loads(text[start:])
+    except ValueError:
+        return text
+
+    def walk(value: Any) -> Any:
+        if isinstance(value, str):
+            return redact_secrets(value)
+        if isinstance(value, dict):
+            return {k: walk(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    redacted = walk(body)
+    return text if redacted == body else text[:start] + json.dumps(redacted)
 
 
 def _scrubbed_result(result: CallToolResult, name: str) -> CallToolResult:

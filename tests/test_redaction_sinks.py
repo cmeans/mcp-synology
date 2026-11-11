@@ -25,10 +25,12 @@ import pytest
 from mcp.client import Client
 from mcp.server.mcpserver import Context  # noqa: TC002 - the SDK reads the annotation at runtime
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import TextContent
 
 from mcp_synology.cli import logging_
 from mcp_synology.cli.output import say, visible
-from mcp_synology.core.formatting import report_progress
+from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.formatting import error_response, report_progress
 from mcp_synology.server import REPLY_LABEL, _SynologyServer, create_server
 from tests.conftest import make_test_config
 
@@ -58,8 +60,12 @@ async def test_a_reply_never_carries_a_credential(
     server = _SynologyServer("canary")
 
     @server.tool(name="leaky")
-    async def leaky() -> str:
-        return f"DSM said: {leak}"
+    async def leaky() -> list[TextContent]:
+        # Two text blocks: every block is scrubbed, not only the first.
+        return [
+            TextContent(type="text", text="first block"),
+            TextContent(type="text", text=f"DSM said: {leak}"),
+        ]
 
     with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
         async with Client(server) as client:
@@ -68,10 +74,12 @@ async def test_a_reply_never_carries_a_credential(
     assert text.startswith(REPLY_LABEL)
     assert CANARY not in text
     # A credential reaching the sink means a call site let it through: logged, never quoted.
-    warnings = [r.getMessage() for r in caplog.records if "credential reached" in r.getMessage()]
+    warnings = [
+        r.getMessage() for r in caplog.records if "looked like a credential" in r.getMessage()
+    ]
     assert warnings == [
-        "A credential reached the reply of leaky and was masked there (#514): "
-        "a call site let it through."
+        "The reply of leaky held text that looked like a credential, masked there (#514); if it "
+        "was one, a call site let it through."
     ]
     assert CANARY not in caplog.text
 
@@ -84,10 +92,17 @@ async def test_an_error_never_carries_a_credential(leak: str) -> None:
     async def leaky() -> str:
         raise ToolError(f"Can't reach {leak}")
 
+    @server.tool(name="structured")
+    async def structured() -> str:
+        # As real tools fail: error_response's JSON envelope, whose message escapes the quotes
+        # of JSON inside it.
+        error_response(ErrorCode.UNAVAILABLE, f"DSM said {leak}", retryable=False)
+
     async with Client(server) as client:
-        result = await client.call_tool("leaky", {})
-    assert result.is_error
-    assert CANARY not in _text(result)
+        for tool in ("leaky", "structured"):
+            result = await client.call_tool(tool, {})
+            assert result.is_error
+            assert CANARY not in _text(result), tool
 
 
 async def test_a_progress_message_never_carries_a_credential() -> None:
@@ -213,19 +228,63 @@ def _dotted(func: ast.expr) -> str:
     return ""
 
 
+def _aliases(tree: ast.Module) -> dict[str, str]:
+    """Names a module imports under another name, mapped to what they are
+    (`from click import echo as e` → `e: click.echo`)."""
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                found[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    found[alias.asname] = alias.name
+    return found
+
+
+_WRITERS = {"click.echo", "click.secho", "print", "click.get_text_stream"}
+_LOG_SETUP = {"basicConfig", "dictConfig", "fileConfig", "Formatter"}
+
+
 def test_every_output_goes_through_its_sink() -> None:
     found: list[str] = []
-    for rel, call in _calls():
-        name = _dotted(call.func)
-        last = name.rsplit(".", 1)[-1]
-        if name in ("click.echo", "click.secho", "print") and rel != _TERMINAL:
-            found.append(f"{rel}:{call.lineno} {name}(")
-        if last == "ToolError" and rel not in _ERRORS:
-            found.append(f"{rel}:{call.lineno} ToolError(")
-        if last == "report_progress" and name != "report_progress" and rel != _PROGRESS:
-            found.append(f"{rel}:{call.lineno} {name}( (use core.formatting.report_progress)")
-        if last in ("StreamHandler", "FileHandler", "Formatter", "basicConfig") and rel != _LOGGING:
-            found.append(f"{rel}:{call.lineno} {name}(")
+    for path in sorted(SRC.rglob("*.py")):
+        rel = str(path.relative_to(SRC))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        aliases = _aliases(tree)
+        for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+            name = _dotted(call.func)
+            head, _, tail = name.partition(".")
+            resolved = f"{aliases[head]}.{tail}".rstrip(".") if head in aliases else name
+            last = resolved.rsplit(".", 1)[-1]
+            here = f"{rel}:{call.lineno} {name}("
+            if (resolved in _WRITERS or name in ("sys.stdout.write", "sys.stderr.write")) and (
+                rel != _TERMINAL
+            ):
+                found.append(here)
+            if last == "ToolError" and rel not in _ERRORS:
+                found.append(here)
+            if (
+                last == "report_progress"
+                and resolved != "mcp_synology.core.formatting.report_progress"
+                and name != "report_progress"
+                and rel != _PROGRESS
+            ):
+                found.append(f"{here} (use core.formatting.report_progress)")
+            if (
+                (last.endswith("Handler") or last in _LOG_SETUP)
+                and rel != _LOGGING
+                and last != "VersionedHandler"
+            ):
+                found.append(here)
+            if (
+                name == "getattr"
+                and len(call.args) >= 2
+                and isinstance(call.args[1], ast.Constant)
+                and call.args[1].value in ("report_progress", "echo", "secho", "write")
+            ):
+                found.append(f"{here} getattr {call.args[1].value}")
     assert found == [], "\n".join(found)
 
 
@@ -246,8 +305,9 @@ def test_every_log_handler_uses_the_redacting_formatter() -> None:
             assert {k.arg for k in c.keywords} == {"level", "handlers"}
 
 
-def test_the_canary_reaches_each_sink_unmasked_without_the_pass() -> None:
-    """The canaries do reach the sinks: each one is masked by the pass, not absent."""
+def test_the_canaries_hold_credentials_the_pass_masks() -> None:
+    """Each canary holds a credential that `redact_secrets` masks, so a sink test that finds
+    none out has the pass to thank, not a canary that was never there."""
     from mcp_synology.core.redaction import redact_secrets
 
     for leak in LEAKS:

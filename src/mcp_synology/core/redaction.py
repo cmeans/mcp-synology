@@ -305,14 +305,16 @@ def _mask_authority(url: str) -> str:
 
 
 # A value that is only a placeholder in angle brackets.
-_PLACEHOLDER = re.compile(r"<[^<>\n]{1,64}>")
+# The placeholders this server prints for the user to fill in (`setup`'s client snippet); a
+# real value in angle brackets (`<hunter2>`) is still masked.
+_PLACEHOLDERS = frozenset({"<your password>"})
 
 
 def _masked_value(value: str, quote: str) -> str:
     """A JSON or repr value masked, keeping its quotes (one if it had only one), or a number.
     A placeholder (`"<your password>"`, as `setup`'s client snippet prints) is kept: it holds no
     secret, and the user fills it in."""
-    if _PLACEHOLDER.fullmatch(value.strip("'\"")):
+    if value.strip("'\"") in _PLACEHOLDERS:
         return value
     if quote not in ("'", '"') or not value.startswith(quote):
         return MASK
