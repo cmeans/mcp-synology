@@ -2266,3 +2266,30 @@ def test_a_surrogate_encoded_in_utf8_reads_as_parsing_the_bytes_did() -> None:
     from mcp_synology.core.client import _loads
 
     assert _loads(b'{"a":"\xed\xa0\x80"}', "t") == {"a": "\\ud800"}
+
+
+def test_log_safe_redacts_list_items() -> None:
+    """`_log_safe` redacts a list value's items (#458, #514). Today's callers send URI lists as
+    one string, redacted already; this covers a caller that doesn't."""
+    from mcp_synology.core.client import _log_safe
+
+    logged = _log_safe({"uri": ["https://u:CANARY@h/x", "magnet:?xt=urn:btih:a&tr=x"], "n": 2})
+    assert "CANARY" not in str(logged)
+    assert logged["n"] == 2
+    assert logged["uri"][0] == "https://***@h/x"
+    assert _log_safe({"t": ("https://u:CANARY@h/x",)})["t"] == ["https://***@h/x"]
+    nested = _log_safe(
+        {"c": {"k": "https://u:CANARY@h/x"}, "Passwd": "x", "b": b"https://u:CANARY@h/"}
+    )
+    assert "CANARY" not in str(nested)
+    assert nested["Passwd"] == "***"
+    assert _log_safe({"s": {"https://u:CANARY@h/x"}})["s"] == ["https://***@h/x"]
+
+
+def test_log_safe_keeps_a_uri_list_with_an_at_in_a_name() -> None:
+    """A DS2 create list as one JSON string: an `@` in a magnet's name isn't userinfo of the
+    URL before it (pre-QA r5 on #514)."""
+    from mcp_synology.core.client import _log_safe
+
+    uris = '["https://mirror.example","magnet:?xt=urn:btih:abc&dn=Show@Group"]'
+    assert "mirror.example" in _log_safe({"url": uris})["url"]

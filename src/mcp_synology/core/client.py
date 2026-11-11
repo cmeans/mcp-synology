@@ -55,11 +55,25 @@ _SENSITIVE_PARAMS = frozenset({"passwd", "password", "_sid", "device_id", "otp_c
 def _log_safe(
     params: dict[str, Any], sensitive: frozenset[str] = _SENSITIVE_PARAMS
 ) -> dict[str, Any]:
-    """Params as they may be logged: sensitive names masked, URL secrets redacted (#143)."""
-    return {
-        k: "***" if k in sensitive else redact_urls(v) if isinstance(v, str) else v
-        for k, v in params.items()
-    }
+    """Params as they may be logged: sensitive names masked, URL secrets redacted (#143), in a
+    list's, set's or dict's items too, with names compared case-insensitively and bytes decoded
+    (#458; QA round 1 on #680). Today's callers send URI lists as one string (JSON or
+    comma-joined), which was redacted already; the other shapes are for any caller that doesn't."""
+
+    lowered = {name.lower() for name in sensitive}
+
+    def safe(value: Any) -> Any:
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "replace")
+        if isinstance(value, str):
+            return redact_urls(value)
+        if isinstance(value, dict):
+            return {k: "***" if str(k).lower() in lowered else safe(v) for k, v in value.items()}
+        if isinstance(value, list | tuple | set | frozenset):
+            return [safe(item) for item in value]
+        return value
+
+    return {k: "***" if str(k).lower() in lowered else safe(v) for k, v in params.items()}
 
 
 # Type alias for transfer progress callbacks.
