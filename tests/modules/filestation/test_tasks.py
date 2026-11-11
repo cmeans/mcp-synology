@@ -19,6 +19,7 @@ from mcp_synology.modules.filestation.tasks import (
     DiscoveryNote,
     Handle,
     HandleKind,
+    StopResult,
     TaskRecord,
     TaskRecords,
     parse_handle,
@@ -217,7 +218,7 @@ class TestPollTask:
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=1, label="x")
         assert result.outcome == "handoff"
         assert "stop" not in calls
-        assert result.stopped is False
+        assert result.stop is None
         assert result.status["processed_num"] == 8
 
     @respx.mock
@@ -275,7 +276,7 @@ class TestPollTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "stalled"
-        assert result.stopped is False
+        assert result.stop is None
         assert result.error is exc
         assert result.status["processed_num"] == 8  # the last answered status
         assert "stop" not in calls
@@ -295,7 +296,7 @@ class TestPollTask:
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "stalled"
         assert isinstance(result.error, DsmReplyError)
-        assert result.stopped is False
+        assert result.stop is None
         assert calls == ["status"]
 
     @pytest.mark.parametrize("status_code", [502, 504])
@@ -317,7 +318,7 @@ class TestPollTask:
         assert result.outcome == "stalled"
         assert isinstance(result.error, DsmHttpError)
         assert result.error.status == status_code
-        assert result.stopped is False
+        assert result.stop is None
         assert result.status == RUNNING
         assert calls == ["status", "status"]
 
@@ -337,7 +338,7 @@ class TestPollTask:
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "stalled"
         assert isinstance(result.error, RequestTooLongError)
-        assert result.stopped is False
+        assert result.stop is None
         assert calls == ["status", "status"]
 
     @respx.mock
@@ -362,7 +363,7 @@ class TestPollTask:
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "stalled"
         assert isinstance(result.error, DsmHttpError)
-        assert result.stopped is False
+        assert result.stop is None
         assert calls == ["status", "status", "login"]  # no stop
 
     @respx.mock
@@ -385,17 +386,20 @@ class TestPollTask:
         assert calls == ["status", "status"]
 
     @pytest.mark.parametrize(
-        "stop_reply",
+        ("stop_reply", "expected"),
         [
-            httpx.Response(200, json={"success": False, "error": {"code": 401}}),
-            httpx.ReadTimeout(""),
+            (httpx.Response(200, json={"success": False, "error": {"code": 401}}), "refused"),
+            (httpx.ReadTimeout(""), "unanswered"),
+            (httpx.ConnectError("refused"), "not_sent"),
+            (httpx.Response(502), "unanswered"),
         ],
     )
     @respx.mock
     async def test_poll_error_stop_not_confirmed(
-        self, mock_client: DsmClient, clock: list[float], stop_reply: Any
+        self, mock_client: DsmClient, clock: list[float], stop_reply: Any, expected: str
     ) -> None:
-        """A DSM error stops the task; a refused or unanswered stop is reported as such."""
+        """A DSM error stops the task; how the stop ended is reported: refused, unanswered (it
+        may have reached DSM) or not sent (#497)."""
         calls: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -409,7 +413,7 @@ class TestPollTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "poll_error"
-        assert result.stopped is False
+        assert result.stop is StopResult(expected)
         assert calls == ["status", "stop"]
 
     @respx.mock
@@ -427,7 +431,7 @@ class TestPollTask:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label="x")
         assert result.outcome == "poll_error"
-        assert result.stopped is True
+        assert result.stop is StopResult.CONFIRMED
         assert result.error is not None
         # A stop waits STOP_WAIT for DSM's answer, then the status decides (#630).
         assert timeouts == {"status": 30, "stop": STOP_WAIT}
@@ -471,7 +475,7 @@ class TestPollTask:
                 mock_client, api=API, version=2, taskid="t1", wait=30, label="x"
             )
         assert result.outcome == "lost"
-        assert result.stopped is False
+        assert result.stop is None
         assert calls == ["status"] * 3
         assert "with no status yet" in caplog.text
         assert "t1" in caplog.text

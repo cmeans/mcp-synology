@@ -45,6 +45,8 @@ class PathScript:
     start: Any = "ok"
     # The status reads, in order; the last one repeats.
     statuses: list[Any] = field(default_factory=lambda: [dict(FINISHED)])
+    # A stop of its task: "ok", a DSM error code, an exception to raise, or an HTTP response.
+    stop: Any = "ok"
     # A task for this path already running (listed by BackgroundTask list).
     running: dict[str, Any] | None = None
     # Once DSM has lost its task (599), getinfo of the path answers this instead: a code for it
@@ -143,7 +145,7 @@ class FakeDsm:
             if method == "status":
                 return self._status(params["taskid"].strip('"'))
             if method == "stop":
-                return self._ok({})
+                return self._stop(params["taskid"].strip('"'))
         if api == "SYNO.FileStation.CreateFolder":
             return self._ok({"folders": [{"path": params.get("folder_path", "")}]})
         return self._ok({})
@@ -190,6 +192,17 @@ class FakeDsm:
         taskid = f"FileStation_{prefix}_{self._next}"
         self._tasks[taskid] = path
         return self._ok({"taskid": taskid})
+
+    def _stop(self, taskid: str) -> httpx.Response:
+        script = self.scripts.get(self._tasks.get(taskid, ""), PathScript())
+        answer = script.stop
+        if isinstance(answer, BaseException):
+            raise answer
+        if isinstance(answer, httpx.Response):
+            return answer
+        if isinstance(answer, int):
+            return self._err(answer)
+        return self._ok({})
 
     def _status(self, taskid: str) -> httpx.Response:
         path = self._tasks.get(taskid, "")

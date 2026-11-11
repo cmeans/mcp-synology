@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, Protocol
 
@@ -34,6 +36,7 @@ import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import SynologyError
+from mcp_synology.core.formatting import rewrapped_error
 from mcp_synology.modules.filestation.helpers import dsm_str
 from mcp_synology.modules.filestation.tasks import (
     Handle,
@@ -41,10 +44,14 @@ from mcp_synology.modules.filestation.tasks import (
     Handoff,
     MonotonicProgress,
     ProgressCallback,
+    StopNote,
+    StopResult,
     TaskRecord,
     TaskRecords,
     _stop_background_task,
     poll_task,
+    progress_mark,
+    progress_text,
 )
 
 if TYPE_CHECKING:
@@ -90,9 +97,9 @@ class ItemOutcome:
     """How one item ended.
 
     ``done``: its task finished and the adapter read it (``result``: the adapter's reading).
-    ``failed``: ``error`` is the ToolError to report, or a DSM error to word (``stopped``: whether
-    DSM confirmed the stop sent after a status read's DSM error; not read yet: the reply says
-    nothing of the stop today, and #497, the runner's next step, words it).
+    ``failed``: ``error`` is the ToolError to report, or a DSM error to word. After a status
+    read's DSM error, ``stop`` says how the stop sent for its task ended; unless DSM confirmed
+    it, the task may still run, so it has a ``handoff`` (its handle) and a record (#497).
     ``may_have_started``: the start got no answer (``error``, a transport error).
     ``handed_off``: left running with ``handoff``; ``running`` is the task DSM listed when one
     was already running, so none was started.
@@ -102,7 +109,7 @@ class ItemOutcome:
     state: ItemState
     result: Any = None
     error: BaseException | None = None
-    stopped: bool = False
+    stop: StopResult | None = None
     handoff: Handoff | None = None
     running: dict[str, Any] | None = None
 
@@ -266,7 +273,18 @@ async def _run_item(
     )
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
-        return ItemOutcome(item, "failed", error=result.error, stopped=result.stopped)
+        outcome = ItemOutcome(item, "failed", error=result.error, stop=result.stop)
+        if result.stop is not StopResult.CONFIRMED:
+            # DSM didn't confirm the stop: the task may still run, so the reply gives its handle
+            # and file_task knows it; a stop that may have reached DSM is noted (#497, #660).
+            outcome.handoff = Handoff(Handle(adapter.kind, taskid), result.status)
+            _record(
+                adapter,
+                outcome,
+                records,
+                stop_sent=result.stop is StopResult.UNANSWERED,
+            )
+        return outcome
     if result.outcome == "lost" and await _gone(client, adapter, item, taskid):
         # DSM can't say how it ended, but the item can: gone is what was asked for (#521).
         return ItemOutcome(item, "done")
@@ -311,10 +329,34 @@ def _handed_off(
     adapter: TaskAdapter, outcome: ItemOutcome, records: TaskRecords | None
 ) -> ItemOutcome:
     """Record a handed-off item, so `file_task` can follow it up. No DSM request here (#245)."""
-    assert outcome.handoff is not None
-    if records is not None:
-        records.add(TaskRecord(handle=outcome.handoff.handle, **adapter.record_extras(outcome)))
+    _record(adapter, outcome, records)
     return outcome
+
+
+def _record(
+    adapter: TaskAdapter,
+    outcome: ItemOutcome,
+    records: TaskRecords | None,
+    *,
+    stop_sent: bool = False,
+) -> None:
+    """The one record writer: an item with a handle gets a ``TaskRecord``, with a ``StopNote``
+    when a stop was sent and DSM hasn't confirmed it (#497, #660)."""
+    assert outcome.handoff is not None
+    if records is None:
+        return
+    record = TaskRecord(handle=outcome.handoff.handle, **adapter.record_extras(outcome))
+    if stop_sent:
+        status = outcome.handoff.status
+        # The last read came before the stop, so it isn't a baseline yet (QA round 1 on #660).
+        record.stop = StopNote(
+            sent=time.time(),
+            sent_clock=records.now(),
+            progress=progress_text(status) if status else None,
+            mark=progress_mark(status) if status else None,
+            settled=False,
+        )
+    records.add(record)
 
 
 async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
@@ -324,7 +366,47 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
         return await adapter.summary(batch)
     if last.state == "handed_off":
         return adapter.handoff_text(last, batch)
-    adapter.failure(last, batch)
+    try:
+        adapter.failure(last, batch)
+    except ToolError as e:
+        raise _with_stop(e, last) from None
+
+
+# What a failure says of the stop sent after a status read's DSM error (#497): only a confirmed
+# stop is called one; anything else leaves the task possibly running, with its handle.
+_STOP_SAYS = {
+    StopResult.CONFIRMED: "DSM confirmed the stop of its task",
+    StopResult.UNANSWERED: "a stop was sent for its task, and DSM hasn't confirmed it",
+    StopResult.REFUSED: "DSM refused the stop of its task, so it may still be running",
+    StopResult.NOT_SENT: "the stop for its task couldn't be sent, so it may still be running",
+}
+
+
+def _with_stop(error: ToolError, outcome: ItemOutcome) -> ToolError:
+    """``error`` with what became of the stop of ``outcome``'s task, and its handle when it may
+    still be running (#497)."""
+    if outcome.stop is None:
+        return error
+    try:
+        body = json.loads(str(error))
+        details = body["error"]
+        message = str(details["message"]).rstrip(". ")
+    except (ValueError, KeyError, TypeError):
+        return error
+    details["message"] = f"{message}; {_STOP_SAYS[outcome.stop]}."
+    if outcome.handoff is not None:
+        handle = str(outcome.handoff.handle)
+        details["handle"] = handle
+        # It may still change things on the NAS: running the call again now could meet it.
+        details["retryable"] = False
+        follow = f"Check it with file_task(handle={handle!r}) before running this again" + (
+            "; don't send another stop yet: DSM can take a minute to confirm one."
+            if outcome.stop is StopResult.UNANSWERED
+            else ", and stop it there if it's still running."
+        )
+        advice = str(details.get("suggestion") or "").strip()
+        details["suggestion"] = f"{advice.rstrip('.')}. {follow}" if advice else follow
+    return rewrapped_error(body)
 
 
 @contextlib.contextmanager

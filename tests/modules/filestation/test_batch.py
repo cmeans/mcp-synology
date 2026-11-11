@@ -160,6 +160,26 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
         "failed",
     ),
     "poll_dsm_error": (lambda t, i, s: setattr(s, "statuses", [RUNNING, 400]), "failed"),
+    # The stop sent after that error isn't confirmed: the task may still run, so the failure
+    # gives its handle and file_task knows it (#497).
+    "poll_dsm_error_stop_unanswered": (
+        lambda t, i, s: (
+            setattr(s, "statuses", [RUNNING, 400]),
+            setattr(s, "stop", httpx.ReadTimeout("no answer")),
+        ),
+        "failed",
+    ),
+    "poll_dsm_error_stop_refused": (
+        lambda t, i, s: (setattr(s, "statuses", [RUNNING, 400]), setattr(s, "stop", 401)),
+        "failed",
+    ),
+    "poll_dsm_error_stop_not_sent": (
+        lambda t, i, s: (
+            setattr(s, "statuses", [RUNNING, 400]),
+            setattr(s, "stop", httpx.ConnectError("refused")),
+        ),
+        "failed",
+    ),
     "stall_transport": (
         lambda t, i, s: setattr(s, "statuses", [RUNNING, httpx.ReadTimeout("no answer")]),
         "handed_off",
@@ -225,16 +245,22 @@ POSITIONS = {"first": 0, "middle": 1, "last": 2}
 # Cells today's behavior gets wrong, by (tool, scenario, position): the invariants broken, each
 # kept until the issue named fixes it. Restore's two forms share copy's and move's gaps.
 _COPY_FAMILY = ("copy_files", "move_files", "restore_flat", "restore_origin")
+_POLL_ERRORS = (
+    "poll_dsm_error",
+    "poll_dsm_error_stop_unanswered",
+    "poll_dsm_error_stop_refused",
+    "poll_dsm_error_stop_not_sent",
+)
 
 
 def _gaps() -> dict[tuple[str, str, str], frozenset[str]]:
     gaps: dict[tuple[str, str, str], frozenset[str]] = {}
     for tool in _COPY_FAMILY:
-        for scenario in ("start_dsm_error", "poll_dsm_error", "finished_with_error"):
+        for scenario in ("start_dsm_error", *_POLL_ERRORS, "finished_with_error"):
             for position in ("first", "middle"):
                 # #482: a failure doesn't list what wasn't started.
                 gaps[(tool, scenario, position)] = frozenset({"names_not_started"})
-        for scenario in ("start_dsm_error", "poll_dsm_error"):
+        for scenario in ("start_dsm_error", *_POLL_ERRORS):
             for position in ("middle", "last"):
                 # #482: a DSM error on the start or a status read doesn't say what was done.
                 gaps[(tool, scenario, position)] = gaps.get(
@@ -348,7 +374,7 @@ async def test_matrix(
     broken: set[str] = set()
     # Stops only on cancellation or a DSM error code, never after a hand-off (CLAUDE.md, #245).
     stops = len(dsm.stops())
-    if stops != (1 if scenario in ("poll_dsm_error", "cancel_mid_poll") else 0):
+    if stops != (1 if scenario in (*_POLL_ERRORS, "cancel_mid_poll") else 0):
         broken.add("stops")
 
     if expected == "canceled":
@@ -370,14 +396,25 @@ async def test_matrix(
         broken.add("states")
 
     last = outcome.last
-    # A handle exactly when an item may still be running: and then a record for it.
+    # A handle exactly when an item may still be running: handed off, or failed with a stop DSM
+    # didn't confirm (#497); and then a record for it, with a stop note when the stop may have
+    # reached DSM (#660).
     handles = [line for line in text.splitlines() if line.startswith("Handle: `")]
-    if (last is not None and last.state == "handed_off") != bool(handles):
+    if error is not None and error.get("handle"):
+        handles.append(f"Handle: `{error['handle']}`")
+    may_run = last is not None and (last.state == "handed_off" or scenario in _POLL_ERRORS[1:])
+    if may_run != bool(handles):
         broken.add("handle")
     for line in handles:
         handle = parse_handle(line.removeprefix("Handle: "))
-        if records.get(handle) is None:
+        record = records.get(handle)
+        if record is None:
             broken.add("record")
+        elif (record.stop is not None) != (scenario == "poll_dsm_error_stop_unanswered"):
+            broken.add("stop_note")
+    if may_run and error is not None and error.get("retryable"):
+        # Its task may still change things: running the call again now could meet it.
+        broken.add("retryable")
     if last is not None and last.state == "handed_off":
         # No DSM request between the hand-off and the reply: the call that decided it (the
         # task's last status read, or the task list that showed it already running) is the last.

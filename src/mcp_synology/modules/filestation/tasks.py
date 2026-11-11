@@ -13,6 +13,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 
 import anyio
@@ -262,29 +263,57 @@ class TaskRecords:
         record.final_status = status
 
 
+class StopResult(Enum):
+    """How a stop request ended (#512, #497). Only ``CONFIRMED`` means DSM said it stopped;
+    ``UNANSWERED`` reached DSM, or may have, and DSM 7.1 often answers a stop only after about
+    a minute though it took effect at once (#630); ``REFUSED`` is DSM's error code; ``NOT_SENT``
+    never left this machine (its connection couldn't be opened, or the request was too long)."""
+
+    CONFIRMED = "confirmed"
+    UNANSWERED = "unanswered"
+    REFUSED = "refused"
+    NOT_SENT = "not_sent"
+
+
 async def _stop_background_task(
     client: DsmClient,
     api: str,
     taskid: str,
     version: int,
     task_logger: logging.Logger,
-) -> bool:
+) -> StopResult:
     """Stop a background task (CopyMove, Delete). Logs warnings on failure.
 
-    Returns whether DSM confirmed the stop, so an error message never claims a task
-    was stopped when DSM, stalled, didn't answer the stop either (QA R1 on #239).
-    """
+    Says how the stop ended, so an error message never claims a task was stopped when DSM,
+    stalled, didn't answer the stop either (QA R1 on #239), and a stop that may have reached
+    DSM is told from one that never left (#497)."""
     try:
         await client.request(
             api, "stop", version=version, params={"taskid": taskid}, read_timeout=STOP_WAIT
         )
+    except RequestTooLongError as e:
+        task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
+        return StopResult.NOT_SENT
+    except (DsmHttpError, DsmReplyError) as e:
+        # A proxy's 502/504 or page: the stop reached it and may have reached DSM.
+        task_logger.warning("%s task cleanup unanswered for %s: %s", api, taskid, e)
+        return StopResult.UNANSWERED
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
+        return StopResult.REFUSED
+    except httpx.TransportError as e:
+        task_logger.warning(
+            "%s task cleanup %s for %s: %s",
+            api,
+            "not sent" if never_sent(e) else "unanswered",
+            taskid,
+            type(e).__name__,
+        )
+        return StopResult.NOT_SENT if never_sent(e) else StopResult.UNANSWERED
     except Exception:
         task_logger.warning("%s task cleanup failed for %s", api, taskid, exc_info=True)
-    else:
-        return True
-    return False
+        return StopResult.UNANSWERED
+    return StopResult.CONFIRMED
 
 
 ProgressCallback = Callable[[float, float | None, str], Awaitable[None]]
@@ -342,7 +371,8 @@ class PollResult:
     status: dict[str, Any]
     outcome: Literal["finished", "handoff", "poll_error", "stalled", "lost"]
     error: Exception | None = None
-    stopped: bool = False
+    # A ``poll_error``'s stop: how DSM answered it (#497).
+    stop: StopResult | None = None
 
 
 @dataclass
@@ -486,7 +516,7 @@ async def poll_task(
     missing_since = 0.0
     last_missing: SynologyError | None = None
 
-    async def stop() -> bool:
+    async def stop() -> StopResult:
         return await _stop_background_task(client, api, quoted, version, logger)
 
     try:
