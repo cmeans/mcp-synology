@@ -144,8 +144,13 @@ async def test_an_error_never_carries_a_credential(leak: str) -> None:
         # A `{` that doesn't start a JSON envelope: the text is redacted whole.
         raise ToolError(f"bad {{x}} {leak}")
 
+    @server.tool(name="prefixed")
+    async def prefixed() -> str:
+        # Text before a JSON envelope is redacted too.
+        raise ToolError(f"{leak} said {LEAKS[2]}")
+
     async with Client(server) as client:
-        for tool in ("leaky", "structured", "braces"):
+        for tool in ("leaky", "structured", "braces", "prefixed"):
             result = await client.call_tool(tool, {})
             assert result.is_error
             assert CANARY not in _text(result), tool
