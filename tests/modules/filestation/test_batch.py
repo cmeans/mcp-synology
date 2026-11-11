@@ -609,13 +609,42 @@ async def test_no_item_starts_once_the_calls_wait_is_over(
     text = await tool.call(mock_client, TaskRecords())
     assert len(dsm.starts()) == 2, dsm.methods()
     assert clock.now <= WAIT + batch.MIN_ITEM_WAIT, clock.now
-    assert text.startswith("[!] This call's wait (2 s) ran out after 2 of 3 item(s)"), text
+    setting = "delete_timeout" if tool.kind == "delete" else "copy_move_timeout"
+    assert text.startswith(f"[!] This call's wait (2 s, {setting}) ran out after 2 of 3"), text
     assert text.endswith(f"Not started: {shown(tool.sources[2])}. Run it in another call."), text
     assert "Handle: `" not in text  # nothing is running
     # What wasn't started isn't named as done, nor its folder as emptied.
     done_part = text[: text.index("Not started:")]
     assert tool.sources[2].rsplit("/", 1)[-1] not in done_part, text
     assert "have been removed from" not in text, text
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_no_item_starts_when_the_checks_before_it_use_up_the_wait(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+    tool: Tool,
+) -> None:
+    """QA round 1 on #686: the wait runs out during the second item's checks before its start
+    (a slow BackgroundTask list): it isn't started, and the reply says the wait ran out."""
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    FakeDsm(scripts).mount(respx_mock)
+    real = batch._run_item
+    calls = 0
+
+    async def slow_checks(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            clock.now += WAIT  # the list took the rest of the wait
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(batch, "_run_item", slow_checks)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "ran out after 1 of 3" in text, text
+    assert "Handle: `" not in text
 
 
 async def test_an_item_started_near_the_end_still_gets_its_least_wait(

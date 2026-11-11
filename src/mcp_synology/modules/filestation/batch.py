@@ -241,7 +241,7 @@ async def run_batch(
     with adapter.batch_scope():
         for i, item in enumerate(items):
             first_of_group = i == 0 or items[i - 1].group != item.group
-            if i > 0 and budget.spent():
+            if i > 0 and budget.spent():  # also re-checked just before the start (_run_item)
                 # The call's wait is over: the rest aren't started (#496). A group cut short is
                 # summarized with what it did.
                 if not first_of_group:
@@ -252,7 +252,16 @@ async def run_batch(
                 return batch
             if first_of_group:
                 await adapter.begin_group([x for x in items if x.group == item.group])
-            outcome = await _run_item(client, adapter, item, budget, records, progress)
+            outcome = await _run_item(
+                client, adapter, item, budget, records, progress, first=i == 0
+            )
+            if outcome.state == "not_started":
+                # The wait ran out during the checks before its start (a slow task list).
+                if not first_of_group:
+                    await adapter.end_group([x for x in items[:i] if x.group == item.group])
+                batch.items.extend(ItemOutcome(x, "not_started") for x in items[i:])
+                batch.out_of_time = budget.per_call
+                return batch
             batch.items.append(outcome)
             if outcome.state != "done":
                 batch.items.extend(ItemOutcome(x, "not_started") for x in items[i + 1 :])
@@ -271,10 +280,16 @@ async def _run_item(
     budget: Budget,
     records: TaskRecords | None,
     progress: ProgressCallback | None,
+    *,
+    first: bool = True,
 ) -> ItemOutcome:
     try:
         async with adapter.start_guard(item):
             running = await adapter.before_start(item)
+            if running is None and not first and budget.spent():
+                # The checks before the start (a BackgroundTask list) used up the wait: no new
+                # start once it's over (QA round 1 on #686).
+                return ItemOutcome(item, "not_started")
             if running is None:
                 try:
                     data = await _shielded_start(client, adapter, item, records)
@@ -489,7 +504,8 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
             ran = len(batch.items) - len(rest)
             them = "it" if len(rest) == 1 else "them"
             text = (
-                f"[!] This call's wait ({batch.out_of_time:g} s) ran out after {ran:,} of "
+                f"[!] This call's wait ({batch.out_of_time:g} s, {_setting(adapter)}) ran out "
+                f"after {ran:,} of "
                 f"{len(batch.items):,} item(s); the rest weren't started (listed last).\n"
                 + text
                 + f"\nNot started: {', '.join(shown(x.source) for x in rest)}. Run {them} in "
@@ -512,6 +528,11 @@ _STOP_SAYS = {
     StopResult.REFUSED: "DSM refused the stop of {}'s task, so it may still be running",
     StopResult.NOT_SENT: "the stop for {}'s task couldn't be sent, so it may still be running",
 }
+
+
+def _setting(adapter: TaskAdapter) -> str:
+    """The setting that sets this call's wait, as the reply names it."""
+    return "delete_timeout" if adapter.kind == "delete" else "copy_move_timeout"
 
 
 def _with_stop(error: ToolError, outcome: ItemOutcome) -> ToolError:
