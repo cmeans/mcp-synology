@@ -500,14 +500,17 @@ async def download_file(
                 "Use the filename parameter to specify a compatible name."
             ),
         )
+    # The local file's name quoted as the NAS name is (#688); its folder as the OS writes it
+    # (shown() reads '/' as the only separator, and repr doubles a Windows backslash).
+    written = os.path.join(str(dest_file.parent), shown(dest_file.name))
     if is_folder:
         result = format_status(
             f"Downloaded the folder {shown(nas_path)} as a ZIP archive of it "
-            f"({format_size(bytes_written)}) to {dest_file}"
+            f"({format_size(bytes_written)}) to {written}"
         )
     else:
         result = format_status(
-            f"Downloaded {shown(effective_name)} ({format_size(bytes_written)}) to {dest_file}"
+            f"Downloaded {shown(effective_name)} ({format_size(bytes_written)}) to {written}"
         )
 
     # The server log, too, says which local file was written and whether one was replaced
@@ -515,11 +518,11 @@ async def download_file(
     logger.debug("Downloaded %s to %s (replaced a file there: %s)", nas_path, dest_file, replaced)
     if replaced_link:
         result += (
-            f"\n    It replaced the symlink {dest_file.name} that was there (its target is "
+            f"\n    It replaced the symlink {shown(dest_file.name)} that was there (its target is "
             "untouched)."
         )
     elif replaced:
-        result += f"\n    It replaced the {dest_file.name} that was there."
+        result += f"\n    It replaced the {shown(dest_file.name)} that was there."
 
     if bytes_written >= _LARGE_FILE_THRESHOLD:
         result += (

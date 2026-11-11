@@ -752,6 +752,39 @@ class TestDownloadFile:
         assert f"Downloaded the folder {'/video/shows '!r} as a ZIP archive of it" in out, out
 
     @respx.mock
+    async def test_a_name_with_a_tab_is_quoted_in_every_line(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA r2): the NAS name, the local file's name and the replaced line quote a
+        tab alike; the local folder stays as the OS writes it."""
+        name = "a\tb.txt"
+        (tmp_path / name).write_text("old")
+        file_info = {"path": f"/video/{name}", "name": name, "isdir": False}
+        self._route(
+            httpx.Response(200, json={"success": True, "data": {"files": [file_info]}}),
+            httpx.Response(200, content=b"new"),
+        )
+        out = await download_file(
+            mock_client, path=f"/video/{name}", dest_folder=str(tmp_path), overwrite=True
+        )
+        assert f"Downloaded {name!r} (3 B) to {tmp_path}{os.sep}{name!r}" in out, out
+        assert f"It replaced the {name!r} that was there." in out, out
+        assert "\t" not in out, out
+
+    @respx.mock
+    async def test_a_padded_share_root_is_quoted(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """#688 (pre-QA r2): the whole-shared-folder refusal quotes a padded share too."""
+        self._route(self._folder_info("/video "), httpx.Response(502))
+        with pytest.raises(ToolError) as exc_info:
+            await download_file(mock_client, path="/video ", dest_folder=str(tmp_path))
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.startswith(f"Download failed: {'/video '!r} is a whole shared folder"), (
+            message
+        )
+
+    @respx.mock
     async def test_download_folder_name_too_long_with_zip(
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
