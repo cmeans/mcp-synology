@@ -661,7 +661,8 @@ def shown(path: str) -> str:
     A folder written with its trailing slash is ``{shown(folder)}/``: the folder quoted, then
     the slash (#688).
     Listings of what's on the NAS (list_files, search_files, list_recycle_bin, get_file_info)
-    show names as DSM does, escaped by the client (#604)."""
+    show the names DSM returns as DSM does, escaped by the client (#604); their titles, which
+    name the path the caller asked about, use ``shown`` (#690)."""
     for part in path.split("/"):
         if not part:
             continue

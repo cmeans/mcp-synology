@@ -1378,6 +1378,21 @@ class TestPaddedPathsAreShownQuoted:
         text = await get_dir_size(client, path=PADDED)  # type: ignore[arg-type]
         assert f"Directory Size: {QUOTED}" in text, text
 
+    async def test_list_files_title(self) -> None:
+        """#690 (pre-QA r3): a listing's title names the folder the caller asked about."""
+        from mcp_synology.modules.filestation.listing import list_files
+
+        client = _FakeClient({PADDED}, methods={"list": {"files": [], "total": 0, "offset": 0}})
+        text = await list_files(client, path=PADDED)  # type: ignore[arg-type]
+        assert f"Contents of {QUOTED} (0 items)" in text, text
+
+    async def test_get_file_info_title(self) -> None:
+        """#690 (pre-QA r3): get_file_info's title names the path asked about, quoted."""
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        text = await get_file_info(_FakeClient({PADDED}), paths=[PADDED])  # type: ignore[arg-type, list-item]
+        assert f"File Info: {QUOTED}" in text, text
+
     async def test_create_folder_reply(self) -> None:
         """#688: create_folder's reply quotes a padded folder DSM made."""
         from mcp_synology.modules.filestation.operations import create_folder
