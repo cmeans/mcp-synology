@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, Protocol
@@ -38,7 +39,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import rewrapped_error
 from mcp_synology.modules.filestation import tasks as _tasks
-from mcp_synology.modules.filestation.helpers import dsm_str, shown
+from mcp_synology.modules.filestation.helpers import _escaped_repr, dsm_str, shown
 from mcp_synology.modules.filestation.tasks import (
     STOP_WAIT,
     Handle,
@@ -217,7 +218,24 @@ class TaskAdapter(Protocol):
         """After a group's last item finished, before the next group's checks."""
         ...
 
-    def failure(self, outcome: ItemOutcome, batch: BatchOutcome) -> NoReturn: ...
+    def cause(self, outcome: ItemOutcome) -> NoReturn:
+        """Raise the failure of ``outcome``'s item on its own: what the call did before it and
+        what wasn't started are `failure_error`'s to add (#482)."""
+        ...
+
+    def progress_text(self, outcome: ItemOutcome) -> str:
+        """What the call did before ``outcome``'s item failed, as ``. Already <done> before this
+        failure: …`` (with what DSM skipped), or "" when it did nothing."""
+        ...
+
+    def retry_advice(self) -> str:
+        """What to leave out when retrying after some items were done (#480, #482)."""
+        ...
+
+    def amend(self, error: ToolError) -> ToolError:
+        """The adapter's last note on a failure after items were done (copy: what they
+        replaced, #620)."""
+        ...
 
     def handoff_text(self, outcome: ItemOutcome, batch: BatchOutcome) -> str: ...
 
@@ -251,7 +269,16 @@ async def run_batch(
                 batch.out_of_time = budget.per_call
                 return batch
             if first_of_group:
-                await adapter.begin_group([x for x in items if x.group == item.group])
+                try:
+                    await adapter.begin_group([x for x in items if x.group == item.group])
+                except ToolError as e:
+                    if not batch.items:
+                        raise  # a refusal before anything ran: it says so itself
+                    # A restore's later destination refused after earlier items finished: it's
+                    # that item's failure, so the reply says what was done (#482).
+                    batch.items.append(ItemOutcome(item, "failed", error=e))
+                    batch.items.extend(ItemOutcome(x, "not_started") for x in items[i + 1 :])
+                    return batch
             outcome = await _run_item(
                 client, adapter, item, budget, records, progress, first=i == 0
             )
@@ -517,10 +544,121 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome, note: str = "")
         return text + note
     if last.state == "handed_off":
         return adapter.handoff_text(last, batch) + note
+    raise failure_error(adapter, last, batch)
+
+
+def unstop(message: str) -> str:
+    """``message`` without its final period, and only that one: a path can end in dots."""
+    return message[:-1] if message.endswith(".") else message
+
+
+# Advice that already says to check with list_files (a start with no answer, a path not
+# found when the delete ran), not advice that only mentions it (408's "Use list_files or
+# search_files to find …").
+CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
+
+
+def names_path(message: str, path: str) -> bool:
+    """Whether ``message`` names ``path`` itself: after the start, a space, ":" or "(",
+    and followed by the end, a sentence's period, or " (" (as in
+    ``/video/b (DSM error 900)``); not a path ending in it (``/video/b/x/video/b``)."""
+    # As messages show it: quoted when padded (`shown`, #489).
+    pattern = r"(?<![^\s:(])" + re.escape(shown(path)) + r"(?=$|\.$|\.\s|\s\()"
+    return re.search(pattern, message) is not None
+
+
+def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcome) -> ToolError:
+    """The one failure formatter of the batch tools (#482): the item's cause, then which item
+    failed, what the call did before it, what wasn't started, the adapter's note and the stop
+    sent for its task, the same for every tool. One retryable rule (#452, #490; the maintainer's
+    Q4 and Q5 on #512): only when nothing ran, nothing may have, and the cause's own flag says
+    so. Advice is added to the cause's own, never in place of it (QA round 3 on #480)."""
     try:
-        adapter.failure(last, batch)
+        adapter.cause(outcome)
     except ToolError as e:
-        raise _with_stop(e, last) from None
+        error = e
+    failed = outcome.item.source
+    done = adapter.progress_text(outcome)
+    rest = [x.source for x in batch.not_started()]
+    refused = _refused_path(error)
+    if refused is not None and refused != failed and refused in rest:
+        # A refusal of a later item, checked before this one's start (a landing clash, #587):
+        # that's the item it names; this one wasn't started either.
+        rest = [failed, *(r for r in rest if r != refused)]
+        failed = refused
+    if done or rest:
+        error = _with_progress(error, failed, done, adapter.retry_advice())
+        if done:
+            error = adapter.amend(error)
+        error = _with_not_started(error, rest)
+    return _with_stop(error, outcome)
+
+
+def _refused_path(error: ToolError) -> str | None:
+    """The one path a refusal gives as its value, if it gives one."""
+    try:
+        details = json.loads(str(error))["error"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    value = details.get("value")
+    return value if details.get("param") == "paths" and isinstance(value, str) else None
+
+
+def _with_progress(error: ToolError, failed: str, done: str, leave_out: str) -> ToolError:
+    """``error`` with which item failed and what was done before it (``done``), so the user
+    can tell what's left (QA round 1 on #480)."""
+    try:
+        body = json.loads(str(error))
+        details = body["error"]
+        message = str(details["message"])
+    except (ValueError, KeyError, TypeError):
+        return error
+    # A DSM error on a start or a status request names no path (QA round 5 on #480); one
+    # that names a path inside the item, or a sibling starting with the same characters
+    # (/video/a.txt, /video/a b), doesn't name the item either. A refusal quotes it as
+    # ``_escaped_repr`` writes it.
+    names_it = names_path(message, failed) or _escaped_repr(failed) in message
+    if not names_it:
+        message = unstop(message) + f". Failed on: {shown(failed)}."
+    details["param"] = "paths"
+    details["value"] = failed
+    if done:
+        message = unstop(message) + done + "."
+        # Something ran: the same call again would repeat or meet it, so only what's left can
+        # be retried, after a check (#482; the maintainer's Q5 on #512).
+        details["retryable"] = False
+        # A note that reads after any advice, or alone (QA round 4 on #480): no "Then", no
+        # second "retry", and a check first, since the failed item may be done already, unless
+        # the advice already says to check with list_files (QA round 5).
+        original = str(details.get("suggestion") or "").strip()
+        retry = f"When retrying, leave out {leave_out}"
+        if not CHECKS_WITH_LIST_FILES.search(original):
+            retry += f", and check {shown(failed)} with list_files first"
+        retry += "."
+        if not original:
+            details["suggestion"] = retry
+        elif original[-1] in ".!?)":
+            details["suggestion"] = f"{original} {retry}"
+        else:
+            # Advice that ends in a list (418's characters to avoid) goes last, so no
+            # punctuation is read as part of it.
+            details["suggestion"] = f"{retry} {original}"
+    details["message"] = message
+    return rewrapped_error(body)
+
+
+def _with_not_started(error: ToolError, rest: list[str]) -> ToolError:
+    """``error`` ending with the items that weren't started, last as the reply's first line of
+    a cut-short call says (#482, #496)."""
+    if not rest:
+        return error
+    try:
+        body = json.loads(str(error))
+        message = str(body["error"]["message"])
+    except (ValueError, KeyError, TypeError):
+        return error
+    body["error"]["message"] = unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
+    return rewrapped_error(body)
 
 
 # What a failure says of the stop sent after a status read's DSM error (#497): only a confirmed

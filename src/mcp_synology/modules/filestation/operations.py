@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import re
 from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -38,6 +37,7 @@ from mcp_synology.modules.filestation.batch import (
     no_scope,
     run_batch,
 )
+from mcp_synology.modules.filestation.batch import unstop as _unstop
 from mcp_synology.modules.filestation.helpers import (
     _escaped_repr,
     _is_dot,
@@ -317,83 +317,6 @@ def _collapse_overlaps(paths: list[str], *, drop_nested: bool = True) -> list[st
     return out
 
 
-def _unstop(message: str) -> str:
-    """``message`` without its final period, and only that one: a path can end in dots."""
-    return message[:-1] if message.endswith(".") else message
-
-
-# Advice that already says to check with list_files (a start with no answer, a path not
-# found when the delete ran),
-# not advice that only mentions it (408's "Use list_files or search_files to find …").
-_CHECKS_WITH_LIST_FILES = re.compile(r"\bcheck\b[^.]*\bwith list_files\b", re.IGNORECASE)
-
-
-def _names_path(message: str, path: str) -> bool:
-    """Whether ``message`` names ``path`` itself: after the start, a space, ":" or "(",
-    and followed by the end, a sentence's period, or " (" (as in
-    ``/video/b (DSM error 900)``); not a path ending in it (``/video/b/x/video/b``)."""
-    # As messages show it: quoted when padded (`shown`, #489).
-    pattern = r"(?<![^\s:(])" + re.escape(shown(path)) + r"(?=$|\.$|\.\s|\s\()"
-    return re.search(pattern, message) is not None
-
-
-def _with_progress_so_far(
-    error: ToolError, failed: str, done: list[str], rest: list[str]
-) -> ToolError:
-    """A delete's error, saying which path failed, what was already deleted and what
-    wasn't started, so the user can tell what's left after a failure partway (QA round 1
-    on #480)."""
-    if not done and not rest:
-        return error
-    try:
-        body = json.loads(str(error))
-        message = body["error"]["message"]
-    except (ValueError, KeyError, TypeError):
-        return error
-    # A DSM error on a start or a status request names no path (QA round 5 on #480); one
-    # that names a path inside the item, or a sibling starting with the same characters
-    # (/video/a.txt, /video/a b), doesn't name the item either.
-    if not _names_path(message, failed):
-        message = _unstop(message) + f". Failed on: {shown(failed)}."
-    body["error"]["param"] = "paths"
-    body["error"]["value"] = failed
-    # The delete loop is the one place that adds these: _delete_result doesn't (pre-QA on
-    # #480; a check for the words in the message missed a path containing them).
-    if done:
-        message = _unstop(message) + _already_done("Delete", done) + "."
-        # The same call again is refused (the deleted paths are missing): only the items not
-        # deleted can be retried (QA round 2 on #480).
-        body["error"]["retryable"] = False
-        # Added to the cause's own advice (free space, permissions, check before deleting
-        # again), never in place of it (QA round 3 on #480).
-        # A note that reads after any advice, or alone (QA round 4): no "Then", no second
-        # "retry", and a check first, since the failed path may be gone already,
-        # unless the advice already says to check with list_files (QA round 5).
-        original = str(body["error"].get("suggestion") or "").strip()
-        if _CHECKS_WITH_LIST_FILES.search(original):
-            retry = (
-                "When retrying, leave out the paths already deleted (the same call would be "
-                "refused)."
-            )
-        else:
-            retry = (
-                "When retrying, leave out the paths already deleted (the same call would be "
-                f"refused), and check {shown(failed)} with list_files first."
-            )
-        if not original:
-            body["error"]["suggestion"] = retry
-        elif original[-1] in ".!?)":
-            body["error"]["suggestion"] = f"{original} {retry}"
-        else:
-            # Advice that ends in a list (418's characters to avoid) goes last, so no
-            # punctuation is read as part of it.
-            body["error"]["suggestion"] = f"{retry} {original}"
-    if rest:
-        message = _unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
-    body["error"]["message"] = message
-    return rewrapped_error(body)
-
-
 def _already_done(
     operation: str,
     done: list[str] | None,
@@ -455,38 +378,27 @@ def _refuse_landing_on_a_running_task(
     *,
     overwrite: bool,
     remove_src: bool,
-    done: list[str],
-    skipped: list[str],
-    later: list[str] | None,
-    dest_of: dict[str, str] | None = None,
+    anything_done: bool,
 ) -> None:
     """Refuse if a running task would land in ``dest`` under one of ``remaining``'s names, and
     either replaces (#587). Checked before each path: a task can start during an earlier path's
-    wait. Earlier paths may be done, or a restore's earlier items, so it says what was done and
-    what wasn't started. Names are quoted, since a task's path may be anyone's text, and only the
-    path that clashes is named, since a task can hold thousands."""
+    wait. Earlier paths may be done, or a restore's earlier items: then the batch's failure
+    formatter says what was done and what wasn't started (#482); else it says nothing was.
+    Names are quoted, since a task's path may be anyone's text, and only the path that clashes
+    is named, since a task can hold thousands."""
     found = running_landing(
         tasks, sources=remaining, dest=dest, overwrite=overwrite, remove_src=remove_src
     )
     if found is None:
         return
     source, clash, task = found
-    rest = [p for p in remaining if p != source] + list(later or [])
-    outcome = f" Nothing was {_PAST_TENSE.get(operation, 'changed')}."
-    if done or skipped:
-        outcome = (
-            _already_done(operation, done, skipped, dest_of=dest_of, dest=dest).removeprefix(".")
-            + "."
-        )
-        if rest:
-            outcome += f" Not started: {', '.join(map(_escaped_repr, rest))}."
+    outcome = "" if anything_done else f" Nothing was {_PAST_TENSE.get(operation, 'changed')}."
     same = clash.rsplit("/", 1)[-1] == source.rsplit("/", 1)[-1]
     names = (
         "the same name"
         if same
         else "a name that matches ignoring case, which some file systems treat as one,"
     )
-    leave_out = " Leave out what's already done." if done else ""
     keep = "" if not overwrite else " Once it's done, overwrite=false keeps what's there."
     if task.task.get("local"):
         # Another call through this server, started or about to start: it counts until that
@@ -499,7 +411,7 @@ def _refuse_landing_on_a_running_task(
         )
         advice = (
             "Once that call has returned, check what's there (list_files) before "
-            f"running this again, or use another destination.{keep}{leave_out}"
+            f"running this again, or use another destination.{keep}"
         )
     else:
         what = (
@@ -509,7 +421,7 @@ def _refuse_landing_on_a_running_task(
         advice = (
             f"Check on it with file_task and the handle `{task.handle}`, and when it's done, "
             "check what's there (list_files) before running this again, or use another "
-            f"destination.{keep}{leave_out}"
+            f"destination.{keep}"
         )
     error_response(
         ErrorCode.INVALID_PARAMETER,
@@ -552,11 +464,12 @@ async def _refuse_missing_destination(
         )
         return
     codes = {code for _, code in found}
-    nothing = f"Nothing was {_PAST_TENSE.get(operation, 'processed')}."
+    # After earlier items finished, the batch's failure formatter says what was done (#482).
+    nothing = "" if anything_done else f" Nothing was {_PAST_TENSE.get(operation, 'processed')}."
     if 408 in codes:
         error_response(
             ErrorCode.NOT_FOUND,
-            f"{operation} files refused: the destination folder {shown(dest)} doesn't exist. "
+            f"{operation} files refused: the destination folder {shown(dest)} doesn't exist."
             f"{nothing}",
             retryable=False,
             param="dest_folder",
@@ -574,7 +487,7 @@ async def _refuse_missing_destination(
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"{operation} files refused: no permission to use the destination folder {shown(dest)}."
-            f" {nothing}",
+            f"{nothing}",
             retryable=False,
             param="dest_folder",
             value=dest,
@@ -1056,10 +969,6 @@ class CopyMoveAdapter:
         assert self._track is not None
         self._track(task)
 
-    def _later(self, item: Item) -> list[str]:
-        """The sources of the groups after ``item``'s."""
-        return [x.source for x in self.items if x.group > item.group]
-
     async def begin_group(self, items: Sequence[Item]) -> None:
         client, operation = self.client, self.operation
         normalized = [x.source for x in items]
@@ -1153,10 +1062,7 @@ class CopyMoveAdapter:
             self.dest,
             overwrite=self.overwrite,
             remove_src=self.remove_src,
-            done=self.done,
-            skipped=self.skipped,
-            later=self._later(item),
-            dest_of=self.went,
+            anything_done=bool(self.done or self.skipped),
         )
         # DSM's list only: a parallel call's finished task is nothing to hand back.
         return find_running(listed, api=self.api, path=p, params=match)
@@ -1187,15 +1093,8 @@ class CopyMoveAdapter:
         return f"{_PRESENT[self.operation]} {item.source}"
 
     def read_finished(self, item: Item, status: dict[str, Any]) -> tuple[int, bool]:
-        return _copy_move_result(
-            status,
-            item.source,
-            self.operation,
-            self.done,
-            dest=self.dest,
-            skipped_so_far=self.skipped,
-            dest_of=self.went,
-        )
+        # What the call did before is the failure formatter's to add (#482).
+        return _copy_move_result(status, item.source, self.operation, dest=self.dest)
 
     def lost_check(self, item: Item) -> None:
         return None
@@ -1340,49 +1239,51 @@ class CopyMoveAdapter:
         results.append(reply)
         return "\n".join(results)
 
-    def failure(self, outcome: ItemOutcome, batch: BatchOutcome) -> NoReturn:
+    def cause(self, outcome: ItemOutcome) -> NoReturn:
         operation, p = self.operation, outcome.item.source
-        rest = [x.source for x in batch.not_started()]
-        try:
-            e = outcome.error
-            if outcome.state == "may_have_started":
-                assert isinstance(e, httpx.TransportError)
-                if not self.done and not self.skipped and not rest:
-                    raise e  # nothing to add: the server's usual timeout or connection error
-                # The start got no answer: it may have started. Say so, with what was done and
-                # what wasn't started, as delete_files does (#588).
-                not_started = f". Not started: {', '.join(map(shown, rest))}" if rest else ""
-                error_response(
-                    ErrorCode.TIMEOUT
-                    if isinstance(e, httpx.TimeoutException)
-                    else ErrorCode.UNAVAILABLE,
-                    f"{operation} files failed: DSM didn't answer for {shown(p)} "
-                    f"({describe_transport_error(e)}); its {operation.lower()} may have started"
-                    + _already_done(
-                        operation,
-                        self.done,
-                        self.skipped,
-                        dest_of=self.went,
-                        dest=self.dest,
-                        failing=p,
-                    )
-                    + f"{not_started}.",
-                    retryable=False,
-                    param="paths",
-                    value=p,
-                    suggestion="Check with list_files, or file_task with no handle, before "
-                    "running it again"
-                    + (", and leave out what's already done." if self.done else "."),
-                )
-            if isinstance(e, ToolError):
-                raise e
-            assert isinstance(e, SynologyError)
-            synology_error_response(f"{operation} files", e)
-        except ToolError as refused:
-            # A later item failed: say which done ones replaced something (pre-QA r4 on #623).
-            raise _with_replaced_note(
-                refused, operation, self.done, self.seen, self.went, self.dest
-            ) from None
+        e = outcome.error
+        if outcome.state == "may_have_started":
+            assert isinstance(e, httpx.TransportError)
+            # The start got no answer: it may have started, so it isn't retryable even when
+            # nothing else ran (#452; the maintainer's Q4 on #512; #588).
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                f"({describe_transport_error(e)}); its {operation.lower()} may have started.",
+                retryable=False,
+                param="paths",
+                value=p,
+                suggestion="Check with list_files, or file_task with no handle, before "
+                "running it again.",
+            )
+        if isinstance(e, ToolError):
+            raise e
+        assert isinstance(e, SynologyError)
+        synology_error_response(f"{operation} files", e)
+
+    def progress_text(self, outcome: ItemOutcome) -> str:
+        return _already_done(
+            self.operation,
+            self.done,
+            self.skipped,
+            dest_of=self.went,
+            dest=self.dest,
+            failing=outcome.item.source,
+        )
+
+    def retry_advice(self) -> str:
+        past = _PAST_TENSE.get(self.operation, "processed")
+        if self.remove_src:
+            return f"the paths already {past} (they're no longer where they were)"
+        return f"the paths already {past}"
+
+    def amend(self, error: ToolError) -> ToolError:
+        # Which done ones replaced something (pre-QA r4 on #623).
+        return _with_replaced_note(
+            error, self.operation, self.done, self.seen, self.went, self.dest
+        )
 
 
 async def _copy_move_summary(
@@ -1580,34 +1481,41 @@ class DeleteAdapter:
         )
         return reply if outcome.running is None else _already_running("Delete", p) + "\n" + reply
 
-    def failure(self, outcome: ItemOutcome, batch: BatchOutcome) -> NoReturn:
+    def cause(self, outcome: ItemOutcome) -> NoReturn:
         p = outcome.item.source
-        rest = [x.source for x in batch.not_started()]
-        try:
-            e = outcome.error
-            if outcome.state == "may_have_started":
-                assert isinstance(e, httpx.TransportError)
-                if not self.deleted and not rest:
-                    raise e  # nothing to add: the server's usual timeout or connection error
-                # The start got no answer (a status with none hands the item off in
-                # poll_task): it may have started. Say so, with what was done and what
-                # wasn't started (QA round 1 on #480).
-                error_response(
-                    ErrorCode.TIMEOUT
-                    if isinstance(e, httpx.TimeoutException)
-                    else ErrorCode.UNAVAILABLE,
-                    f"Delete files failed: DSM didn't answer for {shown(p)} "
-                    f"({describe_transport_error(e)}); its delete may have started.",
-                    retryable=False,
-                    suggestion="Check with list_files, or file_task with no handle, "
-                    "before deleting again.",
-                )
-            if isinstance(e, ToolError):
-                raise e
-            assert isinstance(e, SynologyError)
-            synology_error_response("Delete files", e)
-        except ToolError as err:
-            raise _with_progress_so_far(err, p, self.deleted, rest) from None
+        e = outcome.error
+        if outcome.state == "may_have_started":
+            assert isinstance(e, httpx.TransportError)
+            # The start got no answer (a status with none hands the item off in poll_task): it
+            # may have started, so it isn't retryable even when nothing else ran (#452; the
+            # maintainer's Q4 on #512; QA round 1 on #480).
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"Delete files failed: DSM didn't answer for {shown(p)} "
+                f"({describe_transport_error(e)}); its delete may have started.",
+                retryable=False,
+                param="paths",
+                value=p,
+                suggestion="Check with list_files, or file_task with no handle, "
+                "before deleting again.",
+            )
+        if isinstance(e, ToolError):
+            raise e
+        assert isinstance(e, SynologyError)
+        synology_error_response("Delete files", e)
+
+    def progress_text(self, outcome: ItemOutcome) -> str:
+        return _already_done("Delete", self.deleted)
+
+    def retry_advice(self) -> str:
+        # The same call again is refused (the deleted paths are missing): only the items not
+        # deleted can be retried (QA round 2 on #480).
+        return "the paths already deleted (the same call would be refused)"
+
+    def amend(self, error: ToolError) -> ToolError:
+        return error
 
 
 def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> None:
@@ -1965,9 +1873,7 @@ async def restore_from_recycle_bin(
                 dest,
                 overwrite=overwrite,
                 remove_src=True,
-                done=[],
-                skipped=[],
-                later=None,
+                anything_done=False,
             )
         recreated, made = (
             ([], [])

@@ -2559,8 +2559,9 @@ class TestStallHandoff:
         assert records.get(Handle("copy", "FileStation_BIG")) is not None
 
     @respx.mock
-    async def test_start_transport_error_unchanged(self, mock_client: DsmClient) -> None:
-        """No task ID yet, so no handle: the start's network error surfaces as before."""
+    async def test_start_transport_error_has_no_handle(self, mock_client: DsmClient) -> None:
+        """No task ID yet, so no handle: the reply says the delete may have started, and it
+        isn't retryable (#452)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             if dict(request.url.params).get("method") == "start":
@@ -2568,8 +2569,11 @@ class TestStallHandoff:
             return httpx.Response(200, json={"success": True, "data": {}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        with pytest.raises(httpx.ReadTimeout):
+        with pytest.raises(ToolError) as refused:
             await delete_files(mock_client, paths=["/s/big"], recycle_bin_status={"s": True})
+        body = json.loads(str(refused.value))["error"]
+        assert "handle" not in body
+        assert body["retryable"] is False
 
 
 class TestDeleteHandoff:
@@ -3833,20 +3837,23 @@ class TestDeleteFailurePartway:
         ],
     )
     def test_names_path(self, message: str, named: bool) -> None:
-        from mcp_synology.modules.filestation.operations import _names_path
+        from mcp_synology.modules.filestation.batch import names_path as _names_path
 
         assert _names_path(message, "/video/a") is named
 
     @respx.mock
-    async def test_a_lone_start_with_no_answer_is_unchanged(self, mock_client: DsmClient) -> None:
+    async def test_a_lone_start_with_no_answer_isnt_retryable(self, mock_client: DsmClient) -> None:
+        """#452, the maintainer's Q4 on #512: it may have started."""
         self._route(1, transport=True)
-        with pytest.raises(httpx.ReadTimeout):
+        with pytest.raises(ToolError) as refused:
             await delete_files(mock_client, paths=["/video/a"], timeout=5)
+        body = json.loads(str(refused.value))["error"]
+        assert (body["code"], body["retryable"], body["value"]) == ("timeout", False, "/video/a")
+        assert body["message"].endswith("its delete may have started.")
 
     def test_partway_is_not_retryable_once_something_was_deleted(self) -> None:
         """The same call again is refused (the deleted paths are missing), so a retryable
         DSM error partway comes back not retryable (QA round 2 on #480)."""
-        from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         def error(retryable: bool) -> ToolError:
             body = {
@@ -3880,7 +3887,6 @@ class TestDeleteFailurePartway:
         ],
     )
     def test_where_the_note_goes(self, advice: str, suggestion: str) -> None:
-        from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         body = {"error": {"code": "x", "message": "x.", "suggestion": advice}}
         out = _with_progress_so_far(
@@ -3889,7 +3895,6 @@ class TestDeleteFailurePartway:
         assert json.loads(str(out))["error"]["suggestion"] == suggestion
 
     def test_a_path_ending_in_dots_keeps_them(self) -> None:
-        from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         error = ToolError(json.dumps({"status": "error", "error": {"message": "Failed."}}))
         out = _with_progress_so_far(
@@ -3901,7 +3906,6 @@ class TestDeleteFailurePartway:
         )
 
     def test_an_error_that_isnt_the_envelope_is_kept(self) -> None:
-        from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         error = ToolError("plain text")
         assert _with_progress_so_far(error, "/video/x", ["/video/a"], ["/video/b"]) is error
@@ -4038,8 +4042,8 @@ async def test_an_unanswered_start_partway_says_what_happened(
     assert body["param"] == "paths"
     assert body["value"] == "/s/b"
     assert body["suggestion"] == (
-        "Check with list_files, or file_task with no handle, before running it again, and leave "
-        "out what's already done."
+        "Check with list_files, or file_task with no handle, before running it again. When "
+        "retrying, leave out the paths already moved (they're no longer where they were)."
     )
     assert body["message"].startswith(
         f"Move files failed: DSM didn't answer for /s/b ({type(error).__name__}"
@@ -4062,13 +4066,24 @@ async def test_an_unanswered_start_on_the_last_path_names_what_was_done(
 
 
 @respx.mock
-async def test_an_unanswered_only_start_stays_the_servers_timeout(
+async def test_an_unanswered_only_start_isnt_retryable(
     mock_client: DsmClient, no_poll_wait: None
 ) -> None:
+    """#452, the maintainer's Q4 on #512: a lone start with no answer may have started, so it
+    isn't the server's retryable timeout."""
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_unanswered_start(calls, "/s/a"))
-    with pytest.raises(httpx.ReadTimeout):
+    with pytest.raises(ToolError) as refused:
         await copy_files(mock_client, paths=["/s/a"], dest_folder="/d")
+    body = json.loads(str(refused.value))["error"]
+    assert body["code"] == "timeout"
+    assert body["retryable"] is False
+    assert body["message"] == (
+        "Copy files failed: DSM didn't answer for /s/a (ReadTimeout); its copy may have started."
+    )
+    assert body["suggestion"] == (
+        "Check with list_files, or file_task with no handle, before running it again."
+    )
 
 
 async def _report_for(
@@ -6024,8 +6039,8 @@ async def test_a_restore_refused_partway_says_what_was_done(mock_client: DsmClie
     message = json.loads(str(refused.value))["error"]["message"]
     assert "Nothing was" not in message
     assert "Already restored before this failure: /s/#recycle/x/a (to /s/x)." in message
-    assert message.endswith("Not started: '/s/#recycle/z/c'.")
-    assert "Leave out what's already done." in body_suggestion(refused)
+    assert message.endswith("Not started: /s/#recycle/z/c.")
+    assert "When retrying, leave out the paths already restored" in body_suggestion(refused)
 
 
 def body_suggestion(refused: Any) -> str:
@@ -6341,7 +6356,9 @@ async def test_a_refusal_lists_the_other_paths_it_didnt_start(mock_client: DsmCl
             mock_client, paths=["/b/big", "/b/y", "/b/x"], dest_folder="/d", overwrite=True
         )
     message = json.loads(str(refused.value))["error"]["message"]
-    assert message.endswith("Not started: '/b/y'.")
+    # The clash is /b/x's: /b/y, before it, wasn't started either (#482's formatter).
+    assert "Failed on" not in message
+    assert message.endswith("Not started: /b/y.")
 
 
 @respx.mock
@@ -7501,3 +7518,19 @@ class TestSourcesDsmWontShow:
             "be in the recycle bin. Not started: "
         ) in message, message
         assert message.endswith("Not started: /w/src/b. Not started: c."), message
+
+
+def _with_progress_so_far(error: Any, failed: str, done: list[str], rest: list[str]) -> Any:
+    """A delete's failure through the batch formatter, as `DeleteAdapter` words it (#512 PR 3)."""
+    from mcp_synology.modules.filestation.batch import _with_progress
+    from mcp_synology.modules.filestation.operations import _already_done
+
+    from mcp_synology.modules.filestation.batch import _with_not_started
+
+    out = _with_progress(
+        error,
+        failed,
+        _already_done("Delete", done),
+        "the paths already deleted (the same call would be refused)",
+    )
+    return _with_not_started(out, rest)

@@ -273,25 +273,10 @@ _MAY_RUN = (
 
 
 def _gaps() -> dict[tuple[str, str, str], frozenset[str]]:
-    gaps: dict[tuple[str, str, str], frozenset[str]] = {}
-    for tool in _COPY_FAMILY:
-        for scenario in ("start_dsm_error", *_POLL_ERRORS, "finished_with_error"):
-            for position in ("first", "middle"):
-                # #482: a failure doesn't list what wasn't started.
-                gaps[(tool, scenario, position)] = frozenset({"names_not_started"})
-        for scenario in ("start_dsm_error", *_POLL_ERRORS):
-            for position in ("middle", "last"):
-                # #482: a DSM error on the start or a status read doesn't say what was done.
-                gaps[(tool, scenario, position)] = gaps.get(
-                    (tool, scenario, position), frozenset()
-                ) | {"names_done"}
-        for position in ("middle", "last"):
-            # #452: a finished task's error takes the table's flag (415: retryable), though
-            # earlier items were done and the same call again would redo them.
-            gaps[(tool, "finished_with_error", position)] = gaps.get(
-                (tool, "finished_with_error", position), frozenset()
-            ) | {"retryable"}
-    return gaps
+    """The cells known to break an invariant, each with the issue that fixes it. None today:
+    #512 PR 3's one failure formatter closed #482's (what was done and not started) and #452's
+    (retryable after items ran) for copy, move and restore."""
+    return {}
 
 
 KNOWN_GAPS = _gaps()

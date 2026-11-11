@@ -1230,7 +1230,6 @@ class TestPaddedPathsAreShownQuoted:
 
     def test_partial_delete_lists(self) -> None:
         from mcp_synology.core.formatting import error_response
-        from mcp_synology.modules.filestation.operations import _with_progress_so_far
 
         try:
             error_response(
@@ -1246,7 +1245,7 @@ class TestPaddedPathsAreShownQuoted:
 
     def test_a_named_padded_path_isnt_repeated(self) -> None:
         """`_names_path` sees the quoted form, so no redundant "Failed on" (#480)."""
-        from mcp_synology.modules.filestation.operations import _names_path
+        from mcp_synology.modules.filestation.batch import names_path as _names_path
 
         assert _names_path(f"Delete files failed: not found for {QUOTED}.", PADDED)
 
@@ -2063,3 +2062,19 @@ def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
     with pytest.raises(ToolError) as exc:
         resolve_bin_items("video", ["Shows/a\nb"], "paths")
     assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]
+
+
+def _with_progress_so_far(error: Any, failed: str, done: list[str], rest: list[str]) -> Any:
+    """A delete's failure through the batch formatter, as `DeleteAdapter` words it (#512 PR 3)."""
+    from mcp_synology.modules.filestation.batch import _with_progress
+    from mcp_synology.modules.filestation.operations import _already_done
+
+    from mcp_synology.modules.filestation.batch import _with_not_started
+
+    out = _with_progress(
+        error,
+        failed,
+        _already_done("Delete", done),
+        "the paths already deleted (the same call would be refused)",
+    )
+    return _with_not_started(out, rest)
