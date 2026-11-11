@@ -181,6 +181,11 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
         lambda t, i, s: (setattr(s, "statuses", [599]), setattr(s, "gone_after", False)),
         "handed_off",
     ),
+    # Lost, and the path check settles nothing (a 407): unknown isn't gone, so it's handed off.
+    "lost_unknown": (
+        lambda t, i, s: (setattr(s, "statuses", [599]), setattr(s, "code_when_lost", 407)),
+        "handed_off",
+    ),
     "budget_out": (lambda t, i, s: setattr(s, "statuses", [RUNNING]), "handed_off"),
     "cancel_mid_poll": (lambda t, i, s: setattr(s, "statuses", [RUNNING, CANCEL]), "canceled"),
     "already_running": (lambda t, i, s: setattr(s, "running", _running(t, i)), "handed_off"),
