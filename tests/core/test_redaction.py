@@ -6,10 +6,12 @@ The passkeys here are made up; they only have the shape of real ones.
 from __future__ import annotations
 
 import json
+import re
+import time
 
 import pytest
 
-from mcp_synology.core.redaction import redact_title, redact_url, redact_urls
+from mcp_synology.core.redaction import redact_secrets, redact_title, redact_url, redact_urls
 
 PASSKEY = "a1B2c3D4e5F6g7H8i9J0"
 
@@ -219,3 +221,134 @@ class TestRedactTitle:
 
     def test_bt_title_keeps_token_shaped_names(self) -> None:
         assert redact_title(f"{PASSKEY}.torrent") == f"{PASSKEY}.torrent"
+
+
+# --- #514 PR 1: the shared adversarial table ---
+#
+# Each row is text holding a credential and that credential. Both
+# `redact_urls` (the Download Station sites) and `redact_secrets` (the narrow pass for every
+# sink) must mask it; `redact_urls` masks more, so only the credential's absence is shared.
+
+CREDENTIAL_ROWS = [
+    # URL userinfo with a character urlsplit or the URL match stops at (#458).
+    pytest.param("https://us er:CANARY01@h.example/x", "er:CANARY01", id="userinfo-space"),
+    pytest.param("https://user:CAN/ARY02@h.example/x", "CAN/ARY02", id="userinfo-slash"),
+    pytest.param("https://user:CAN#ARY03@h.example/x", "CAN#ARY03", id="userinfo-hash"),
+    pytest.param("https://user%3ACANARY04@h.example/x", "CANARY04", id="userinfo-percent-encoded"),
+    pytest.param("https://user:p@ss:CANARY05@h.example/x", "p@ss:CANARY05", id="userinfo-with-at"),
+    pytest.param(
+        "error for http://admin:CANARY06@10.0.0.2:5000/webapi", "CANARY06", id="userinfo-in-prose"
+    ),
+    # Wrapped download links hide a whole URL (#458).
+    pytest.param(
+        "thunder://QUFodHRwOi8vdTpDQU5BUlkwN0BoL3haWg==",
+        "QUFodHRwOi8vdTpDQU5BUlkwN0BoL3haWg",
+        id="thunder",
+    ),
+    pytest.param(
+        "Flashget://W0ZMQVNIR0VUXUNBTkFSWTA4W0ZMQVNIR0VUXQ==&1",
+        "W0ZMQVNIR0VUXUNBTkFSWTA4W0ZMQVNIR0VUXQ",
+        id="flashget",
+    ),
+    pytest.param("qqdl:Q0FOQVJZMDk=", "Q0FOQVJZMDk", id="qqdl-no-slashes"),
+    # A comma followed by a scheme-like word splits a URL (#466).
+    pytest.param("https://h/dl?files=a,b://c&token=CANARY10", "CANARY10", id="comma-scheme-split"),
+    pytest.param("ftp://h/a,ED2K:foo?token=CANARY11", "CANARY11", id="comma-ed2k-split"),
+    # Known credential parameters.
+    pytest.param("https://h/entry.cgi?api=x&passwd=CANARY12", "CANARY12", id="passwd-param"),
+    pytest.param("https://h/entry.cgi?_sid=CANARY13&api=x", "CANARY13", id="sid-param"),
+    pytest.param("https://h/x?SynoToken=CANARY14", "CANARY14", id="synotoken-param"),
+    pytest.param(
+        "https://tracker.example/announce?passkey=CANARY15", "CANARY15", id="passkey-param"
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "secret"), CREDENTIAL_ROWS)
+@pytest.mark.parametrize("redact", [redact_urls, redact_secrets], ids=["urls", "secrets"])
+def test_a_credential_never_survives(redact: object, text: str, secret: str) -> None:
+    assert callable(redact)
+    assert secret in text
+    out = redact(text)
+    assert secret not in out, out
+    # Nor any part of a password split by a character the pass might stop at.
+    assert not any(part in out for part in re.split(r"[\s/#@:]", secret) if len(part) > 3), out
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("https://us er:CANARY01@h.example/x", "https://***@h.example/x"),
+        ("https://user:CAN/ARY02@h.example/x", "https://***@h.example/x"),
+        ("thunder://QUFodHRw", "thunder://***"),
+        ("qqdl:Q0FOQVJZMDk=", "qqdl:***"),
+        ("login refused: passwd=CANARY12&account=me", "login refused: passwd=***&account=me"),
+        ('{"passwd": "CANARY", "account": "me"}', '{"passwd": "***", "account": "me"}'),
+        ('{"SynoToken":"CA\\"NARY"}', '{"SynoToken":"***"}'),
+        ("&_sid=CANARY&x=1", "&_sid=***&x=1"),
+        ("https://h/x?token=CANARY&access_token=C2", "https://h/x?token=***&access_token=***"),
+    ],
+)
+def test_redact_secrets_masks_only_the_credential(text: str, expected: str) -> None:
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A Photos share link: its passphrase is what the user asked for (#514 Q1).
+        "https://nas.example:5001/mo/sharing/aB3xY9kQ2mN7pL4r",
+        # File names, task IDs, plain paths and other replies' text.
+        "/video/Season.2024.1080p.WEBRip.x265-ABCDEFGH12345678.mkv",
+        "Handle: `delete:FileStation_Delete_1a2b3c4d5e6f7a8b`",
+        "dbid_4127 finished",
+        # An `@` in a URL's path, a port before a path, an email address in prose.
+        "see https://medium.com/@someone/post and https://h.example:8080/@x",
+        "contact bob@example.com or http://a.example/x and mail me: bob@c.example",
+        # Query values that aren't credentials, and a word that ends in a key's name.
+        "https://h.example/dl?file=a.iso&insid=1&passwordless=true",
+        "Tom & Jerry: sid and nancy",
+        "",
+    ],
+)
+def test_redact_secrets_keeps_what_isnt_a_credential(text: str) -> None:
+    assert redact_secrets(text) == text
+
+
+def test_redact_url_masks_a_query_glued_to_the_host() -> None:
+    """After a comma split a URL, its query can land after the host (#466)."""
+    assert redact_url("b://c&token=CANARY") == "b://c&***"
+    assert redact_url("https://h.example:5001/x") == "https://h.example:5001/x"
+    assert redact_url("http://[::1]:5000/x") == "http://[::1]:5000/x"
+
+
+def test_an_opaque_link_has_its_query_masked() -> None:
+    assert redact_url("ed2k:foo?token=CANARY&x=1") == "ed2k:foo?token=***&x=***"
+    assert redact_url("not a url?x=1") == "not a url?x=1"
+
+
+# Inputs that took seconds with unbounded patterns (#465: 60,000 letters before a `://` took
+# 2.9 s), or that could if a pattern were unbounded: each must finish well inside a bound that
+# allows for a loaded CI runner.
+LONG_INPUTS = [
+    pytest.param("a" * 60_000 + "://", id="letters-then-scheme"),
+    pytest.param("a+" * 30_000, id="scheme-characters"),
+    pytest.param("://@" * 50_000, id="scheme-at-runs"),
+    pytest.param("x://a" + ",a" * 30_000, id="commas"),
+    pytest.param("x://a" + (", " + " " * 40) * 1_500, id="spaces-after-commas"),
+    pytest.param('"passwd": "' + "a" * 60_000, id="unterminated-json"),
+    pytest.param("passwd=" + "a" * 60_000, id="long-parameter"),
+    pytest.param("https://u:p@h/x?a=1 " * 5_000, id="many-urls"),
+    pytest.param("https://h/" + "@" * 60_000, id="at-run"),
+]
+
+
+@pytest.mark.parametrize("text", LONG_INPUTS)
+@pytest.mark.parametrize(
+    "redact", [redact_urls, redact_secrets, redact_title], ids=["urls", "secrets", "title"]
+)
+def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
+    assert callable(redact)
+    started = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - started < 1.0

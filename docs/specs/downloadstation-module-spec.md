@@ -95,13 +95,15 @@ The tools render per-task 544 and 404 as `not found (no such task, or not yours)
 
 DSM returns tracker announce URLs and task source URIs verbatim. A private tracker's announce URL embeds the user's **passkey** (`/announce/<passkey>`), and a source URI can carry `user:pass@` or tokens. Everything that shows a URL goes through `core/redaction.py` (#143):
 
-- userinfo becomes `***@`
+- userinfo becomes `***@`, found by a scan from `://` to the last `@` before the host rather than by URL parsing, so a password holding a space, `/` or `#` is masked too (#514)
 - every query value and path-parameter value (`;sid=`) becomes `***`
 - a token inside a path segment becomes `***`: a run of `[A-Za-z0-9_-]` holding an alphanumeric stretch of 16+ characters with both a letter and a digit, or a UUID. So `<passkey>.torrent` becomes `***.torrent`, while names of short words (`ubuntu-24-04-desktop-amd64`) are kept
 - the fragment is dropped
+- a host followed by anything a host can't hold (`c&token=…`, a query glued to it once a comma split the URL) keeps the host and masks the rest (#466)
+- a wrapped link (`thunder://`, `flashget://`, `qqdl://`, which encode a whole URL, credentials included) is masked whole, keeping its scheme; an opaque link with a query (`ed2k:foo?token=…`) has its query values masked (#458, #466)
 - a magnet keeps only `xt`, `dn`, `xl` and `kt` as they are, redacts its URL-valued parameters (`tr`, `ws`, `as`, `xs`) recursively, and masks every other value. A tracker URL pasted unencoded splits on `&`, so its `passkey=` lands at the top level, where it's masked
 
-In free text (a list, a log line, an error), a URL runs until whitespace, a quote, or a comma followed by another URI's start (#397), so a comma inside a URL doesn't end it; a magnet is recognized in any case (`MAGNET:?`). That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
+In free text (a list, a log line, an error), a URL runs until whitespace, a quote, or a comma followed by another URI's start (#397), so a comma inside a URL doesn't end it; a magnet is recognized in any case (`MAGNET:?`), and so are `ed2k:`, `thunder:`, `flashget:` and `qqdl:` links. Every pattern runs in linear time: a scheme is at most 32 characters, and the lookahead after a comma is bounded (#465: 60,000 letters before a `://` took 2.9 s). That covers `get_download_info`'s Trackers table and URI line, and every `DsmClient` DEBUG request log. DSM still receives the real values.
 
 Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with its URL's tail, query string included (`file.bin&_sid=...`, seen on vdsm). So `?key=`, `&key=` and `;key=` values in a title, and any whole URL in it, are masked in `list_downloads` and `get_download_info`. Whether token-shaped words are masked depends on the task type (`tasks._title`):
 - **BT:** kept, because a BT title is the torrent's name (`Show_Series_1_2026_1080p`).
