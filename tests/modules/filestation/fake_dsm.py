@@ -47,9 +47,10 @@ class PathScript:
     statuses: list[Any] = field(default_factory=lambda: [dict(FINISHED)])
     # A task for this path already running (listed by BackgroundTask list).
     running: dict[str, Any] | None = None
-    # Once DSM has lost its task (599), getinfo answers this code for the path instead: one that
-    # settles nothing (407) leaves a lost delete's outcome unknown (#521).
-    code_when_lost: int | None = None
+    # Once DSM has lost its task (599), getinfo of the path answers this instead: a code for it
+    # (407 settles nothing, leaving a lost delete's outcome unknown, #521), an HTTP response, or
+    # an exception to raise.
+    code_when_lost: Any = None
 
 
 @dataclass
@@ -95,7 +96,7 @@ class FakeDsm:
         self.scripts: dict[str, PathScript] = dict(scripts or {})
         self.calls: list[Call] = []
         self.ran: set[str] = set()
-        self.unclear: dict[str, int] = {}
+        self.unclear: dict[str, Any] = {}
         self._tasks: dict[str, str] = {}  # taskid → path
         self._reads: dict[str, int] = {}
         self._next = 0
@@ -149,7 +150,12 @@ class FakeDsm:
 
     def _getinfo(self, path: str) -> httpx.Response:
         if path in self.unclear:
-            return self._ok({"files": [{"code": self.unclear[path], "path": path}]})
+            answer = self.unclear[path]
+            if isinstance(answer, BaseException):
+                raise answer
+            if isinstance(answer, httpx.Response):
+                return answer
+            return self._ok({"files": [{"code": answer, "path": path}]})
         script = self.scripts.get(path)
         missing = script is not None and (
             not script.exists or (path in self.ran and script.gone_after)

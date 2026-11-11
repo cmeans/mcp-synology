@@ -186,6 +186,25 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
         lambda t, i, s: (setattr(s, "statuses", [599]), setattr(s, "code_when_lost", 407)),
         "handed_off",
     ),
+    # Lost, and the path check itself fails: a DSM error, or no answer. Not gone either.
+    "lost_check_dsm_error": (
+        lambda t, i, s: (
+            setattr(s, "statuses", [599]),
+            setattr(
+                s,
+                "code_when_lost",
+                httpx.Response(200, json={"success": False, "error": {"code": 400}}),
+            ),
+        ),
+        "handed_off",
+    ),
+    "lost_check_no_answer": (
+        lambda t, i, s: (
+            setattr(s, "statuses", [599]),
+            setattr(s, "code_when_lost", httpx.ReadTimeout("no answer")),
+        ),
+        "handed_off",
+    ),
     "budget_out": (lambda t, i, s: setattr(s, "statuses", [RUNNING]), "handed_off"),
     "cancel_mid_poll": (lambda t, i, s: setattr(s, "statuses", [RUNNING, CANCEL]), "canceled"),
     "already_running": (lambda t, i, s: setattr(s, "running", _running(t, i)), "handed_off"),
