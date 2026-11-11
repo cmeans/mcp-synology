@@ -78,10 +78,6 @@ _URL_CHAR = (
 # here too, or its query would stay as it is (#466: `ftp://h/a,ED2K:foo?token=…`).
 _URL_IN_TEXT = re.compile(rf"""(?:{_OPAQUE_START}|{_SCHEME}://){_URL_CHAR}+(?<!,)""")
 
-# What a host may hold, once userinfo is gone: a name, an IPv4 or bracketed IPv6 address, a
-# port. A netloc with anything else (`c&token=…`, a URL's query glued to its host after a comma
-# split it, #466) keeps its host and masks the rest.
-_HOST = re.compile(r"[\w.\-~%\[\]:]*")
 # A whole host after an `@`, as userinfo ends: a name (IDN too) or a bracketed address, maybe a
 # port, then the end of the authority. An `@` later in the path or the prose isn't followed by
 # one (`https://u:p@h/@name`, `… mail bob@c.example/x`: the first `@` is the one that counts).
@@ -89,6 +85,8 @@ _WHOLE_HOST = re.compile(r"""(?:\[[\w:.%]+\]|[\w.\-~%]+)(?::\d*)?(?=[/?#,\s"'<>]
 # `&key=value` in a URL's path, or in an opaque link before any `?`: a query that lost its `?`,
 # as when a comma split a URL (#466).
 _AMP_ITEM = re.compile(r"&([^\s=&?;#/]+)=[^\s&;#/]*")
+# The same, in an authority: `&` or `;` (`b://c&token=…`, `https://h;sid=…`).
+_NETLOC_ITEM = re.compile(r"([&;])([^\s=&?;#/]+)=[^\s&;#/]*")
 
 # Wrapped links in free text, masked whole with their scheme kept.
 _WRAPPED_IN_TEXT = re.compile(
@@ -103,20 +101,27 @@ _WRAPPED_BODY = re.compile(r"(//)?[A-Za-z0-9+=][A-Za-z0-9+/=]*")
 # passkeys private trackers put in a URL. Case is ignored.
 _CREDENTIAL_KEYS = (
     "passwd|password|pwd|_sid|sid|synotoken|otp_code|device_id|device_name|passkey|authkey|"
-    "torrent_pass|token|access_token|api_key|apikey"
+    "torrent_pass|token|access_token|api_key|apikey|did"
 )
 # A key may carry a prefix ending in `_` (`refresh_token`, `user_password`), never letters
 # alone (`insid`, `passwordless` are other words).
 _KEY = rf"(?:[A-Za-z0-9]+_)?(?:{_CREDENTIAL_KEYS})"
-_CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<![A-Za-z0-9_])({_KEY}=)[^\s&;#"'<>]+""")
+# Not at the start of a path segment: `/share/token=abc/file.txt` is a file name.
+_CREDENTIAL_PARAM = re.compile(rf"""(?i)(?<![A-Za-z0-9_/])({_KEY}=)[^\s&;#"'<>]+""")
 # DSM's CSRF header, as a log line or an error quotes it.
 _CREDENTIAL_HEADER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(x-syno-token:[ \t]{0,4})\S+")
+# The session as DSM's `id` cookie (#176), in a `Cookie:` header a log line or error quotes.
+_SESSION_COOKIE = re.compile(r"(?i)(cookie:[^\n]{0,512}?(?<![A-Za-z0-9_])id=)[^;\s]+")
 # A JSON member or a Python repr item (`'passwd': 'x'`), to its closing quote or the line's end:
 # a value longer than any cap is masked whole too.
 # A number is masked too (`{"otp_code": 123456}`). Not a bare `key: value` in YAML or prose:
 # `password: try again` is a sentence as often as a secret.
-_CREDENTIAL_JSON = re.compile(rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}})("(?:[^"\\\n]|\\.)*"?|-?\d+)""")
-_CREDENTIAL_REPR = re.compile(rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}})('(?:[^'\\\n]|\\.)*'?|-?\d+)""")
+_CREDENTIAL_JSON = re.compile(
+    rf"""(?i)("{_KEY}"\s{{0,4}}:\s{{0,4}})("(?:[^"\\\n]|\\.)*"?|-?\d[\d.eE+-]*)"""
+)
+_CREDENTIAL_REPR = re.compile(
+    rf"""(?i)('{_KEY}'\s{{0,4}}:\s{{0,4}})('(?:[^'\\\n]|\\.)*'?|-?\d[\d.eE+-]*)"""
+)
 # How far past a `://` the userinfo scan looks for the `@` that ends it.
 _USERINFO_WINDOW = 256
 # How many `@`s in one window the scan tries, last first: a password holds few, and a cap keeps
@@ -170,7 +175,7 @@ def _mask_userinfo(text: str) -> str:
         # Userinfo ends the line's text before another URL starts: it never holds a `://`.
         window = text[begin : begin + _USERINFO_WINDOW].partition("\n")[0].partition("://")[0]
         end = _userinfo_end(window)
-        if end is not None and window[:end] != MASK:
+        if end is not None:
             out.append(text[pos:begin])
             out.append(MASK)
             pos = begin + end
@@ -217,10 +222,26 @@ def redact_secrets(text: str) -> str:
     what the user asked for.
     """
     text = _mask_userinfo(_mask_wrapped(text))
+    # Userinfo longer than the scan's window (a long token as the password): each URL's own
+    # authority, up to its first `/`, `?` or `#`, is masked to its last `@`.
+    text = _URL_IN_TEXT.sub(lambda m: _mask_authority(m.group(0)), text)
     text = _CREDENTIAL_PARAM.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _CREDENTIAL_HEADER.sub(lambda m: f"{m.group(1)}{MASK}", text)
+    text = _SESSION_COOKIE.sub(lambda m: f"{m.group(1)}{MASK}", text)
     text = _CREDENTIAL_JSON.sub(lambda m: m.group(1) + _masked_value(m.group(2), '"'), text)
     return _CREDENTIAL_REPR.sub(lambda m: m.group(1) + _masked_value(m.group(2), "'"), text)
+
+
+def _mask_authority(url: str) -> str:
+    """``url`` with any userinfo its authority still holds masked."""
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return url
+    end = next((i for i, c in enumerate(rest) if c in "/?#"), len(rest))
+    authority = rest[:end]
+    if "@" not in authority or authority.startswith(f"{MASK}@"):
+        return url
+    return f"{scheme}://{MASK}@{authority.rpartition('@')[2]}{rest[end:]}"
 
 
 def _masked_value(value: str, quote: str) -> str:
@@ -290,10 +311,10 @@ def redact_url(url: str) -> str:
         if body and (body.group(1) or body.end() == len(rest)):
             return f"{scheme}:{body.group(1) or ''}{MASK}{rest[body.end() :]}"
     if "://" not in url:
-        if colon and re.fullmatch(_SCHEME, scheme) and ("?" in rest or "&" in rest):
+        if colon and re.fullmatch(_SCHEME, scheme) and any(c in rest for c in "?&#"):
             # An opaque link such as `ed2k:foo?token=…` or `ed2k:foo&token=…`: its query is
             # masked as a URL's (#466).
-            before, q, query = url.partition("?")
+            before, q, query = url.partition("#")[0].partition("?")
             before = _AMP_ITEM.sub(lambda m: f"&{m.group(1)}={MASK}", before)
             return f"{before}?{_redact_query(query.partition('#')[0])}" if q else before
         return url
@@ -308,11 +329,10 @@ def redact_url(url: str) -> str:
     netloc = parts.netloc
     if "@" in netloc:
         netloc = f"{MASK}@{netloc.rpartition('@')[2]}"
-    user, at, host = netloc.rpartition("@")
-    kept = _HOST.match(host)
-    if kept is not None and kept.end() < len(host):
-        # Not a host past this point: a query glued to it once a comma split the URL (#466).
-        netloc = f"{user}{at}{host[: kept.end() + 1]}{MASK}"
+    # A query glued to the host once a comma split the URL (`b://c&token=…`, #466): its items
+    # are masked as a query's. Only `&key=value`: an ed2k link's `|file|name|…|` netloc, or a
+    # host before prose punctuation (`https://nas.local).`), is left as it is.
+    netloc = _NETLOC_ITEM.sub(lambda m: f"{m.group(1)}{m.group(2)}={MASK}", netloc)
     path = "/".join(_redact_segment(seg) for seg in parts.path.split("/"))
     path = _AMP_ITEM.sub(lambda m: f"&{m.group(1)}={MASK}", path)
     query = _redact_query(parts.query) if parts.query else ""

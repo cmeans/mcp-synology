@@ -13,7 +13,7 @@
 
 ### Fixed
 
-- **Secrets in some URLs reached Download Station replies and DEBUG logs** (#514): a password holding a space, `/`, `#` or `@` (`https://user:pw d@h`), a `thunder://`, `flashget://` or `qqdl://` link (which encode a whole URL, credentials included), and a token after a comma followed by a scheme-like word (`files=a,b://c&token=…`, `ftp://h/a,ED2K:foo?token=…`) were shown as they were. They're masked now, and `&key=value` that lost its `?` in a path is masked as a query item. A list value in a DEBUG request log is redacted item by item too (today's URI lists go as one string, which was redacted already) — closes #466, and #458's userinfo-with-spaces and `_log_safe` list items
+- **Secrets in some URLs reached Download Station replies and DEBUG logs** (#514): a password holding a space or `/` (`https://user:pw d@h`), or a `#`, which cut the URL short so the start of the password showed, a `thunder://`, `flashget://` or `qqdl://` link (which encode a whole URL, credentials included), and a token after a comma followed by a scheme-like word (`files=a,b://c&token=…`, `ftp://h/a,ED2K:foo?token=…`) were shown as they were. They're masked now, and `&key=value` that lost its `?` in a path is masked as a query item. A list value in a DEBUG request log is redacted item by item too (today's URI lists go as one string, which was redacted already) — closes #466, and #458's userinfo-with-spaces and `_log_safe` list items
 - **Redacting a long run of text could stall the server** (#514): `redact_urls` rescanned a run of letters from every position, so 60,000 letters before a `://` took 2.9 s on the event loop; every redaction pattern now runs in linear time — closes the URL part of #465
 
 ## 0.11.0 (2026-11-10)

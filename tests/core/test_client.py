@@ -2266,3 +2266,14 @@ def test_a_surrogate_encoded_in_utf8_reads_as_parsing_the_bytes_did() -> None:
     from mcp_synology.core.client import _loads
 
     assert _loads(b'{"a":"\xed\xa0\x80"}', "t") == {"a": "\\ud800"}
+
+
+def test_log_safe_redacts_list_items() -> None:
+    """`_log_safe` redacts a list value's items (#458, #514). Today's callers send URI lists as
+    one string, redacted already; this covers a caller that doesn't."""
+    from mcp_synology.core.client import _log_safe
+
+    logged = _log_safe({"uri": ["https://u:CANARY@h/x", "magnet:?xt=urn:btih:a&tr=x"], "n": 2})
+    assert "CANARY" not in str(logged)
+    assert logged["n"] == 2
+    assert logged["uri"][0] == "https://***@h/x"

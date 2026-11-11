@@ -261,6 +261,12 @@ CREDENTIAL_ROWS = [
     pytest.param(
         "https://tracker.example/announce?passkey=CANARY15", "CANARY15", id="passkey-param"
     ),
+    # Userinfo longer than the scan's 256-character window: a long token as the password.
+    pytest.param(
+        "https://user:eyJ" + "a" * 300 + "CANARY16@nas.example/x",
+        "aaaaCANARY16",
+        id="long-userinfo",
+    ),
 ]
 
 
@@ -308,6 +314,9 @@ def test_redact_secrets_masks_only_the_credential(text: str, expected: str) -> N
         # Query values that aren't credentials, and a word that ends in a key's name.
         "https://h.example/dl?file=a.iso&insid=1&passwordless=true",
         "Tom & Jerry: sid and nancy",
+        # A key that starts a path segment is a file name (#514 PR 1, decided in pre-QA r3).
+        "/share/token=abc/sub/file.txt",
+        "| /docs/sid=1/report.pdf |",
         "",
     ],
 )
@@ -317,13 +326,16 @@ def test_redact_secrets_keeps_what_isnt_a_credential(text: str) -> None:
 
 def test_redact_url_masks_a_query_glued_to_the_host() -> None:
     """After a comma split a URL, its query can land after the host (#466)."""
-    assert redact_url("b://c&token=CANARY") == "b://c&***"
+    assert redact_url("b://c&token=CANARY") == "b://c&token=***"
+    assert redact_url("https://h;sid=CANARY/a") == "https://h;sid=***/a"
     assert redact_url("https://h.example:5001/x") == "https://h.example:5001/x"
     assert redact_url("http://[::1]:5000/x") == "http://[::1]:5000/x"
 
 
 def test_an_opaque_link_has_its_query_masked() -> None:
     assert redact_url("ed2k:foo?token=CANARY&x=1") == "ed2k:foo?token=***&x=***"
+    # A fragment is dropped, as a `://` URL's is.
+    assert redact_url("ed2k:foo#token=CANARY") == "ed2k:foo"
     assert redact_url("not a url?x=1") == "not a url?x=1"
 
 
@@ -434,6 +446,16 @@ def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
         "xthunder://QUFB",
         # An IDN host is a host.
         "https://bücher.example/announce",
+        # An ed2k link's `|file|name|size|hash|` is public, like a magnet's `xt`.
+        "ed2k://|file|ubuntu-24.04.iso|5000000000|31D6CFE0D16AE931B73C59D7E0C089C0|/",
+        # A bare host before prose punctuation.
+        "(see https://nas.local)",
+        "https://nas.local).",
+        "https://nas.local:5001)",
+        # An opaque scheme after a `/` is part of a path (a file name), not a link.
+        "/music/ed2k:foo?x=1.mp3",
+        # IPvFuture brackets hold no colon, and still aren't userinfo.
+        "https://[v1.fe80]/@name",
     ],
 )
 def test_names_that_look_like_links_are_kept(text: str) -> None:
@@ -469,8 +491,15 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         ('{"token": "' + "A" * 5000 + 'TAIL"}', '{"token": "***"}'),
         # Unterminated, to the line's end.
         ('{"passwd": "CANARY', '{"passwd": "***'),
-        # A number.
+        # A number, decimals and exponents too.
         ('{"otp_code": 123456}', '{"otp_code": ***}'),
+        ('{"passwd": 1.5e3}', '{"passwd": ***}'),
+        # An unterminated value ending in an escaped quote keeps one quote.
+        ('{"passwd": "a\\"', '{"passwd": "***'),
+        # DSM's 2FA device token in a login reply, and the session as its `id` cookie.
+        ('{"data": {"did": "DEVTOKEN", "sid": "S1"}}', '{"data": {"did": "***", "sid": "***"}}'),
+        ("Cookie: lang=en; id=SESSION; x=1", "Cookie: lang=en; id=***; x=1"),
+        ("candid=1", "candid=1"),
         ("{'otp_code': 123456, 'x': 1}", "{'otp_code': ***, 'x': 1}"),
         # A wrapped link in a sentence or a Markdown link.
         ("see thunder://QUFodHRw=.", "see thunder://***."),
@@ -479,14 +508,3 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
 )
 def test_more_credential_forms(text: str, expected: str) -> None:
     assert redact_secrets(text) == expected
-
-
-def test_log_safe_redacts_list_items() -> None:
-    """`_log_safe` redacts a list value's items (#458). Today's callers send URI lists as one
-    string, redacted already; this covers a caller that doesn't."""
-    from mcp_synology.core.client import _log_safe
-
-    logged = _log_safe({"uri": ["https://u:CANARY@h/x", "magnet:?xt=urn:btih:a&tr=x"], "n": 2})
-    assert "CANARY" not in str(logged)
-    assert logged["n"] == 2
-    assert logged["uri"][0] == "https://***@h/x"
