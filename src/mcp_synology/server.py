@@ -1612,7 +1612,6 @@ def create_server(config: AppConfig) -> MCPServer:
     settings = module_settings(config)
     for notice in _unknown_keys(config):
         logger.warning("%s", notice)
-    # Logged by serve too: the client's MCP log is where a broken conversation sends people.
     # One read. An ERROR: the model gets other instructions than the config names, and that
     # must show at `logging.level: error` too.
     instructions_text, instructions_problem = _read_instructions_file(config)
