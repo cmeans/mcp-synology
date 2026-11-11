@@ -23,8 +23,8 @@ Rules, chosen so the host stays visible and nothing secret-shaped survives:
   (``<passkey>.torrent`` becomes ``***.torrent``), or a UUID. Names made of short
   words, like ``announce`` or ``ubuntu-24-04-desktop-amd64``, are kept
 - the fragment is dropped
-- a wrapped link (``thunder:``, ``flashget:``, ``qqdl:`` with a base64 body) is masked whole; an
-  opaque link's query (``ed2k:foo?token=…``, ``ed2k:foo&token=…``) is masked
+- a wrapped link (``thunder://``, ``flashget://``, ``qqdl://`` with a base64 body) is masked
+  whole; an opaque link's query (``ed2k:foo?token=…``, ``ed2k:foo&token=…``) is masked
 - a magnet keeps only ``xt`` / ``dn`` / ``xl`` / ``kt`` as they are, redacts its
   URL-valued parameters in turn, and masks every other value. A tracker URL
   pasted unencoded splits on ``&``, so its own query items land at the top level
@@ -62,21 +62,23 @@ _MAGNET_SAFE_KEYS = frozenset({"xt", "dn", "xl", "kt"})
 # 60,000 letters before a `://` took 2.9 s unbounded).
 _SCHEME = r"[A-Za-z][A-Za-z0-9+.-]{0,31}"
 # Schemes whose links carry no host or query to keep: a wrapped link (`thunder://<base64>`, which
-# hides a whole URL, credentials included), or an ed2k link written without `//`. Wrapped links
+# hides a whole URL, credentials included). Wrapped links
 # are masked whole (#458, #514 Q4).
 _WRAPPED = ("thunder", "flashget", "qqdl")
-_OPAQUE_START = r"(?i:magnet):\?|(?<![A-Za-z0-9+.\-/_])(?i:ed2k):"
+# ed2k without `//` is a link only right after a comma (#466: `ftp://h/a,ED2K:foo?token=…`): a
+# name like `My ed2k:Song#1.mp3` isn't one.
+_OPAQUE_START = r"(?i:magnet):\?|(?:(?<=,)|(?<=,\s))(?i:ed2k):"
 
 # A URL or magnet inside free text. A comma ends a match only where another URI
-# starts after it, as create_download splits its list (#397): a comma inside a URL
-# (`/a,b.iso?token=…`) is part of it, and v1 Task.create's list is comma-separated.
+# starts after it (#397; create_download also splits at `thunder:`-style links): a comma
+# inside a URL (`/a,b.iso?token=…`) is part of it, and v1 Task.create's list is comma-separated.
 # Quotes end a match for DS2's JSON-encoded list; a comma at the end of a match (a
 # URL in prose: "see https://…, then") is left out of it.
 _URL_CHAR = (
     r"""(?:[^\s,"'<>]"""
     rf"""|,(?!\s{{0,16}}(?:{_SCHEME}://|(?i:magnet|ed2k):)))"""
 )
-# An ed2k, thunder, flashget or qqdl link after such a comma is a URI of its own, so it's matched
+# An ed2k link after such a comma is a URI of its own, so it's matched
 # here too, or its query would stay as it is (#466: `ftp://h/a,ED2K:foo?token=…`).
 _URL_IN_TEXT = re.compile(rf"""(?:{_OPAQUE_START}|{_SCHEME}://){_URL_CHAR}+(?<!,)""")
 
@@ -100,7 +102,7 @@ _WRAPPED_IN_TEXT = re.compile(
 # A wrapped link's body: base64, not starting with `/` (so `//` is the separator, never body).
 _WRAPPED_BODY = re.compile(r"//[A-Za-z0-9+=\-_][A-Za-z0-9+/=\-_]*")
 
-# Credential parameters, as `key=value` in a query, a form body or prose, or as a JSON member.
+# Credential parameters, as a query or form item after `?`, `&` or `;`, or as a JSON member.
 # The keys DSM and this server use for a password, a session, a 2FA code or device, and the
 # passkeys private trackers put in a URL. Case is ignored.
 _CREDENTIAL_KEYS = (
@@ -109,7 +111,7 @@ _CREDENTIAL_KEYS = (
 )
 # A key may carry a prefix ending in `_` (`refresh_token`, `user_password`), never letters
 # alone (`insid`, `passwordless` are other words).
-_KEY = rf"(?:[A-Za-z0-9]+[_-])?(?:{_CREDENTIAL_KEYS})"
+_KEY = rf"(?:[A-Za-z0-9]{{1,32}}[_-]){{0,3}}(?:{_CREDENTIAL_KEYS})"
 # Only where query or form syntax puts an item: after `?`, `&` or `;`. A bare `sid=1.pdf` or
 # `/share/token=abc/file.txt` is a name (decided in pre-QA r6 on #514); a logged form body is
 # masked by parameter name (`client._log_safe`). A prefix joins with `_` or `-` (`access-token`).
@@ -139,7 +141,10 @@ _USERINFO_WINDOW = 256
 _USERINFO_TRIES = 8
 # A character a host can start with, after the `@` that ends userinfo.
 _HOST_START = re.compile(r"[A-Za-z0-9\[]")
-_PORT_THEN_PATH = re.compile(r"\d+/")
+# An authority with userinfo left in it: `://`, then anything but a path, query, fragment or
+# backslash, to its last `@` (the greedy class stops at the first of those).
+_AUTHORITY_AT = re.compile(r"(://)[^/?#\\\s]*@")
+_PORT_THEN_PATH = re.compile(r"\d*[/\\]")
 
 
 # A query item or path parameter glued to a title: ``?key=value``, ``&key=value``
@@ -162,7 +167,7 @@ def _is_userinfo(span: str) -> bool:
     if not colon:
         return not any(c in "/?#[]\\" for c in span)
     # A backslash reads as `/` to a browser (WHATWG): `https://evil\\@nas` is evil's host.
-    if any(c in "/?#[]\\" for c in user) or (len(user) == 1 and rest[:1] == "/"):
+    if any(c in "/?#[]\\" for c in user) or (len(user) == 1 and rest[:1] in ("/", "\\")):
         return False
     return _PORT_THEN_PATH.match(rest) is None
 
@@ -225,7 +230,7 @@ def _userinfo_end(window: str) -> int | None:
 
 
 def _mask_wrapped(text: str) -> str:
-    """``text`` with every ``thunder:``, ``flashget:`` or ``qqdl:`` link masked whole."""
+    """``text`` with every ``thunder://``, ``flashget://`` or ``qqdl://`` link masked whole."""
     return _WRAPPED_IN_TEXT.sub(lambda m: f"{m.group(1)}:{m.group(2) or ''}{MASK}", text)
 
 
@@ -254,16 +259,9 @@ def redact_secrets(text: str) -> str:
 
 
 def _mask_authority(url: str) -> str:
-    """``url`` with any userinfo its authority still holds masked."""
-    scheme, sep, rest = url.partition("://")
-    if not sep:
-        return url
-    # A backslash ends the authority too, as a browser reads it (WHATWG).
-    end = next((i for i, c in enumerate(rest) if c in "/?#\\"), len(rest))
-    authority = rest[:end]
-    if "@" not in authority:
-        return url
-    return f"{scheme}://{MASK}@{authority.rpartition('@')[2]}{rest[end:]}"
+    """``url`` with any userinfo still in an authority masked: each ``://``'s authority up to its
+    first ``/``, ``?``, ``#`` or backslash, to its last ``@`` (a URL nested in a query too)."""
+    return _AUTHORITY_AT.sub(lambda m: f"{m.group(1)}{MASK}@", url)
 
 
 def _masked_value(value: str, quote: str) -> str:
@@ -321,19 +319,18 @@ def _redact_magnet(magnet: str) -> str:
 
 
 def redact_url(url: str) -> str:
-    """Return ``url`` with secrets masked; anything that isn't a URL is returned as-is."""
+    """Return ``url`` with secrets masked. Text with no ``://`` is returned as it is, except an
+    ed2k link without ``//`` (``ed2k:foo?token=…``), whose query is masked and fragment dropped."""
     if url[: len("magnet:?")].lower() == "magnet:?":  # any case, as DSM may accept it
         return _redact_magnet(url)
     scheme, colon, rest = url.partition(":")
     if colon and scheme.lower() in _WRAPPED:
-        if rest.startswith(f"//{MASK}"):
-            return url  # masked already: `redact_urls` masks wrapped links first
         body = _WRAPPED_BODY.match(rest)
         # The body ends at punctuation (`thunder://…=.`); without `//` it isn't a link.
         if body:
             return f"{scheme}://{MASK}{rest[body.end() :]}"
     if "://" not in url:
-        if colon and re.fullmatch(_SCHEME, scheme) and any(c in rest for c in "?&#"):
+        if colon and scheme.lower() == "ed2k" and any(c in rest for c in "?&#"):
             # An opaque link such as `ed2k:foo?token=…` or `ed2k:foo&token=…`: its query is
             # masked as a URL's (#466).
             before, q, query = url.partition("#")[0].partition("?")
@@ -365,8 +362,6 @@ def redact_url(url: str) -> str:
 
 def redact_urls(text: str) -> str:
     """Redact every URL or magnet found in ``text`` (lists, JSON, prose)."""
-    # Userinfo first: a password with a `#` would end a URL match early (#458).
-    text = _mask_userinfo(_mask_wrapped(text))
     return _URL_IN_TEXT.sub(lambda m: redact_url(m.group(0)), text)
 
 

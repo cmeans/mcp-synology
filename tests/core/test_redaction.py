@@ -338,6 +338,9 @@ def test_an_opaque_link_has_its_query_masked() -> None:
     # A fragment is dropped, as a `://` URL's is.
     assert redact_url("ed2k:foo#token=CANARY") == "ed2k:foo"
     assert redact_url("not a url?x=1") == "not a url?x=1"
+    # Only ed2k is opaque: other text with a colon is returned as it is.
+    assert redact_url("Note:Track#1") == "Note:Track#1"
+    assert redact_url("C:\\a?b") == "C:\\a?b"
 
 
 # Inputs that took seconds with unbounded patterns (#465: 60,000 letters before a `://` took
@@ -351,7 +354,7 @@ LONG_INPUTS = [
     pytest.param("x://a" + ",a" * 30_000, id="commas"),
     pytest.param("x://a" + (", " + " " * 40) * 1_500, id="spaces-after-commas"),
     pytest.param('"passwd": "' + "a" * 60_000, id="unterminated-json"),
-    pytest.param("passwd=" + "a" * 60_000, id="long-parameter"),
+    pytest.param("?passwd=" + "a" * 60_000, id="long-parameter"),
     pytest.param("https://u:p@h/x?a=1 " * 5_000, id="many-urls"),
     pytest.param("https://h/" + "@" * 60_000, id="at-run"),
     pytest.param(("https://a@" + "b@" * 60 + " ") * 500, id="ats-after-userinfo"),
@@ -410,6 +413,9 @@ def test_long_inputs_take_linear_time(redact: object, text: str) -> None:
         ("https://nas,ftp://u:p@h/x", "https://nas,ftp://***@h/x"),
         # A backslash before `@` reads as `/` to a browser: not userinfo (WHATWG).
         ("https://evil.example\\@nas.local/x", "https://evil.example\\@nas.local/x"),
+        ("https://evil.com:443\\@nas.local/", "https://evil.com:443\\@nas.local/"),
+        ("https://evil.com:\\@nas.local/", "https://evil.com:\\@nas.local/"),
+        ("file://C:\\Users\\me@corp\\x", "file://C:\\Users\\me@corp\\x"),
         # A port that's only a colon.
         ("https://u:p@h:/x", "https://***@h:/x"),
         # A comma inside a password is part of the URL.
@@ -489,6 +495,12 @@ def test_a_query_that_lost_its_question_mark_is_masked(text: str) -> None:
         "Report password=draft.docx",
         "token=2024",
         "x-api-key=S",
+        # ed2k without `//` is a link only right after a comma (pre-QA r7 on #514).
+        "Not found: /music/My ed2k:Song#1.mp3",
+        "/x/Best of ed2k:Hits?vol=2.mp3",
+        # A cookie's `uid` isn't its `id`; a `did` after `; ` isn't a query item.
+        "Cookie: uid=1; did=2",
+        "thunder:///x",
         # An IDN host is a host.
         "https://bücher.example/announce",
         # An ed2k link's `|file|name|size|hash|` is public, like a magnet's `xt`.
@@ -549,6 +561,9 @@ def test_redact_url_masks_a_wrapped_link_once(url: str, expected: str) -> None:
         # A prefix joined by `-`.
         ("x?access-token=CANARY", "x?access-token=***"),
         ("?x-api-key=CANARY", "?x-api-key=***"),
+        # A prefix of several parts (an STS session token in a presigned URL).
+        ("?X-Amz-Security-Token=CANARY", "?X-Amz-Security-Token=***"),
+        ("?user_refresh_token=CANARY", "?user_refresh_token=***"),
         # A header key with a prefix isn't DSM's header.
         ("my-x-syno-token: v", "my-x-syno-token: v"),
         # A password within the scan's window holding `/`, which the authority fallback can't
@@ -580,3 +595,10 @@ def test_a_url_nested_in_a_query_has_its_own_userinfo_masked() -> None:
     nested = "https://x/?next=https://u:CANARY@h/x"
     assert redact_secrets(nested) == "https://x/?next=https://***@h/x"
     assert "CANARY" not in redact_urls(nested)
+
+
+def test_a_nested_url_with_long_userinfo_is_masked() -> None:
+    """Past the scan's window, each `://`'s authority is masked to its last `@`, a nested URL's
+    too (pre-QA r7 on #514)."""
+    nested = "https://x/?next=https://user:eyJ" + "a" * 300 + "CANARY@h/x"
+    assert redact_secrets(nested) == "https://x/?next=https://***@h/x"
