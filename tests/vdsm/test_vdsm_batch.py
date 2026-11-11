@@ -1,8 +1,10 @@
 """The batch runner's lifecycle on virtual-dsm (#512 PR 2).
 
-- **One wait per call (#496):** a delete of three paths, the second a tree that takes far longer
-  than the wait. The first is deleted, the second handed off with its handle when the call's
-  time is up, and the third is listed as not started; nothing is stopped.
+- **A hand-off within one wait (#496):** a delete of three paths, the second a tree that takes far
+  longer than the wait. The first is deleted, the second handed off with its handle within the
+  call's wait, and the third is listed as not started; nothing is stopped. The first path is an
+  empty folder, so this checks the hand-off on a real DSM, not the budget's arithmetic: the unit
+  tests (``test_batch.py``) pin that with a fake clock.
 - **A cancel during a start (#394 C3):** the call is canceled while DSM's answer to a delete's
   start is held back. The answer is awaited anyway, and the task it names is stopped, so no task
   of this user is left running that nothing knows of.

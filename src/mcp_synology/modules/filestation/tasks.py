@@ -281,6 +281,9 @@ class StopResult(Enum):
     UNANSWERED = "unanswered"
     REFUSED = "refused"
     NOT_SENT = "not_sent"
+    # DSM has no such task to stop (401, 599): a Delete answers that once it has released a
+    # finished task (#162), so it most likely ended (as `file_task`'s stop reads them).
+    NO_SUCH_TASK = "no_such_task"
 
 
 async def _stop_background_task(
@@ -308,7 +311,7 @@ async def _stop_background_task(
         return StopResult.UNANSWERED
     except SynologyError as e:
         task_logger.warning("%s task cleanup failed for %s: %s", api, taskid, e)
-        return StopResult.REFUSED
+        return StopResult.NO_SUCH_TASK if e.code in (401, 599) else StopResult.REFUSED
     except httpx.TransportError as e:
         task_logger.warning(
             "%s task cleanup %s for %s: %s",
@@ -488,6 +491,9 @@ _LOST_TASK_WAIT = 0.5
 # Past this, no more reads, so slow 599s are less likely to outlast a client's reply limit, which
 # cancels. It's checked after each read, so a slow read can still run past it.
 _LOST_TASK_BOUND = 10.0
+# The least a status read waits for its answer when the wait is nearly over (a DSM busy with a
+# huge delete can be slow to answer even a status; a read past the wait is a stall, #496).
+_MIN_READ = 1.0
 
 
 async def poll_task(
@@ -501,6 +507,7 @@ async def poll_task(
     on_progress: ProgressCallback | None = None,
     interval: float = 0.5,
     progress_every: float = 2.0,
+    on_cancel_stop: Callable[[StopResult], None] | None = None,
 ) -> PollResult:
     """Poll a File Station task until it finishes or ``wait`` seconds pass.
 
@@ -512,10 +519,13 @@ async def poll_task(
     decision 2026-10-17). A DSM error code on a status request stops the task; so does
     cancellation, which then propagates. The exception is 599, "no such task", which isn't a
     verdict on a task this call just started: it's read again a few times, then reported as
-    ``lost`` (#521). The deadline is wall-clock (#237).
+    ``lost`` (#521). The deadline is wall-clock (#237), and each status read waits at most what's
+    left of it (but at least ``_MIN_READ``), so a slow read can't outlast the wait (#496): a read
+    that times out is a stall, handed off. ``on_cancel_stop`` hears how a cancel's stop ended,
+    so the runner can record a task that may still run (#512).
     """
     quoted = dsm_str(taskid)
-    deadline = time.monotonic() + wait
+    deadline = monotonic() + wait
     status: dict[str, Any] = {}
     last_progress: float | None = None
     last_numbers: tuple[int, int] | None = None
@@ -528,11 +538,15 @@ async def poll_task(
         return await _stop_background_task(client, api, quoted, version, logger)
 
     try:
-        while time.monotonic() < deadline:
-            asked = time.monotonic()
+        while monotonic() < deadline:
+            asked = monotonic()
             try:
                 reply: Any = await client.request(
-                    api, "status", version=version, params={"taskid": quoted}
+                    api,
+                    "status",
+                    version=version,
+                    params={"taskid": quoted},
+                    read_timeout=max(deadline - asked, _MIN_READ),
                 )
                 if not isinstance(reply, dict):
                     raise TypeError("status data is not an object")
@@ -566,7 +580,7 @@ async def poll_task(
                     missing_since = asked
                 if (
                     missing_reads >= _LOST_TASK_READS
-                    or time.monotonic() - missing_since >= _LOST_TASK_BOUND
+                    or monotonic() - missing_since >= _LOST_TASK_BOUND
                 ):
                     return PollResult(status, "lost", e)
                 await asyncio.sleep(interval)
@@ -591,7 +605,7 @@ async def poll_task(
                 return PollResult(status, "finished")
 
             if report is not None:
-                now = time.monotonic()
+                now = monotonic()
                 if last_progress is None or now - last_progress >= progress_every:
                     numbers = _progress_numbers(status)
                     if numbers is not None:
@@ -609,7 +623,9 @@ async def poll_task(
         # anyio cancel scopes (the MCP SDK's) are level-triggered: shield the stop or
         # it is canceled again at once and the NAS task is orphaned.
         with anyio.CancelScope(shield=True):
-            await stop()
+            stopped = await stop()
+            if on_cancel_stop is not None:
+                on_cancel_stop(stopped)
         raise
     # The wait ended during the re-reads: the path check and the reply follow what DSM last said.
     if missing_reads:

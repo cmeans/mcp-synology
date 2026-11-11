@@ -181,6 +181,22 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 
 class TestPollTask:
+    async def test_a_status_read_waits_at_most_whats_left(
+        self, mock_client: DsmClient, clock: list[float], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#496: each status read's own timeout is what's left of the wait (at least 1 s), so
+        one slow read can't run past it."""
+        timeouts: list[float] = []
+
+        async def request(api: str, method: str, **kwargs: Any) -> Any:
+            timeouts.append(kwargs.get("read_timeout"))
+            return {"finished": False, "processed_num": 1, "total": 9, "progress": 0.1}
+
+        monkeypatch.setattr(mock_client, "request", request)
+        result = await poll_task(mock_client, api=API, version=2, taskid="t1", wait=3, label="x")
+        assert result.outcome == "handoff"
+        assert timeouts == [3.0, 2.5, 2.0, 1.5, 1.0, 1.0]
+
     @respx.mock
     async def test_poll_finished_does_not_stop(
         self, mock_client: DsmClient, clock: list[float]
@@ -388,7 +404,9 @@ class TestPollTask:
     @pytest.mark.parametrize(
         ("stop_reply", "expected"),
         [
-            (httpx.Response(200, json={"success": False, "error": {"code": 401}}), "refused"),
+            (httpx.Response(200, json={"success": False, "error": {"code": 400}}), "refused"),
+            (httpx.Response(200, json={"success": False, "error": {"code": 401}}), "no_such_task"),
+            (httpx.Response(200, json={"success": False, "error": {"code": 599}}), "no_such_task"),
             (httpx.ReadTimeout(""), "unanswered"),
             (httpx.ConnectError("refused"), "not_sent"),
             (httpx.Response(502), "unanswered"),

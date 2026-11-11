@@ -38,7 +38,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import rewrapped_error
 from mcp_synology.modules.filestation import tasks as _tasks
-from mcp_synology.modules.filestation.helpers import dsm_str
+from mcp_synology.modules.filestation.helpers import dsm_str, shown
 from mcp_synology.modules.filestation.tasks import (
     STOP_WAIT,
     Handle,
@@ -82,8 +82,9 @@ def _now() -> float:
 class Budget:
     """How long a call waits on its tasks, all of them together (#496): ``delete_timeout`` or
     ``copy_move_timeout``. An item gets what's left when it starts (at least ``MIN_ITEM_WAIT``);
-    a task still running when the call's time is up is handed off, and the rest are listed as
-    not started."""
+    a task still running when the call's time is up is handed off, no item starts after it, and
+    the rest are listed as not started. The summary's checks after the last task aren't bounded
+    yet (#512 PR 3)."""
 
     per_call: float
     deadline: float | None = None
@@ -98,6 +99,10 @@ class Budget:
         self.start()
         assert self.deadline is not None
         return max(self.deadline - _now(), MIN_ITEM_WAIT)
+
+    def spent(self) -> bool:
+        """The call's wait is over: no further item is started (#496)."""
+        return self.deadline is not None and _now() >= self.deadline
 
 
 @dataclass(frozen=True)
@@ -139,9 +144,11 @@ class ItemOutcome:
 @dataclass
 class BatchOutcome:
     """One outcome per item, in order: the ones that ran, then at most one that ended the batch
-    early (failed, may have started, handed off), then the ones not started."""
+    early (failed, may have started, handed off), then the ones not started. ``out_of_time``:
+    the call's wait was over before the next item, so the rest weren't started (#496)."""
 
     items: list[ItemOutcome] = field(default_factory=list)
+    out_of_time: float | None = None
 
     @property
     def last(self) -> ItemOutcome | None:
@@ -234,6 +241,15 @@ async def run_batch(
     with adapter.batch_scope():
         for i, item in enumerate(items):
             first_of_group = i == 0 or items[i - 1].group != item.group
+            if i > 0 and budget.spent():
+                # The call's wait is over: the rest aren't started (#496). A group cut short is
+                # summarized with what it did.
+                if not first_of_group:
+                    done = [x for x in items[:i] if x.group == item.group]
+                    await adapter.end_group(done)
+                batch.items.extend(ItemOutcome(x, "not_started") for x in items[i:])
+                batch.out_of_time = budget.per_call
+                return batch
             if first_of_group:
                 await adapter.begin_group([x for x in items if x.group == item.group])
             outcome = await _run_item(client, adapter, item, budget, records, progress)
@@ -280,6 +296,14 @@ async def _run_item(
             adapter, ItemOutcome(item, "handed_off", handoff=handoff, running=running), records
         )
 
+    def canceled(stop: StopResult) -> None:
+        # A canceled call's stop that DSM didn't confirm: the task may still run (#497).
+        if stop not in (StopResult.CONFIRMED, StopResult.NO_SUCH_TASK):
+            outcome = ItemOutcome(
+                item, "failed", stop=stop, handoff=Handoff(Handle(adapter.kind, taskid), {})
+            )
+            _record(adapter, outcome, records, stop_sent=stop is StopResult.UNANSWERED)
+
     result = await poll_task(
         client,
         api=adapter.api,
@@ -288,11 +312,12 @@ async def _run_item(
         wait=budget.for_item(),
         label=adapter.label(item),
         on_progress=progress,
+        on_cancel_stop=canceled,
     )
     if result.outcome == "poll_error":
         assert isinstance(result.error, SynologyError)
         outcome = ItemOutcome(item, "failed", error=result.error, stop=result.stop)
-        if result.stop is not StopResult.CONFIRMED:
+        if result.stop not in (StopResult.CONFIRMED, StopResult.NO_SUCH_TASK):
             # DSM didn't confirm the stop: the task may still run, so the reply gives its handle
             # and file_task knows it; a stop that may have reached DSM is noted (#497, #660).
             outcome.handoff = Handoff(Handle(adapter.kind, taskid), result.status)
@@ -375,7 +400,7 @@ async def _stop_what_started(
         item.source,
         stop.value,
     )
-    if stop is not StopResult.CONFIRMED:
+    if stop not in (StopResult.CONFIRMED, StopResult.NO_SUCH_TASK):
         outcome = ItemOutcome(
             item, "failed", stop=stop, handoff=Handoff(Handle(adapter.kind, taskid), {})
         )
@@ -444,7 +469,15 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
     """The call's reply: the adapter's summary, hand-off text or error (raised)."""
     last = batch.last
     if last is None:
-        return await adapter.summary(batch)
+        text = await adapter.summary(batch)
+        rest = batch.not_started()
+        if rest and batch.out_of_time is not None:
+            # Done before the call's wait ran out; nothing is running (#496).
+            text += (
+                f"\nNot started: {', '.join(shown(x.source) for x in rest)}. This call's wait "
+                f"({batch.out_of_time:g} s) ran out before them: run them in another call."
+            )
+        return text
     if last.state == "handed_off":
         return adapter.handoff_text(last, batch)
     try:
@@ -456,10 +489,11 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome) -> str:
 # What a failure says of the stop sent after a status read's DSM error (#497): only a confirmed
 # stop is called one; anything else leaves the task possibly running, with its handle.
 _STOP_SAYS = {
-    StopResult.CONFIRMED: "DSM confirmed the stop of its task",
-    StopResult.UNANSWERED: "a stop was sent for its task, and DSM hasn't confirmed it",
-    StopResult.REFUSED: "DSM refused the stop of its task, so it may still be running",
-    StopResult.NOT_SENT: "the stop for its task couldn't be sent, so it may still be running",
+    StopResult.CONFIRMED: "DSM confirmed the stop of {}'s task",
+    StopResult.UNANSWERED: "a stop was sent for {}'s task, and DSM hasn't confirmed it",
+    StopResult.REFUSED: "DSM refused the stop of {}'s task, so it may still be running",
+    StopResult.NOT_SENT: "the stop for {}'s task couldn't be sent, so it may still be running",
+    StopResult.NO_SUCH_TASK: "DSM had no task for {} to stop: it most likely ended",
 }
 
 
@@ -471,10 +505,12 @@ def _with_stop(error: ToolError, outcome: ItemOutcome) -> ToolError:
     try:
         body = json.loads(str(error))
         details = body["error"]
-        message = str(details["message"]).rstrip(". ")
+        message = str(details["message"]).removesuffix(".")
     except (ValueError, KeyError, TypeError):
         return error
-    details["message"] = f"{message}; {_STOP_SAYS[outcome.stop]}."
+    # Only the message's own period goes: a path ending in a dot keeps it (`/s/report.`).
+    says = _STOP_SAYS[outcome.stop].format(shown(outcome.item.source))
+    details["message"] = f"{message}; {says}."
     if outcome.handoff is not None:
         handle = str(outcome.handoff.handle)
         details["handle"] = handle
@@ -486,7 +522,7 @@ def _with_stop(error: ToolError, outcome: ItemOutcome) -> ToolError:
             else ", and stop it there if it's still running."
         )
         advice = str(details.get("suggestion") or "").strip()
-        details["suggestion"] = f"{advice.rstrip('.')}. {follow}" if advice else follow
+        details["suggestion"] = f"{advice.removesuffix('.')}. {follow}" if advice else follow
     return rewrapped_error(body)
 
 

@@ -109,6 +109,8 @@ class FakeDsm:
         # A HOLD start answers once this is set; ``holding`` is set when one is waiting.
         self.release = asyncio.Event()
         self.holding = asyncio.Event()
+        # What a released HOLD start answers: "ok", a DSM error code or an exception.
+        self.after_hold: Any = "ok"
 
     def mount(self, router: respx.Router | Any) -> None:
         router.route(url__startswith=f"{BASE_URL}/webapi/").mock(side_effect=self._answer_async)
@@ -121,7 +123,7 @@ class FakeDsm:
         if params.get("method") == "start" and script is not None and script.start == HOLD:
             self.holding.set()
             await self.release.wait()
-            script.start = "ok"
+            script.start = self.after_hold
         return self._answer(request)
 
     def methods(self, api: str | None = None) -> list[str]:

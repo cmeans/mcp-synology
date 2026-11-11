@@ -1244,6 +1244,10 @@ class CopyMoveAdapter:
         }
 
     async def end_group(self, items: Sequence[Item]) -> None:
+        # ``items``: the group's items that ran, all of them unless the call's wait ran out
+        # partway (#496), so a summary never names one that wasn't started.
+        ran = [x.source for x in items]
+        self.group = [p for p in self.group if p in ran]
         text = await _copy_move_summary(
             self.client,
             self.group,
@@ -1556,7 +1560,9 @@ class DeleteAdapter:
         return None
 
     async def summary(self, batch: BatchOutcome) -> str:
-        return await _delete_summary(self.client, self.normalized, self.recycle_bin_status)
+        # Only what ran: the call's wait may have run out before the rest (#496).
+        ran = [o.item.source for o in batch.items if o.state == "done"]
+        return await _delete_summary(self.client, ran, self.recycle_bin_status)
 
     def handoff_text(self, outcome: ItemOutcome, batch: BatchOutcome) -> str:
         assert outcome.handoff is not None
