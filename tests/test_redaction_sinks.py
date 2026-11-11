@@ -201,7 +201,9 @@ def test_an_input_request_is_scrubbed() -> None:
     assert _scrubbed_model(state, "t", "input request").request_state == state.request_state
 
 
-async def test_call_tool_scrubs_an_input_request(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_call_tool_scrubs_an_input_request(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Through the sink itself, not only its helper (QA round 2 on #681): an elicitation's
     message and a sampling message are masked; what the client hands back or opens isn't."""
     server = _SynologyServer("canary")
@@ -240,8 +242,12 @@ async def test_call_tool_scrubs_an_input_request(monkeypatch: pytest.MonkeyPatch
         return request
 
     monkeypatch.setattr(server, "_call_tool", asks)
-    result = await server.call_tool("asks", {})
+    with caplog.at_level(logging.WARNING, logger="mcp_synology.server"):
+        result = await server.call_tool("asks", {})
     assert isinstance(result, InputRequiredResult)
+    # Masking it is logged, naming the tool, as every sink does.
+    assert "The input request of asks held text that looked like a credential" in caplog.text
+    assert CANARY not in caplog.text
     dumped = json.dumps(result.model_dump(mode="json", by_alias=True))
     assert CANARY not in dumped
     assert result.request_state == state
