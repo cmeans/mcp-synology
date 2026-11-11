@@ -1077,10 +1077,11 @@ class TestBackgroundTaskErrors:
         assert body["error"]["code"] == "not_found"
 
     @respx.mock
-    async def test_copy_task_error_maps_416_to_disk_full_retryable(
+    async def test_copy_task_error_maps_416_to_disk_full_not_retryable(
         self, mock_client: DsmClient
     ) -> None:
-        """Copy task error 416 → ``disk_full`` envelope, retryable=True."""
+        """Copy task error 416 → ``disk_full`` envelope, not retryable until space is freed
+        (#490)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -1111,7 +1112,7 @@ class TestBackgroundTaskErrors:
             )
         body = json.loads(str(exc_info.value))
         assert body["error"]["code"] == "disk_full"
-        assert body["error"]["retryable"] is True
+        assert body["error"]["retryable"] is False
 
     @respx.mock
     async def test_copy_task_error_unknown_code_falls_back(self, mock_client: DsmClient) -> None:

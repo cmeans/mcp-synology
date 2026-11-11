@@ -283,9 +283,16 @@ class SynologyFileExistsError(FileStationError):
 
 
 class DiskFullError(FileStationError):
-    """No space left on device (code 416)."""
+    """No space left on device (code 416) or a full quota (415). Not retryable: the same call
+    fails again until space is freed (#490)."""
 
     error_code = ErrorCode.DISK_FULL
+
+
+class BusyError(FileStationError):
+    """The NAS is too busy (402) or the file is in use (421): waiting and retrying is the
+    advice, so it's retryable (#490)."""
+
     retryable = True
 
 
@@ -366,7 +373,10 @@ AUTH_ERROR_CODES: dict[int, tuple[str, str]] = {
 # File Station error codes (400-series).
 FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     400: ("Invalid parameter", "Check path format and parameter values."),
-    401: ("Unknown error", "An unknown file operation error occurred. Retry or check NAS logs."),
+    401: (
+        "Unknown error",
+        "An unknown file operation error occurred. Check the NAS logs (Log Center).",
+    ),
     402: ("System too busy", "The NAS is too busy. Wait and retry."),
     407: (
         "Operation not permitted",
@@ -522,6 +532,8 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
             return DiskFullError(message, code=code, suggestion=suggestion)
         if code in (418, 419):
             return IllegalNameError(message, code=code, suggestion=suggestion)
+        if code in (402, 421):
+            return BusyError(message, code=code, suggestion=suggestion)
         return FileStationError(message, code=code, suggestion=suggestion)
 
     # Common codes (100-series, shared across all APIs)

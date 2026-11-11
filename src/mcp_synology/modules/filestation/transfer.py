@@ -417,7 +417,7 @@ async def download_file(
                 f"Download failed: Insufficient local disk space: "
                 f"file is {format_size(nas_file_size)} "
                 f"but only {format_size(free_space)} free on {local_dir}.",
-                retryable=True,
+                retryable=False,
                 suggestion="Free space on the local disk or choose a different destination.",
             )
 
@@ -471,8 +471,8 @@ async def download_file(
         #   - EACCES/EPERM: permission denied
         #   - EINVAL/ENAMETOOLONG: illegal chars, path too long
         # Disk-full is handled specifically here so smart clients get a
-        # retryable ``disk_full`` code that matches the pre-flight branch
-        # earlier in this function. Using ``errno`` rather than substring
+        # ``disk_full`` code (not retryable until space is freed, #490) that matches the
+        # pre-flight branch earlier in this function. Using ``errno`` rather than substring
         # matching on the error message — the message is locale-dependent
         # and varies across OS versions, ``errno`` does not.
         if e.errno == errno.ENOSPC:
@@ -480,7 +480,7 @@ async def download_file(
                 ErrorCode.DISK_FULL,
                 f"Download failed: No space left on local disk writing {dest_file}: "
                 f"{e.strerror or e}",
-                retryable=True,
+                retryable=False,
                 suggestion="Free space on the local disk or choose a different destination.",
             )
         # Name the file the caller asked for: str(e) can carry the internal temp path.

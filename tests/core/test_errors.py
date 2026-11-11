@@ -1,6 +1,11 @@
 """Tests for core/errors.py — exception hierarchy and error_from_code factory."""
 
+import re
+
+import pytest
+
 from mcp_synology.core.errors import (
+    FILESTATION_ERROR_CODES,
     ApiNotFoundError,
     AuthenticationError,
     DiskFullError,
@@ -154,3 +159,26 @@ class TestDetachedCopy:
             Model(n="x")  # type: ignore[arg-type]
         except ValidationError as e:
             assert detached_copy(e) is None
+
+
+class TestFileStationRetryableAgreesWithItsAdvice:
+    """#490: a code whose advice is to wait and retry is retryable, and no other is: a model
+    reads the flag before the prose. 402 and 421 say to wait and retry; 401 (unknown) says to
+    check the logs; 415 and 416 need space freed first, so the same call would fail again."""
+
+    def test_the_retryable_codes(self) -> None:
+        retryable = {
+            code
+            for code in FILESTATION_ERROR_CODES
+            if error_from_code(code, "SYNO.FileStation.CopyMove").retryable
+        }
+        assert retryable == {402, 421}
+
+    @pytest.mark.parametrize("code", sorted(FILESTATION_ERROR_CODES))
+    def test_advice_and_flag_agree(self, code: int) -> None:
+        error = error_from_code(code, "SYNO.FileStation.CopyMove")
+        _, suggestion = FILESTATION_ERROR_CODES[code]
+        # "Wait and retry" or a bare "Retry …" is advice to send the same call again; "then
+        # retry" after a fix (1200's "check both … then retry") isn't.
+        says_retry = re.search(r"(?:^|\. )(?:wait and )?retry\b", suggestion, re.IGNORECASE)
+        assert bool(says_retry) is error.retryable, (code, suggestion)

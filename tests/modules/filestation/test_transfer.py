@@ -1249,8 +1249,8 @@ class TestDownloadFile:
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
         """No size from getinfo, so download_file's own check is skipped and the client's
-        catches it: `disk_full`, retryable, since #462 gave it ENOSPC (it was
-        `filesystem_error` with a filename suggestion)."""
+        catches it: `disk_full`, since #462 gave it ENOSPC (it was `filesystem_error` with a
+        filename suggestion), not retryable until space is freed (#490)."""
         from unittest.mock import MagicMock, patch
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
@@ -1268,7 +1268,7 @@ class TestDownloadFile:
         ):
             await download_file(mock_client, path="/video/a.mkv", dest_folder=str(tmp_path))
         error = json.loads(str(exc_info.value))["error"]
-        assert (error["code"], error["retryable"]) == ("disk_full", True)
+        assert (error["code"], error["retryable"]) == ("disk_full", False)
 
     async def test_download_enospc_reports_disk_full(
         self, mock_client: DsmClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1301,7 +1301,7 @@ class TestDownloadFile:
         body = json.loads(str(exc_info.value))
         assert body["status"] == "error"
         assert body["error"]["code"] == "disk_full"
-        assert body["error"]["retryable"] is True
+        assert body["error"]["retryable"] is False
         assert "No space left" in body["error"]["message"]
         assert ".part" not in body["error"]["message"]  # QA R1 (#178): no temp path
 
