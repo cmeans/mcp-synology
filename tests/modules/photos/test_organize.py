@@ -211,7 +211,7 @@ class TestTags:
             out = await tag_photos(client, action="add", ids=[12, 15, 999], tags=["2024", "new"])
         assert fake.one(TAG, "create").params == {"name": "new"}
         assert fake.one(ITEM, "add_tag").params == {"id": [12, 15], "tag": [4, 9]}
-        assert 'Added tags "2024", "new" to 2 item(s)' in out
+        assert "Added tags 2024, new to 2 item(s)" in out
         assert "Rejected by DSM: 15" in out
         assert "Not found: 999" in out
         assert "dates and sizes change" in out
@@ -649,7 +649,7 @@ class TestPeople:
         async with client:
             out = await edit_person(client, action="rename", person_id=12, name="")
         assert fake.one(PERSON, "set").params == {"id": 12, "name": ""}
-        assert out == 'Person 12: "Person 1" (70 items, visible, cover: item 26).'
+        assert out == "Person 12: Person 1 (70 items, visible, cover: item 26)."
 
     @respx.mock
     async def test_hide_and_cover(self) -> None:
@@ -693,7 +693,7 @@ class TestPeople:
             "merged_id": [11, 19],
             "name": "Person 1",
         }
-        assert out == 'Merged 2 people into person 12 "Person 1" (now 70 items).'
+        assert out == "Merged 2 people into person 12 Person 1 (now 70 items)."
 
     @respx.mock
     async def test_merge_quotes_the_kept_person(self) -> None:
@@ -816,7 +816,7 @@ class TestRequests:
             "filesize_limit": 10485760,
             "expiration": 0,
         }
-        assert 'Photo request "mcp spec" → /mcp-spec-capture (personal space)' in out
+        assert "Photo request mcp spec → /mcp-spec-capture (personal space)" in out
         assert "Link:      http://nas.example:5000/mo/request/ZxOc9Ep8q" in out
 
     @respx.mock
@@ -899,7 +899,7 @@ class TestRequests:
             "passphrase": "ZxOc9Ep8q",
             "subject": "mcp spec 2",
         }
-        assert 'Photo request "mcp spec 2"' in out and "10 MiB per file" in out
+        assert "Photo request mcp spec 2" in out and "10 MiB per file" in out
         assert fake.one(REQ, "delete").params == {"passphrase": ["ZxOc9Ep8q"]}
         assert "its link stops working" in gone
 
@@ -1048,7 +1048,7 @@ class TestDsmErrors:
 
 def test_person_line_separates_thousands() -> None:
     assert person_line({"id": 12, "name": "Jo", "item_count": 1_234}) == (
-        'Person 12: "Jo" (1,234 items, visible).'
+        "Person 12: Jo (1,234 items, visible)."
     )
 
 
@@ -1103,38 +1103,6 @@ class TestNamesPassedBackInQuotes:
     HINT = "If the name came from a reply in quotes, pass it without them."
 
     @respx.mock
-    async def test_tag_add_notes_a_new_tag_in_quotes(self) -> None:
-        fake = FakePhotos().on(ITEM, "get", 2, _items(12))
-        fake.on(TAG, "list", 1, captured("tag-list"))
-        fake.on(TAG, "create", 1, {"tag": {"id": 9, "name": '"beach"'}})
-        fake.on(ITEM, "add_tag", 1, {"error_list": []})
-        install(fake)
-        client = make_client()
-        async with client:
-            out = await tag_photos(client, action="add", ids=[12], tags=['"beach"', "new2"])
-        assert (
-            '\n  Note: the tag "\\"beach\\"" starts and ends with a quote mark, which is part of '
-            "its name. If it came from a reply in quotes, remove it from these items and add "
-            "the tag without the quote marks." in out
-        ), out
-        assert out.count("Note: the tag") == 1, out  # not for "new2"
-
-    @respx.mock
-    async def test_tag_add_of_an_existing_tag_in_quotes_is_noted_too(self) -> None:
-        """Pre-QA r8 on #709: an existing tag named `"quoted"` is most likely the same mistake
-        made earlier (QA r5's reasoning for album create), so adding it is noted too."""
-        tags = captured("tag-list")
-        tags["list"].append({"id": 77, "name": '"quoted"'})
-        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(TAG, "list", 1, tags)
-        fake.on(ITEM, "add_tag", 1, {"error_list": []})
-        install(fake)
-        client = make_client()
-        async with client:
-            out = await tag_photos(client, action="add", ids=[12], tags=['"quoted"'])
-        assert fake.one(ITEM, "add_tag").params == {"id": [12], "tag": [77]}
-        assert 'Note: the tag "\\"quoted\\"" starts and ends with a quote mark' in out, out
-
-    @respx.mock
     async def test_tag_remove_of_an_unknown_tag_in_quotes_hints(self) -> None:
         fake = FakePhotos().on(ITEM, "get", 2, _items(12))
         fake.on(TAG, "list", 1, captured("tag-list")).on(ITEM, "remove_tag", 1, {"error_list": []})
@@ -1160,53 +1128,6 @@ class TestNamesPassedBackInQuotes:
         assert _error(exc)["code"] == "not_found"
         assert _error(exc)["suggestion"].endswith(f"lists people. {self.HINT}"), _error(exc)
         assert self.HINT not in _error(plain)["suggestion"]
-
-    @respx.mock
-    async def test_person_rename_and_merge_note_a_name_in_quotes(self) -> None:
-        fake = FakePhotos().on(PERSON, "get", 1, captured("person-get", PEOPLE))
-        fake.on(PERSON, "set", 1, captured("person-set-name", PEOPLE))
-        fake.on(PERSON, "list", 1, captured("person-list", PEOPLE))
-        fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
-        install(fake)
-        client = make_client()
-        note = (
-            'Note: the person\'s name "\\"Jo\\"" starts and ends with a quote mark, which '
-            "is now part of it. If it came from a reply in quotes, rename it without the quote "
-            "marks."
-        )
-        async with client:
-            renamed = await edit_person(client, action="rename", person_id=12, name='"Jo"')
-            plain = await edit_person(client, action="rename", person_id=12, name="Jo")
-            merged = await merge_people(client, target_id=12, merge_names=["Person 2"], name='"Jo"')
-        assert renamed.splitlines()[1:] == [note], renamed
-        assert "\n" not in plain, plain
-        assert merged.splitlines()[1:] == [note], merged
-
-    @respx.mock
-    async def test_request_subject_in_quotes_is_noted(self) -> None:
-        listed = captured("request-list")
-        fake = FakePhotos().on(REQ, "list", 1, listed, listed, listed, listed)
-        fake.on(REQ, "update", 1, {})
-        fake.on("SYNO.FotoTeam.Browse.Folder", "get", 2, {"folder": {"id": 5, "name": "/team"}})
-        fake.on(REQ, "create", 1, {**captured("request-create"), "library": "shared_space"})
-        install(fake)
-        client = make_client()
-        tail = (
-            'Note: the subject "\\"S\\"" starts and ends with a quote mark, which is now '
-            "part of it. If it came from a reply in quotes, update the request's subject "
-            "without the quote marks."
-        )
-        async with client:
-            updated = await photo_request(
-                client, action="update", request="ZxOc9Ep8q", subject='"S"'
-            )
-            made = await photo_request(
-                client, action="create", subject='"S"', folder_path="/team", space="shared"
-            )
-            plain = await photo_request(client, action="update", request="ZxOc9Ep8q", subject="S")
-        assert updated.splitlines()[-1] == tail, updated
-        assert made.splitlines()[-1] == tail, made
-        assert "Note: the subject" not in plain, plain
 
     @respx.mock
     async def test_a_nas_escape_shows_doubled_and_its_decoded_text_finds_it(self) -> None:
@@ -1258,64 +1179,6 @@ class TestQuotesRound2:
         assert self.PATH_HINT not in _error(plain)["suggestion"], _error(plain)
         assert not fake.of(REQ, "create")
 
-    @respx.mock
-    async def test_no_note_when_the_name_already_had_the_quotes(self) -> None:
-        kept = captured("person-get", PEOPLE)
-        kept["list"][0]["name"] = '"Jo"'
-        people = captured("person-list", PEOPLE)
-        fake = FakePhotos().on(PERSON, "get", 1, kept)
-        fake.on(PERSON, "set", 1, {}).on(PERSON, "list", 1, people)
-        fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
-        listed = captured("request-list")
-        listed["list"][0]["subject"] = '"S"'
-        fake.on(REQ, "list", 1, listed, listed).on(REQ, "update", 1, {})
-        install(fake)
-        client = make_client()
-        async with client:
-            renamed = await edit_person(client, action="rename", person_id=12, name='"Jo"')
-            merged = await merge_people(client, target_id=12, merge_names=["Person 2"], name='"Jo"')
-            updated = await photo_request(
-                client, action="update", request="ZxOc9Ep8q", subject='"S"'
-            )
-        for out in (renamed, merged, updated):
-            assert "Note: the" not in out, out
-
-
-@respx.mock
-async def test_several_new_tags_in_quotes_get_one_note() -> None:
-    """Pre-QA r5 on #709: a quoted tag list passed back made one note line per tag."""
-    fake = FakePhotos().on(ITEM, "get", 2, _items(12))
-    fake.on(TAG, "list", 1, captured("tag-list"))
-    fake.on(TAG, "create", 1, {"tag": {"id": 9, "name": "x"}}, {"tag": {"id": 10, "name": "y"}})
-    fake.on(ITEM, "add_tag", 1, {"error_list": []})
-    install(fake)
-    client = make_client()
-    async with client:
-        out = await tag_photos(client, action="add", ids=[12], tags=['"a"', '"b"', "2024"])
-    notes = [line for line in out.splitlines() if "Note: the tag" in line]
-    assert notes == [
-        '  Note: the tags "\\"a\\"", "\\"b\\"" start and end with a quote mark, which is part '
-        "of their names. If they came from a reply in quotes, remove them from these items and "
-        "add the tags without the quote marks."
-    ], out
-
-
-@respx.mock
-async def test_merge_keeping_a_merged_persons_quoted_name_has_no_note() -> None:
-    """QA r3 on #709: `name` may be a merged person's own name, quotes and all."""
-    people = captured("person-list", PEOPLE)
-    people["list"][1]["name"] = '"Jo"'
-    fake = FakePhotos().on(PERSON, "list", 1, people)
-    fake.on(PERSON, "get", 1, captured("person-get", PEOPLE))
-    fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
-    install(fake)
-    client = make_client()
-    async with client:
-        out = await merge_people(client, target_id=12, merge_names=['"Jo"'], name='"Jo"')
-        other = await merge_people(client, target_id=12, merge_names=['"Jo"'], name='"Al"')
-    assert "Note:" not in out, out
-    assert "Note: the person's name" in other, other
-
 
 @respx.mock
 async def test_photo_request_missing_folder_names_the_path_dsm_was_asked_for() -> None:
@@ -1330,41 +1193,3 @@ async def test_photo_request_missing_folder_names_the_path_dsm_was_asked_for() -
     err = _error(exc)
     assert "no folder '/Up' in the personal space." in err["message"], err
     assert err["value"] == "Up", err
-
-
-class TestTagNoteGuards:
-    """QA r6 on #709: the tag quotes note appears only on an add that tagged something."""
-
-    def _fake(self, error_list: list[int] | None = None) -> FakePhotos:
-        tags = captured("tag-list")
-        tags["list"].append({"id": 77, "name": '"quoted"'})
-        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(TAG, "list", 1, tags)
-        fake.on(ITEM, "add_tag", 1, {"error_list": error_list or []})
-        fake.on(ITEM, "remove_tag", 1, {"error_list": []})
-        return fake
-
-    @respx.mock
-    async def test_remove_of_an_existing_quoted_tag_has_no_note(self) -> None:
-        install(self._fake())
-        client = make_client()
-        async with client:
-            out = await tag_photos(client, action="remove", ids=[12], tags=['"quoted"'])
-        assert out.startswith('Removed tags "\\"quoted\\""'), out
-        assert "Note: the tag" not in out, out
-
-    @respx.mock
-    async def test_a_plain_add_has_no_note(self) -> None:
-        install(self._fake())
-        client = make_client()
-        async with client:
-            out = await tag_photos(client, action="add", ids=[12], tags=["2024"])
-        assert "Note: the tag" not in out, out
-
-    @respx.mock
-    async def test_no_note_when_dsm_rejected_every_item(self) -> None:
-        install(self._fake(error_list=[12]))
-        client = make_client()
-        async with client:
-            out = await tag_photos(client, action="add", ids=[12], tags=['"quoted"'])
-        assert "Rejected by DSM: 12" in out, out
-        assert "Note: the tag" not in out, out

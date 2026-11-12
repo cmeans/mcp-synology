@@ -23,7 +23,6 @@ from mcp_synology.modules.photos.helpers import (
     Photos,
     Ref,
     add_rejected,
-    added_tags_quotes_note,
     check_folder_path,
     check_ids,
     check_space,
@@ -34,7 +33,6 @@ from mcp_synology.modules.photos.helpers import (
     one_ref,
     parse_expires,
     quoted_name,
-    quotes_note,
     refs,
     rejected_text,
     shown_folder,
@@ -187,11 +185,6 @@ async def tag_photos(
                 lines.append(
                     f"  No item has the tag(s) {gone}, so there was nothing to remove.{hint}"
                 )
-            # One note for every tag added that's in a reply's quotes, new or not (pre-QA r8);
-            # none when DSM rejected every item, since then no item has the tag (QA r6).
-            all_rejected = {str(i) for i in found} <= {str(r) for r in rejected}
-            if action == "add" and not all_rejected:
-                lines += [f"  {n}" for n in added_tags_quotes_note(names)]
             if rejected:
                 lines.append(
                     f"  Rejected by DSM: {rejected_text(rejected)} "
@@ -409,12 +402,7 @@ async def edit_person(
         else:
             # photo_id is an item of this person; DSM picks that item's face (verified).
             await ph.call("Browse.Person", "set_cover", {"id": pid, "photo_id": item_id})
-        note = (
-            quotes_note(name, "person's name", before=target.get("name"))
-            if action == "rename"
-            else []
-        )
-        return "\n".join([person_line(await _person_now(ph, pid)), *note])
+        return person_line(await _person_now(ph, pid))
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -472,13 +460,10 @@ async def merge_people(
         now = await _person_now(ph, keep_id)
         items = now.get("item_count")
         count = f"{int(items):,}" if items is not None else "?"
-        merged_line = (
+        return (
             f"Merged {len(merged):,} people into person {keep_id} "
             f"{quoted_name(now.get('name'))} (now {count} items)."
         )
-        # Any of the people's names kept as it was, quotes and all, gets no note (QA r3).
-        kept_names = [keep.get("name"), *(m.get("name") for m in merged.values())]
-        return "\n".join([merged_line, *quotes_note(name, "person's name", before=kept_names)])
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -486,12 +471,6 @@ async def merge_people(
 # -- photo_request ------------------------------------------------------------------
 
 _REQUEST_ACTIONS = ("create", "list", "update", "delete")
-
-
-def _subject_note(subject: str | None, before: str | None = None) -> list[str]:
-    return quotes_note(
-        subject, "subject", "update the request's subject without the quote marks", before=before
-    )
 
 
 _LIBRARY = {"personal": "personal_space", "shared": "shared_space"}
@@ -637,15 +616,13 @@ async def photo_request(
             made = await ph.call(
                 "PhotoRequest", "create", {"passphrase": "", **fields}, personal=True
             )
-            return "\n".join([_request_block(made), *_subject_note(subject)])
+            return _request_block(made)
         if not fields:
             invalid(op, "nothing to change.", param="action", value=action)
         await ph.call("PhotoRequest", "update", {"passphrase": request, **fields}, personal=True)
         now = {str(e.get("passphrase")): e for e in await ph.walk("PhotoRequest", personal=True)}
         # The fallback shows this call's own text: escaped as DSM's would be (#604).
         shown = {k: escape_controls(v) if isinstance(v, str) else v for k, v in fields.items()}
-        block = _request_block(now.get(str(request), {**existing[str(request)], **shown}))
-        before = existing[str(request)].get("subject")
-        return "\n".join([block, *_subject_note(subject, before)])
+        return _request_block(now.get(str(request), {**existing[str(request)], **shown}))
     except SynologyError as e:
         synology_error_response(op, e)

@@ -16,7 +16,6 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
-from mcp_synology.modules.filestation.helpers import json_quoted
 from mcp_synology.modules.photos.helpers import (
     QUOTES_HINT,
     V7,
@@ -38,6 +37,9 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
+
+# The caller's own empty text, as written (`(unnamed)` is for a name missing from the NAS).
+_EMPTY = '""'
 
 _SORTS = {"taken": "takentime", "filename": "filename", "size": "filesize", "type": "item_type"}
 _DIRECTIONS = ("asc", "desc")
@@ -247,7 +249,7 @@ async def _list(
         items = data.get("list", [])
         total = int((await ph.call("Search.Search", "count_item", {"keyword": keyword}))["count"])
         return await _render(
-            ph, f"search {json_quoted(keyword)}", [], "search order", items, total, offset
+            ph, f"search {quoted_name(keyword, _EMPTY)}", [], "search order", items, total, offset
         )
 
     if album is not None:
@@ -306,15 +308,15 @@ async def _list(
         tag_id = (await ph.tag_ids([tag]))[tag]
         # The caller's own text, `""` when empty: `(unnamed)` is for a name missing from the
         # NAS (pre-QA r6 on #709).
-        described.append(f"tag {json_quoted(tag)}")
+        described.append(f"tag {quoted_name(tag, _EMPTY)}")
         if tag_id is None:
             heading = _heading(
                 ph, described, filters_text, _order(*sort), in_folder=folder is not None
             )
             hint = f" {QUOTES_HINT}" if in_reply_quotes(tag) else ""
             return (
-                f"{heading}\nNo items: no item has the tag {json_quoted(tag)} (a tag exists only "
-                f"while some item has it).{hint}"
+                f"{heading}\nNo items: no item has the tag {quoted_name(tag, _EMPTY)} "
+                f"(a tag exists only while some item has it).{hint}"
             )
         keys["general_tag"] = [tag_id]
         keys["general_tag_policy"] = "or"

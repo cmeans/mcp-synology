@@ -115,7 +115,7 @@ class TestListPhotosRouting:
         assert {**keys, "offset": 0, "limit": 50}.items() <= fake.one(
             ITEM, "list_with_filter"
         ).params.items()
-        assert 'Photos: tag "MCP-SPEC-TAG" (personal space; 2024-01-01 to 2024-12-31' in out
+        assert "Photos: tag MCP-SPEC-TAG (personal space; 2024-01-01 to 2024-12-31" in out
 
     @respx.mock
     async def test_the_title_quotes_names_holding_its_separator(self) -> None:
@@ -166,7 +166,7 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, tag="nope")
-        assert 'no item has the tag "nope"' in out  # as the title writes it (pre-QA r2 on #695)
+        assert "no item has the tag nope" in out  # as the title writes it (pre-QA r2 on #695)
 
     @respx.mock
     async def test_unknown_tag_in_a_folder_keeps_photos_in(self) -> None:
@@ -177,7 +177,7 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, folder_path="/mcp-spec-capture", tag="nope")
-        assert out.startswith('Photos in /mcp-spec-capture, tag "nope" ('), out
+        assert out.startswith("Photos in /mcp-spec-capture, tag nope ("), out
 
     @respx.mock
     async def test_place_uses_geocoding_id(self) -> None:
@@ -201,7 +201,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, keyword="2024")
         assert fake.one("SYNO.Foto.Search.Search", "list_item").params["keyword"] == "2024"
-        assert 'search "2024"' in out and "beach-sunset_1.jpg" in out
+        assert "search 2024" in out and "beach-sunset_1.jpg" in out
 
     @respx.mock
     async def test_a_keyword_holding_a_quote_is_escaped_in_the_title(self) -> None:
@@ -225,7 +225,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, album_id=4)
         assert fake.one(ITEM, "list").params["album_id"] == 4
-        assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
+        assert "album mcp-spec-album (4)" in out and "2 item(s) total" in out
 
     @respx.mock
     async def test_an_unnamed_person_isnt_quoted_as_a_name(self) -> None:
@@ -311,7 +311,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, concept=1)
         assert fake.one(ITEM, "list").params["concept_id"] == 1
-        assert 'concept "dog"' in out
+        assert "concept dog" in out
 
     @respx.mock
     async def test_concept_without_get_result_gives_no_total(self) -> None:
@@ -491,7 +491,7 @@ class TestCollections:
     @pytest.mark.parametrize(
         ("name", "heading"),
         [
-            ("x", "Folders in '/a matching b' matching \"x\""),
+            ("x", "Folders in '/a matching b' matching x"),
             (None, "Folders in /a matching b"),
         ],
     )
@@ -590,7 +590,7 @@ class TestGetPhoto:
         assert "Item 12: forest-trail.jpg" in out
         assert "1600×1200 · photo" in out
         assert "Rating:       4" in out and "favorite" not in out
-        assert '"Jo", (unnamed)' in out
+        assert "Jo, (unnamed)" in out
         assert "44.428, -110.5885 · Teton County, Wyoming, United States" in out
         assert "SeedCam 1" in out
         assert "GPS Latitude Reference" in out

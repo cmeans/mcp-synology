@@ -15,8 +15,6 @@ import datetime
 import json
 import logging
 import re
-import unicodedata
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -65,13 +63,33 @@ def space_label(space: Space) -> str:
     return "Shared Space" if space == "shared" else "personal space"
 
 
-def quoted_name(name: object, unnamed: str = "(unnamed)") -> str:
-    """An album's, person's, tag's or request's name in a reply, JSON-quoted (`json_quoted`,
-    #695), so a ``"``, ``", "`` or ``" ("`` inside it can't read as the line's structure;
-    ``unnamed`` (the server's placeholder, unquoted so it can't pass for a name) when it has
-    none (#700). A name that isn't text (``0``) is shown as text, not as missing (QA r1)."""
+# What the lines that name an album, person, tag, place or request put around the name: a
+# name holding one is quoted, so it can't read as the line's structure (#700).
+_NAME_MARKS = (", ", "; ", " (", ": ", " · ", " → ")
+
+
+def quoted_name(name: object, unnamed: str = "(unnamed)", *also: str) -> str:
+    """An album's, person's, tag's, place's or request's name in a line of a reply: as is,
+    or JSON-quoted (`json_quoted`, #695) only when it's needed (maintainer, 2026-11-12, on
+    #709), as `shown_folder` does for a folder. Needed when the name holds what its line
+    puts around a name (`_NAME_MARKS`, or ``also``) or a character JSON escapes (a quote, a
+    backslash, one that draws nothing), has whitespace at an end, starts with a quote or
+    ``(`` (it would read as quoted, or as the server's placeholder), or ends with ``:`` or a
+    quote. ``unnamed`` (the server's placeholder, unquoted) when it has none. A name that
+    isn't text (``0``) is shown as text. A name made of words is shown as it is: wording
+    isn't a boundary (CLAUDE.md)."""
     text = "" if name is None else str(name)
-    return json_quoted(text) if text else unnamed
+    if not text:
+        return unnamed
+    quoted = json_quoted(text)
+    needed = (
+        quoted != f'"{text}"'
+        or text != text.strip()
+        or text.startswith(("'", "("))
+        or text.endswith((":", "'"))
+        or any(m in text for m in (*_NAME_MARKS, *also))
+    )
+    return quoted if needed else text
 
 
 def shown_folder(path: object, *also: str) -> str:
@@ -111,58 +129,6 @@ def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
     if not in_reply_quotes(name):
         return suggestion
     return f"{suggestion} {QUOTES_HINT}" if suggestion else QUOTES_HINT
-
-
-def quotes_note(
-    name: object,
-    what: str,
-    fix: str = "rename it without the quote marks",
-    *,
-    before: str | None | Iterable[str | None] = (),
-) -> list[str]:
-    """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
-    quotes are now part of the name (QA r1 on #709). Empty otherwise, and when ``name`` is
-    a name it had ``before`` the call (one name, or several: a merge keeps any of the
-    people's names): a name that really has quotes, passed back as it is, isn't one taken
-    from a reply's quotes (QA r2). Compared in NFC, case kept: a reply shows a name as
-    stored, and a client may normalize it on the way back (QA r3)."""
-    if not in_reply_quotes(name):
-        return []
-    # One name (text, or None), or any other iterable of names (QA r4 on #709).
-    earlier = (
-        (before,)
-        if before is None or isinstance(before, str) or not isinstance(before, Iterable)
-        else before
-    )
-    nfc = unicodedata.normalize("NFC", str(name))
-    if any(b is not None and unicodedata.normalize("NFC", str(b)) == nfc for b in earlier):
-        return []
-    return [
-        f"Note: the {what} {quoted_name(name)} starts and ends with a quote mark, which is "
-        f"now part of it. If it came from a reply in quotes, {fix}."
-    ]
-
-
-def added_tags_quotes_note(tags: Iterable[str]) -> list[str]:
-    """The `quotes_note` of `tag_photos` add: one note naming every tag it added that's in a
-    reply's quotes, so a quoted list passed back doesn't add a line per tag (pre-QA r5 on
-    #709). Every such tag, new or not: one that already exists, quotes and all, is most
-    likely the same mistake made earlier, as for album create (QA r5, pre-QA r8). Kept
-    beside `quotes_note` so their wording changes together (pre-QA r7)."""
-    quoted = [t for t in tags if in_reply_quotes(t)]
-    if not quoted:
-        return []
-    if len(quoted) == 1:
-        return [
-            f"Note: the tag {quoted_name(quoted[0])} starts and ends with a quote mark, which "
-            "is part of its name. If it came from a reply in quotes, remove it from these "
-            "items and add the tag without the quote marks."
-        ]
-    return [
-        f"Note: the tags {', '.join(quoted_name(t) for t in quoted)} start and end with a "
-        "quote mark, which is part of their names. If they came from a reply in quotes, remove "
-        "them from these items and add the tags without the quote marks."
-    ]
 
 
 def check_space(operation: str, space: str) -> Space:

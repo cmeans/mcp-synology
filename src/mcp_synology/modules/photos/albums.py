@@ -23,7 +23,6 @@ from mcp_synology.modules.photos.helpers import (
     parse_date,
     parse_expires,
     quoted_name,
-    quotes_note,
     refs,
     with_quotes_hint,
 )
@@ -190,9 +189,6 @@ async def _photo_album(
             created = data["album"]
             lines.append(f"Created smart album {quoted_name(name)} (id {created['id']}).")
             lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
-        # Always noted: another album already named this, quotes and all, is most likely the
-        # same mistake made earlier, not proof the quotes are real (QA r5 on #709).
-        lines += quotes_note(name, "album name")
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
@@ -225,7 +221,6 @@ async def _photo_album(
     if action == "rename":
         await ph.call("Browse.Album", "set_name", {"id": album_id, "name": name}, personal=True)
         lines.append(f"Renamed album {album_id} to {quoted_name(name)}.")
-        lines += quotes_note(name, "album name", before=target.get("name"))
     elif action in ("add", "remove"):
         found, missing = await ph.items(ids)
         if found:
@@ -264,7 +259,6 @@ async def _photo_album(
         )
         copied = data["album"]
         lines.append(f"Copied album {album_id} to {quoted_name(name)} (id {copied['id']}).")
-        lines += quotes_note(name, "album name", before=target.get("name"))
         album_id = int(copied["id"])
     else:
         cond = await _condition(ph, condition or {})

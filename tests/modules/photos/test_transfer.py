@@ -981,7 +981,7 @@ class TestUpload:
                 )
         assert "renamed  id 9" in out and "(as " not in out
         assert (
-            "Couldn't add them to album \"mcp-spec-album\": DSM didn't answer (ReadTimeout). "
+            "Couldn't add them to album mcp-spec-album: DSM didn't answer (ReadTimeout). "
             "Check the album with list_photos before adding again."
         ) in out
         assert "Couldn't read the renamed items' names: ReadTimeout" in caplog.text
@@ -1286,7 +1286,7 @@ class TestUpload:
             )
         assert "a.jpg  failed   couldn't read the file (Permission denied)" in out
         assert "renamed  id 9" in out and "(as " not in out
-        assert 'Couldn\'t add them to album "mcp-spec-album":' in out
+        assert "Couldn't add them to album mcp-spec-album:" in out
 
     async def test_outside_roots_refused_first(self, tmp_path: Path) -> None:
         inside = tmp_path / "in"

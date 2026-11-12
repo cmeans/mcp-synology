@@ -28,7 +28,6 @@ from mcp_synology.modules.photos.helpers import (
     photo_time,
     prefix,
     quoted_name,
-    quotes_note,
     refs,
     shown_folder,
     taken,
@@ -463,7 +462,7 @@ class TestNames:
                 await Photos(client, "personal", "Op").person(Ref("person_name", name="JO"))
         err = _error(exc)
         assert (err["code"], err["param"]) == ("invalid_parameter", "person_name")
-        assert '1 "Jo"' in str(err["message"]) and '2 "jo"' in str(err["message"])
+        assert "1 Jo" in str(err["message"]) and "2 jo" in str(err["message"])
         assert err["suggestion"] == "Ask the user which one they mean, then pass its person_id."
 
     @respx.mock
@@ -572,7 +571,7 @@ class TestOneRef:
         err = _error(exc)
         assert err["code"] == "invalid_parameter"
         assert err["param"] == "tag"
-        assert '3 "Beach"' in str(err["message"]) and '7 "beach"' in str(err["message"])
+        assert "3 Beach" in str(err["message"]) and "7 beach" in str(err["message"])
 
 
 class TestPlaceNode:
@@ -601,7 +600,7 @@ class TestPlaceNode:
                 await Photos(client, "personal", "Op").place_node(1, param="condition")
         assert _error(exc)["code"] == "invalid_parameter"
         assert "can't be used in a smart album condition" in str(_error(exc)["message"])
-        assert 'place 1 "Nowhere" can' in str(_error(exc)["message"])  # quoted (#700)
+        assert "place 1 Nowhere can" in str(_error(exc)["message"])  # quoted (#700)
 
     def test_missing_note_empty(self) -> None:
         from mcp_synology.modules.photos.helpers import Photos
@@ -634,15 +633,28 @@ def test_id_limit_refusals_name_what_and_separate_thousands() -> None:
 class TestQuotedNamesAndFolders:
     """#700: a name or folder set in a line of text can't read as the line's structure."""
 
-    def test_names_are_json_quoted_and_a_missing_one_is_the_placeholder(self) -> None:
-        assert quoted_name("Trip 2024") == '"Trip 2024"'
+    def test_a_name_is_quoted_only_when_its_line_would_misread(self) -> None:
+        """Maintainer, 2026-11-12, on #709: quotes only when they're needed."""
+        for plain in ("Trip 2024", "beach", "Jo", "x is shared with", "a:b", "2024", "Caf\u00e9"):
+            assert quoted_name(plain) == plain, plain
         assert quoted_name('Trip" (7)') == '"Trip\\" (7)"'
         assert quoted_name("a, b") == '"a, b"'
+        assert quoted_name("a (b") == '"a (b"'
+        assert quoted_name("a: b") == '"a: b"'
+        assert quoted_name("a \u00b7 b") == '"a \u00b7 b"'
+        assert quoted_name("a \u2192 b") == '"a \u2192 b"'
+        assert quoted_name("Trip:") == '"Trip:"'
+        assert quoted_name(" pad") == '" pad"'
+        assert quoted_name("pad ") == '"pad "'
+        assert quoted_name("(unnamed)") == '"(unnamed)"'  # can't pass for the placeholder
+        assert quoted_name("'a'") == "\"'a'\""
+        assert quoted_name("a\\b") == '"a\\\\b"'
         assert quoted_name("Ann\u200b") == '"Ann\\u200b"'
+        assert quoted_name("x matching y") == "x matching y"
+        assert quoted_name("x matching y", "(unnamed)", " matching ") == '"x matching y"'
         assert quoted_name("") == "(unnamed)"
         assert quoted_name(None, "(no subject)") == "(no subject)"
-        assert quoted_name(0) == '"0"'  # not text, but a name, not missing (QA r1)
-        assert quoted_name(False) == '"False"'
+        assert quoted_name(0) == "0"  # not text, but a name, not missing (QA r1)
 
     def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
         assert shown_folder("/Trips/2024") == "/Trips/2024"
@@ -672,11 +684,6 @@ class TestNamesPassedBackInQuotes:
         assert with_quotes_hint(None, '"a"') == QUOTES_HINT
         assert with_quotes_hint("Try X.", "a") == "Try X."
         assert with_quotes_hint(None, "a") is None
-        assert quotes_note("a", "tag") == []
-        assert quotes_note('"a"', "tag", "fix it") == [
-            'Note: the tag "\\"a\\"" starts and ends with a quote mark, which is now part '
-            "of it. If it came from a reply in quotes, fix it."
-        ]
 
 
 class TestFolderPassedBackInQuotes:
@@ -705,22 +712,3 @@ class TestFolderPassedBackInQuotes:
             with pytest.raises(ToolError) as exc:
                 await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
         assert self.HINT not in str(_error(exc)["suggestion"]), _error(exc)
-
-
-def test_quotes_note_compares_both_sides_in_nfc() -> None:
-    """QA r3 on #709: either side may be NFD; case still counts."""
-    nfc, nfd = '"Caf\u00e9"', '"Cafe\u0301"'
-    assert quotes_note(nfc, "album name", before=nfd) == []
-    assert quotes_note(nfd, "album name", before=nfc) == []
-    assert quotes_note(nfd, "album name", before=[None, "x", nfc]) == []
-    assert quotes_note('"CAF\u00c9"', "album name", before=nfc) != []
-
-
-def test_quotes_note_takes_any_iterable_of_earlier_names() -> None:
-    """QA r4 on #709: a generator or dict view of names counts as several, a str as one."""
-    name = '"Jo"'
-    assert quotes_note(name, "x", before=(n for n in ["a", name])) == []
-    assert quotes_note(name, "x", before={1: "a", 2: name}.values()) == []
-    assert quotes_note(name, "x", before=name) == []
-    assert quotes_note(name, "x", before="a") != []
-    assert quotes_note(name, "x", before=None) != []

@@ -199,9 +199,9 @@ Plain text through the shared formatters. `time` (taken time) is Unix seconds, b
 
 **Text from the NAS (#604):** every reply is escaped where the client reads it, so a control character other than a tab, a line or paragraph separator, a bidi control or a tag character in an album, person, tag or folder name, a description or a file name shows as an escape (`\n`), never as a line of its own. An argument holding one is refused (`server.py`), `description` excepted, which is escaped wherever a reply shows it. A folder with such a name can't be given by path until it's renamed in Photos, but its ID still works (`list_photo_collections type=folder` lists IDs), so `photo_folder` can rename it. `merge_people` with no `name` refuses when the kept person's name came escaped, since sending it back would rename the person (a real backslash that looks like an escape is refused too, cautiously); and `download_photos` names a file it can't name as DSM does `item-<id>` with its extension. Albums, people and tags are found by name among the escaped names, so one can be used by its name as shown; another with a real backslash spelled the same way makes the name ambiguous, which is refused as any duplicate is. Inside a reply's quotes (below) the escape is itself quoted, so its backslash is doubled, as a real backslash's is: a person `Ann<LF>X` shows as `"Ann\\nX"` in a line of text (and as `Ann\nX` in a table's own column), and passing what's inside the quotes, decoded (`Ann\nX`), finds it. A folder is quoted as `shown()` quotes a path, with Python's escapes (`'/a\\nb (c)'`, `\t`, `\xNN`, `\UXXXXXXXX`), in `"…"` when it holds a `'` (`"/it's\xa0b (c)"`), while a name uses JSON's (`\"`, `\uXXXX`, a character outside the BMP as a surrogate pair). A folder named that way still can't be given by path (above): passing it decoded gets `no folder`, and its ID works. The server instructions' SYNOLOGY PHOTOS section says which escapes each quoting uses, that the doubled backslash of an album's, person's or tag's name decodes to the escape to pass, and that such a folder is passed by its ID (QA r1 and r2 on #709).
 
-**Names and folders in a line of text (#695, #700):** an album's, person's, tag's, place's or photo request's name set in a line of other text is JSON-quoted by `photos/helpers.py` `quoted_name` (File Station's `json_quoted`: a `"` inside written `\"`, a character that draws nothing written `\uXXXX`), so a `"`, `, ` or ` (` inside it can't read as the line's structure: `Album 9: "Trip 2024" · normal · …`, `Tags: "beach", "2024"`, a candidate list `1 "Jo", 2 "jo"`. A missing name is the server's placeholder, unquoted (`(unnamed)`, `(no subject)`), so it can't pass for a name. A folder path is written by `shown_folder`: as File Station's `shown()` writes a path, and plain-quoted when it holds ` (` or `: ` or ends in `:`, which with what the lines that name a folder put after it would make one (`Copied 3 item(s) to '/Trips (Shared Space)' (personal space): …`), or holds another marker its line puts after it: the folder list's heading, `Folders in /Trips matching "x"`, also quotes a folder holding ` matching `. A missing folder (a DSM reply with no name) is the placeholder `(unnamed)`, unquoted. A name in a table's own column isn't quoted (`list_photo_collections`' rows), but a cell that adds a marker after a folder writes the folder by `shown_folder` (`photo_request`'s list: `'/Up (shared)'` for a personal request on that folder, `/Up (shared)` for a Shared Space one on `/Up`). A refusal quotes the caller's own text with `!r`. A folder not found names the path DSM was asked for (`check_folder_path`'s result: `'/Up'` for `Up` or `  /Up/`), while the error's `value` keeps the caller's text (QA r3 and r4 on #709).
+**Names and folders in a line of text (#695, #700):** an album's, person's, tag's, place's or photo request's name set in a line of other text is written by `photos/helpers.py` `quoted_name`: as it is, and JSON-quoted (File Station's `json_quoted`: a `"` inside written `\"`, a character that draws nothing written `\uXXXX`) only when it's needed (maintainer, 2026-11-12), so a `"`, `, ` or ` (` inside it can't read as the line's structure. Needed when the name holds what the lines put around a name (`, `, `; `, ` (`, `: `, ` · `, ` → `, and ` matching ` in the folder list's heading), a character JSON escapes, whitespace at an end, starts with a quote or `(` (it would read as quoted, or as the server's placeholder) or ends with `:` or a quote: `Album 9: Trip 2024 · normal · …`, `Tags: beach, 2024`, but `People: "Jo, Ann", Sam` and `Album 7: "Trip\" (7)" · …`; a candidate list `1 Jo, 2 jo`. A name made of words is shown as it is: wording isn't a boundary. The quotes appear only in replies to the model; DSM never sees them. A missing name is the server's placeholder, unquoted (`(unnamed)`, `(no subject)`), so it can't pass for a name. A folder path is written by `shown_folder`: as File Station's `shown()` writes a path, and plain-quoted when it holds ` (` or `: ` or ends in `:`, which with what the lines that name a folder put after it would make one (`Copied 3 item(s) to '/Trips (Shared Space)' (personal space): …`), or holds another marker its line puts after it: the folder list's heading, `Folders in /Trips matching "x"`, also quotes a folder holding ` matching `. A missing folder (a DSM reply with no name) is the placeholder `(unnamed)`, unquoted. A name in a table's own column isn't quoted (`list_photo_collections`' rows), but a cell that adds a marker after a folder writes the folder by `shown_folder` (`photo_request`'s list: `'/Up (shared)'` for a personal request on that folder, `/Up (shared)` for a Shared Space one on `/Up`). A refusal quotes the caller's own text with `!r`. A folder not found names the path DSM was asked for (`check_folder_path`'s result: `'/Up'` for `Up` or `  /Up/`), while the error's `value` keeps the caller's text (QA r3 and r4 on #709).
 
-Since replies quote names, a model may pass one back with the quotes (QA r1 on #709). As File Station's hint for a quoted path (#692), Photos only advises: a name that really has quotes still works. A lookup by name that finds nothing (an album, `delete_photo_albums`' names, a person, a share's members, `list_photos`' tag, a smart album condition's tag, `tag_photos` remove) adds `If the name came from a reply in quotes, pass it without them.` when the name starts and ends with `"` around something (`""` is no reply's quoting: an empty name is `(unnamed)`), tested on the text the lookup uses (stripped for `delete_photo_albums`), and a folder path not found (`photo_request`'s too, tested on the caller's own text before a `/` is added) adds File Station's `If the path came from a reply in quotes, pass it without them.` when it starts and ends with `'` or `"` around something (`''` and `""` get none); a call that sets such a name (`photo_album` create, create_smart, rename and copy, a tag `tag_photos` add adds, new or not (an existing tag in quotes is most likely the same mistake made earlier, as for an album created: QA r5 and pre-QA r8 on #709), `edit_person` rename, `merge_people` `name`, a `photo_request` subject) adds a note that the quotes are now part of it and how to undo it, unless the name is one it had before the call (a rename, copy, merge (any of the people's names) or subject update keeping a name that really has quotes: QA r2 and r3 on #709) compared in NFC with case kept, since a client may normalize a name it sends back. The server instructions' SYNOLOGY PHOTOS section says what the quotes mean.
+A model may pass a quoted name back with the quotes (QA r1 on #709); with names quoted only when needed, that's rare. As File Station's hint for a quoted path (#692), Photos only advises: a name that really has quotes still works. A lookup by name that finds nothing (an album, `delete_photo_albums`' names, a person, a share's members, `list_photos`' tag, a smart album condition's tag, `tag_photos` remove) adds `If the name came from a reply in quotes, pass it without them.` when the name starts and ends with `"` around something (`""` is no reply's quoting: an empty name is `(unnamed)`), tested on the text the lookup uses (stripped for `delete_photo_albums`), and a folder path not found (`photo_request`'s too, tested on the caller's own text before a `/` is added) adds File Station's `If the path came from a reply in quotes, pass it without them.` when it starts and ends with `'` or `"` around something (`''` and `""` get none). The server instructions' SYNOLOGY PHOTOS section says what the quotes mean.
 
 ### Errors
 
@@ -284,7 +284,7 @@ Photos in /Trips/2024 (personal space; newest first)
 2 item(s) total; showing 1–2.
 ```
 
-The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. It joins a folder, a person and a tag with `, `, ends a person or an album with ` (id)` and itself with ` (space; order)`, so each name in it (album, person, tag, concept, and the search keyword) is JSON-quoted by File Station's `json_quoted` (`person "Ann" (12)`, `tag "x\", y"`; a character that draws nothing written `\uXXXX` where `shown()` would escape it, a joiner or selector Unicode uses kept as written; an unnamed person `person (unnamed) (12)`, the placeholder unquoted), and the folder path is plain unless it holds `, `, ` (`, `: `, padding or an invisible character, ends in `:`, or starts or ends with a quote, which `shown_folder` quotes as File Station quotes a path (#695, #700). A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed shows `— (indexing)` instead of a taken time (#415: until indexing, `time` is the file's modification time as a real instant, which reads as UTC, and then becomes the local taken time; on a US Central NAS the two were 5 h apart, unlabeled), and `get_photo` shows `Taken: — (not known yet: still indexing)`.
+The heading names the source (folder path, album, person, tag, place, concept or `search <keyword>`) and the filters. It joins a folder, a person and a tag with `, `, ends a person or an album with ` (id)` and itself with ` (space; order)`, so each name in it (album, person, tag, concept, and the search keyword) is written by `quoted_name` (above): as it is, JSON-quoted only when it holds that structure (`person Ann (12)`, but `person "Ann (13)" (12)` and `tag "x\", y"`; a character that draws nothing written `\uXXXX` where `shown()` would escape it, a joiner or selector Unicode uses kept as written; an unnamed person `person (unnamed) (12)`, the placeholder unquoted), and the folder path is plain unless it holds `, `, ` (`, `: `, padding or an invisible character, ends in `:`, or starts or ends with a quote, which `shown_folder` quotes as File Station quotes a path (#695, #700). A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed shows `— (indexing)` instead of a taken time (#415: until indexing, `time` is the file's modification time as a real instant, which reads as UTC, and then becomes the local taken time; on a US Central NAS the two were 5 h apart, unlabeled), and `get_photo` shows `Taken: — (not known yet: still indexing)`.
 
 **Design notes:**
 - **Which call.** Verified on both versions (#258 implementation):
@@ -366,7 +366,7 @@ Item 41: beach-sunset.jpg
   Size:         50.1 KiB · 1600×1200 · photo
   Rating:       4 · favorite: yes (1.9.1+)
   Description:  spec capture
-  Tags:         "beach", "2024"
+  Tags:         beach, 2024
   People:       "Person 1", (unnamed)
   Location:     41.8781, -87.6298 · Chicago, Cook County, Illinois, United States
   Camera:       MCPTest SeedCam 1 · lens — · aperture — · exposure — · ISO —
@@ -476,7 +476,7 @@ Uploaded 2 of 4 file(s) (1 skipped, already there) to /Trips/2024 (personal spac
   beach-sunset.jpg  renamed  id 47 (as beach-sunset_1.jpg)
   forest-trail.jpg  skipped  id 12 (already there)
   notes.txt         failed   Synology Photos doesn't support this file type (620)
-Added 3 item(s) to album "Trip 2024".
+Added 3 item(s) to album Trip 2024.
 Photos indexes new items over the next seconds to minutes; taken dates and previews appear then.
 ```
 
@@ -528,8 +528,8 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 **Response shape:** one line per action, then the album as it now is.
 
 ```
-Created album "Trip 2024" (id 9) with 2 item(s).
-Album 9: "Trip 2024" · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared
+Created album Trip 2024 (id 9) with 2 item(s).
+Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared
 ```
 
 `create_smart` / `set_condition` add `Matches N item(s) now.` from `peek_item_count`. `add`/`remove` list IDs DSM rejected in `error_list`, and IDs that don't exist (checked first).
@@ -572,10 +572,10 @@ Album 9: "Trip 2024" · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not 
 **Response shape:**
 
 ```
-Album 9 "Trip 2024" is shared.
+Album 9 Trip 2024 is shared.
   Link:      https://nas.example:5001/mo/sharing/6kJOJFJVq
   Public:    view · password: yes · expires 2030-03-17 23:59:59 UTC
-  Members:   "alex" (download), "family" (view)
+  Members:   alex (download), family (view)
 ```
 
 `stop` says `Album 9 is no longer shared; the link stops working (DSM keeps it, so sharing again may restore it).` On an HTTP connection, a line says the password crossed the network unencrypted.
@@ -750,7 +750,7 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 **Response shape:**
 
 ```
-Added tags "beach", "2024" to 3 item(s) (personal space).
+Added tags beach, 2024 to 3 item(s) (personal space).
   Rejected by DSM: 41 (error_list; e.g. still being indexed)
   Not found, or no permission for its Shared Space folder: 999999
 Photos rewrites tagged files, so their dates and sizes change.
@@ -824,7 +824,7 @@ Photos rewrites edited files, so their dates and sizes change.
 
 **Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover.
 
-**Response shape:** the person after the change: `Person 12: "Jo" (70 items, visible, cover: item 26).`
+**Response shape:** the person after the change: `Person 12: Jo (70 items, visible, cover: item 26).`
 
 **Design notes:**
 - rename, hide/unhide and `set_cover` verified on the real NAS, and reverted.
@@ -863,7 +863,7 @@ Photos rewrites edited files, so their dates and sizes change.
 **Response shape:** `create` and `update`:
 
 ```
-Photo request "mcp spec" → /Trips/2024 (personal space)
+Photo request mcp spec → /Trips/2024 (personal space)
   Link:      https://nas.example:5001/mo/request/IQwpTmKug
   Limit:     10 MiB per file · expires never
 ```
@@ -899,7 +899,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Annotations:** `destructiveHint=true` (irreversible).
 
-**Response shape:** `Merged 2 people into person 12 "Jo" (now 84 items).`, then any IDs or names not found (checked first, nothing merged if any is missing).
+**Response shape:** `Merged 2 people into person 12 Jo (now 84 items).`, then any IDs or names not found (checked first, nothing merged if any is missing).
 
 **Design notes:** a missing `merged_id` is silently ignored by DSM (verified), so all IDs are checked first. Not run with real IDs during capture (irreversible); the request shape is the web client's, and the reply shape (the target person) is from the missing-ID call.
 
@@ -981,7 +981,7 @@ Photo request "mcp spec" → /Trips/2024 (personal space)
 
 **Annotations:** `destructiveHint=true`.
 
-**Response shape:** `Deleted 2 album(s): 9 "Trip 2024", 12 "Best of"; their photos stay where they are.` Albums that didn't exist (checked first) are listed.
+**Response shape:** `Deleted 2 album(s): 9 Trip 2024, 12 Best of; their photos stay where they are.` Albums that didn't exist (checked first) are listed.
 
 **Design notes:** destructive because an album's selection and share link can't be recovered, though no files are deleted.
 

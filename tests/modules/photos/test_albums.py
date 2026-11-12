@@ -53,10 +53,10 @@ class TestCreate:
         async with client:
             out = await photo_album(client, action="create", name="mcp-spec-album", ids=[12, 99])
         assert fake.one(NORMAL, "create").params == {"name": "mcp-spec-album", "item": [12]}
-        assert 'Created album "mcp-spec-album" (id 4) with 1 item(s).' in out
+        assert "Created album mcp-spec-album (id 4) with 1 item(s)." in out
         assert "Not found: 99" in out
         assert "another album already has this name" in out
-        assert 'Album 4: "mcp-spec-album" · normal · 2 item(s)' in out
+        assert "Album 4: mcp-spec-album · normal · 2 item(s)" in out
 
     @respx.mock
     async def test_create_smart_builds_condition(self) -> None:
@@ -98,7 +98,7 @@ class TestCreate:
         }
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
         assert "Matches 1,234 item(s) now." in out
-        assert 'Created smart album "mcp-spec-smart" (id ' in out  # quoted (#700)
+        assert "Created smart album mcp-spec-smart (id " in out  # quoted (#700)
 
     @respx.mock
     async def test_place_condition_uses_the_filter_tree_node(self) -> None:
@@ -159,7 +159,7 @@ class TestChange:
         async with client:
             out = await photo_album(client, action="rename", album_id=4, name="Trip")
         assert fake.one(ALBUM, "set_name").params == {"id": 4, "name": "Trip"}
-        assert 'Renamed album 4 to "Trip".' in out
+        assert "Renamed album 4 to Trip." in out
 
     @respx.mock
     async def test_add_skips_missing_ids(self) -> None:
@@ -341,7 +341,7 @@ class TestChange:
         async with client:
             out = await photo_album(client, action="copy", album_id=4, name="copy")
         assert fake.one(NORMAL, "copy").params == {"name": "copy", "source_album_id": 4}
-        assert 'Copied album 4 to "copy" (id 6)' in out  # quoted (#700)
+        assert "Copied album 4 to copy (id 6)" in out  # quoted (#700)
 
     @respx.mock
     async def test_smart_album_items_refused(self) -> None:
@@ -449,8 +449,8 @@ class TestShareLink:
             {"action": "delete", "member": {"type": "public"}}
         ]
         assert "(expired)" in out
-        assert '"eve" (download)' in out and "group 101 (view)" in out
-        assert out.startswith('Album 4 "mcp-spec-album-renamed" is shared.'), out  # #700
+        assert "eve (download)" in out and "group 101 (view)" in out
+        assert out.startswith("Album 4 mcp-spec-album-renamed is shared."), out
 
     @respx.mock
     async def test_update_needs_a_shared_album(self) -> None:
@@ -727,7 +727,7 @@ class TestDeleteAlbums:
         async with client:
             out = await delete_photo_albums(client, album_ids=[4], album_names=["nope"])
         assert fake.one(ALBUM, "delete").params == {"id": [4]}
-        assert 'Deleted 1 album(s): 4 "mcp-spec-album"; their photos stay' in out
+        assert "Deleted 1 album(s): 4 mcp-spec-album; their photos stay" in out
         assert "Not found: named 'nope'" in out
 
     @respx.mock
@@ -911,43 +911,6 @@ class TestNamesPassedBackInQuotes:
     (noted), and an album or condition tag looked up that way and not found gets a hint."""
 
     HINT = "If the name came from a reply in quotes, pass it without them."
-    NOTE = (
-        'Note: the album name "\\"Trip\\"" starts and ends with a quote mark, which is now '
-        "part of it. If it came from a reply in quotes, rename it without the quote marks."
-    )
-
-    @respx.mock
-    async def test_create_rename_and_copy_note_a_name_in_quotes(self) -> None:
-        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
-        fake.on(NORMAL, "create", 1, captured("album-create"))
-        fake.on(ALBUM, "get", 1, _album())
-        fake.on(ALBUM, "set_name", 1, {})
-        fake.on(NORMAL, "copy", 1, captured("album-copy"))
-        install(fake)
-        client = make_client()
-        async with client:
-            made = await photo_album(client, action="create", name='"Trip"')
-            renamed = await photo_album(client, action="rename", album_id=4, name='"Trip"')
-            copied = await photo_album(client, action="copy", album_id=4, name='"Trip"')
-            plain = await photo_album(client, action="rename", album_id=4, name="Trip")
-        for out in (made, renamed, copied):
-            assert self.NOTE in out.splitlines(), out
-        assert "Note:" not in plain, plain
-
-    @respx.mock
-    async def test_create_smart_notes_a_name_in_quotes(self) -> None:
-        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
-        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
-        fake.on(COND, "peek_item_count", 2, {"count": 1})
-        fake.on(COND, "create", 2, captured("condalbum-create"))
-        fake.on(ALBUM, "get", 1, _album(id=7, type="condition", name='"Trip"'))
-        install(fake)
-        client = make_client()
-        async with client:
-            out = await photo_album(
-                client, action="create_smart", name='"Trip"', condition={"type": "video"}
-            )
-        assert self.NOTE in out.splitlines(), out
 
     @respx.mock
     async def test_an_unknown_condition_tag_in_quotes_hints(self) -> None:
@@ -994,69 +957,10 @@ class TestNamesPassedBackInQuotes:
         assert "suggestion" not in _error(bare), _error(bare)
 
     @respx.mock
-    async def test_qa_r2_padding_unchanged_name_and_bare_quotes(self) -> None:
-        """QA r2 on #709: a padded quoted name gets the hint as the stripped lookup does; an
-        album renamed to the quoted name it already has gets no note; `""` is no reply's
-        quoting (an empty name is `(unnamed)`)."""
-        fake = FakePhotos().on(ALBUM, "list", 2, captured("album-list"))
-        fake.on(ALBUM, "get", 1, _album(name='"Trip"')).on(ALBUM, "set_name", 1, {})
-        install(fake)
+    async def test_a_padded_quoted_name_gets_the_hint(self) -> None:
+        """QA r2 on #709: a padded quoted name gets the hint as the stripped lookup does."""
+        install(FakePhotos().on(ALBUM, "list", 2, captured("album-list")))
         client = make_client()
         async with client:
             padded = await delete_photo_albums(client, album_names=[' "mcp-spec-album" '])
-            same = await photo_album(client, action="rename", album_id=4, name='"Trip"')
-            bare = await photo_album(client, action="rename", album_id=4, name='""')
         assert padded.splitlines()[-1].endswith(f"({self.HINT})"), padded
-        assert "Note:" not in same, same
-        assert "Note:" not in bare, bare
-
-    @respx.mock
-    async def test_qa_r3_copy_and_nfc_keep_a_name_that_had_its_quotes(self) -> None:
-        """QA r3 on #709: copying an album really named `"Trip"` under that name, or a rename
-        to the same name sent back in NFC when it's stored NFD, gets no note."""
-        nfd = '"Cafe\u0301"'
-        fake = FakePhotos().on(ALBUM, "get", 1, _album(name='"Trip"'), _album(name=nfd))
-        fake.on(NORMAL, "copy", 1, captured("album-copy")).on(ALBUM, "set_name", 1, {})
-        install(fake)
-        client = make_client()
-        async with client:
-            copied = await photo_album(client, action="copy", album_id=4, name='"Trip"')
-            renamed = await photo_album(client, action="rename", album_id=4, name='"Café"')
-        assert "Note:" not in copied, copied
-        assert "Note:" not in renamed, renamed
-
-    @respx.mock
-    async def test_create_with_a_quoted_name_another_album_has_still_gets_the_note(self) -> None:
-        """QA r5 on #709: an album already named `"Trip"` is most likely the same mistake made
-        earlier, so creating another keeps the quotes note beside the duplicate note."""
-        existing = captured("album-list")
-        existing["list"][0]["name"] = '"Trip"'
-        fake = FakePhotos().on(ALBUM, "list", 2, existing)
-        fake.on(NORMAL, "create", 1, captured("album-create")).on(ALBUM, "get", 1, _album())
-        install(fake)
-        client = make_client()
-        async with client:
-            out = await photo_album(client, action="create", name='"Trip"')
-        assert self.NOTE in out.splitlines(), out
-        assert "another album already has this name" in out, out
-
-    @respx.mock
-    async def test_create_smart_with_a_quoted_name_another_album_has_gets_the_note(
-        self,
-    ) -> None:
-        """QA r6 on #709: create_smart, like create, keeps the note beside a duplicate."""
-        existing = captured("album-list")
-        existing["list"][0]["name"] = '"Trip"'
-        fake = FakePhotos().on(ALBUM, "list", 2, existing)
-        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
-        fake.on(COND, "peek_item_count", 2, {"count": 1})
-        fake.on(COND, "create", 2, captured("condalbum-create"))
-        fake.on(ALBUM, "get", 1, _album(id=7, type="condition", name='"Trip"'))
-        install(fake)
-        client = make_client()
-        async with client:
-            out = await photo_album(
-                client, action="create_smart", name='"Trip"', condition={"type": "video"}
-            )
-        assert self.NOTE in out.splitlines(), out
-        assert "another album already has this name" in out, out

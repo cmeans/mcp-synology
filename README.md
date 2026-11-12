@@ -330,7 +330,7 @@ modules:
 
 - **Edits change the original files.** Photos writes ratings, descriptions, tags, taken-time changes and rotations into the files themselves, so their dates and sizes change; backup and sync tools see new versions.
 - **Tags are given by name.** A tag exists only while some item has it, so removing it from every item deletes it.
-- **Names and folders in a line of text are quoted.** A reply shows an album's, person's, tag's or request's name in `"…"`, and a folder in `'…'` (or `"…"` when it holds a `'`) when it holds what its line puts after it (` (`, `: `, a trailing `:`, or ` matching ` in the folder list's heading), so a quote, comma or parenthesis inside one can't read as the line's structure. A name passed back with the quotes gets a hint where it isn't found and a note where it's set (unless it's a name it had before the call; for a merge, any of the people's names); a name that really has quotes still works.
+- **Names and folders are quoted only when needed.** A reply shows a name or folder as it is, and in quotes only when it holds what its line uses as structure (a comma, a quote, ` (`, `: `), so `People: "Jo, Ann", Sam` can't read as three people. A name passed back with the quotes gets a hint where it isn't found; a name that really has quotes still works.
 - **Albums, people and folders are given by ID or by name or path, in separate parameters** (`album_id` or `album_name`, `folder_id` or `folder_path`, and so on), so a name or path made of digits is never taken for an ID, nor an ID for a name.
 - **Deletes** go to the recycle bin of the share that holds the space, when it has one; Photos has no trash of its own. A large copy, move or delete hands off with a `photos:<id>` handle that `photo_task` follows up on.
 
