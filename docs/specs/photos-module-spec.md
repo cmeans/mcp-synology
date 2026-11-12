@@ -280,7 +280,7 @@ Photos in /Trips/2024 (personal space; newest first)
 2 item(s) total; showing 1–2.
 ```
 
-The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed shows `— (indexing)` instead of a taken time (#415: until indexing, `time` is the file's modification time as a real instant, which reads as UTC, and then becomes the local taken time; on a US Central NAS the two were 5 h apart, unlabeled), and `get_photo` shows `Taken: — (not known yet: still indexing)`.
+The heading names the source (folder path, album, person, tag, place, concept or `search "<keyword>"`) and the filters. It joins a folder, a person and a tag with `, `, so the folder path and the person's name are written as File Station's `shown()` writes a path (quoted when it holds `, `, padding, an invisible character or an edge quote), and the tag JSON-quoted (`tag "x\", y"`), so none can read as another (#695). A full page ends with `Pass offset=N for the next page.`; an offset past the end shows `No items to display.` and the total. A row still being indexed shows `— (indexing)` instead of a taken time (#415: until indexing, `time` is the file's modification time as a real instant, which reads as UTC, and then becomes the local taken time; on a US Central NAS the two were 5 h apart, unlabeled), and `get_photo` shows `Taken: — (not known yet: still indexing)`.
 
 **Design notes:**
 - **Which call.** Verified on both versions (#258 implementation):
