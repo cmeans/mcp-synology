@@ -91,6 +91,8 @@ def shown_folder(path: object, *also: str) -> str:
 # Replies show names in "…" (`quoted_name`), so a model may pass one back with them. Advice
 # only, as File Station's for a quoted path (#692): a name that really has quotes still works.
 QUOTES_HINT = "If the name came from a reply in quotes, pass it without them."
+# A folder `shown_folder` quoted, passed back with its quotes (File Station's wording, #692).
+PATH_QUOTES_HINT = "If the path came from a reply in quotes, pass it without them."
 
 
 def in_reply_quotes(name: object) -> bool:
@@ -444,12 +446,16 @@ class Photos:
         except SynologyError as e:
             if e.code == 642:
                 what = ref.id if ref.id is not None else repr(ref.name)
+                advice = missing_advice or "list_photo_collections type=folder lists them."
+                given = (ref.name or "").strip()
+                if ref.id is None and len(given) >= 2 and given[0] == given[-1] in "'\"":
+                    advice = f"{advice} {PATH_QUOTES_HINT}"
                 not_found(
                     self.operation,
                     f"no folder {what} in the {space_label(self.space)}.",
                     param=ref.param,
                     value=ref.given,
-                    suggestion=missing_advice or "list_photo_collections type=folder lists them.",
+                    suggestion=advice,
                 )
             raise
         folder: dict[str, Any] = data["folder"]

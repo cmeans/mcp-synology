@@ -967,3 +967,28 @@ class TestNamesPassedBackInQuotes:
                 )
         assert _error(exc)["suggestion"] == self.HINT, _error(exc)
         assert _error(plain).get("suggestion") != self.HINT
+
+    @respx.mock
+    async def test_delete_and_share_members_by_a_name_in_quotes_hint(self) -> None:
+        """Pre-QA r4 on #709: delete_photo_albums and a share's members look names up too."""
+        fake = FakePhotos().on(ALBUM, "list", 2, captured("album-list")).on(ALBUM, "delete", 1, {})
+        fake.on("SYNO.Foto.Sharing.Misc", "list_user_group", 1, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, album_names=['"mcp-spec-album"'])
+            plain = await delete_photo_albums(client, album_names=["nope"])
+            with pytest.raises(ToolError) as exc:
+                await _permission(
+                    Photos(client, "personal", "Op"), None, [{"name": '"alex"', "role": "view"}]
+                )
+            with pytest.raises(ToolError) as bare:
+                await _permission(
+                    Photos(client, "personal", "Op"), None, [{"name": "alex", "role": "view"}]
+                )
+        assert out.splitlines()[-1] == (f"  Not found: named '\"mcp-spec-album\"' ({self.HINT})"), (
+            out
+        )
+        assert plain.splitlines()[-1] == "  Not found: named 'nope'", plain
+        assert _error(exc)["suggestion"] == self.HINT, _error(exc)
+        assert "suggestion" not in _error(bare), _error(bare)

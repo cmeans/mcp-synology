@@ -1204,3 +1204,29 @@ class TestNamesPassedBackInQuotes:
         assert updated.splitlines()[-1] == tail, updated
         assert made.splitlines()[-1] == tail, made
         assert "Note: the subject" not in plain, plain
+
+    @respx.mock
+    async def test_a_nas_escape_shows_doubled_and_its_decoded_text_finds_it(self) -> None:
+        """Pre-QA r4 on #709: a person whose name holds a newline is shown escaped (#604), and
+        inside quotes that escape's backslash is doubled; passing the decoded text (the escape
+        itself) finds the person, as the SYNOLOGY PHOTOS instructions say."""
+        people = captured("person-list", PEOPLE)
+        people["list"][0]["name"] = "Ann\nX"
+        one = captured("person-get", PEOPLE)
+        one["list"][0]["name"] = "Ann\nX"
+        fake = FakePhotos().on(PERSON, "list", 1, people).on(PERSON, "get", 1, one)
+        fake.on(PERSON, "show", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await edit_person(client, action="hide", person_name="Ann\\nX")
+        assert out.startswith('Person 12: "Ann\\\\nX" ('), out
+
+
+def test_a_request_with_no_folder_shows_the_placeholder() -> None:
+    """Pre-QA r4 on #709: a reply with no folder showed an empty one (`→  (personal space)`)."""
+    from mcp_synology.modules.photos.organize import _request_block
+
+    assert _request_block({}).splitlines()[0] == (
+        "Photo request (no subject) → (unnamed) (personal space)"
+    )

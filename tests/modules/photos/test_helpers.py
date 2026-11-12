@@ -677,3 +677,31 @@ class TestNamesPassedBackInQuotes:
             'Note: the tag "\\"a\\"" starts and ends with a quote mark, which is now part '
             "of it. If it came from a reply in quotes, fix it."
         ]
+
+
+class TestFolderPassedBackInQuotes:
+    """Pre-QA r4 on #709: a folder `shown_folder` quoted, passed back with the quotes."""
+
+    HINT = "If the path came from a reply in quotes, pass it without them."
+
+    @pytest.mark.parametrize("given", ["'/Trips (Shared Space)'", '"/Trips: x"'])
+    @respx.mock
+    async def test_a_quoted_path_not_found_hints(self, given: str) -> None:
+        install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
+        assert _error(exc)["suggestion"] == (
+            f"list_photo_collections type=folder lists them. {self.HINT}"
+        ), _error(exc)
+
+    @pytest.mark.parametrize("given", ["/nope", "/'a'", "'/a"])
+    @respx.mock
+    async def test_a_plain_path_has_no_hint(self, given: str) -> None:
+        install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
+        assert self.HINT not in str(_error(exc)["suggestion"]), _error(exc)

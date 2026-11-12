@@ -647,7 +647,7 @@ async def upload_photos(
     if skipped:
         head += f" ({skipped:,} skipped, already there)"
     # The folder, as every Photos folder in a line of text is written (#699, #700).
-    target_shown = shown_folder(target.get("name", ""))
+    target_shown = shown_folder(target.get("name"))
     lines = [f"{head} to {target_shown} ({space_label(sp)})"]
     lines += [f"  {label:<{width}}  {state:<8} {note}" for label, state, note in rows]
     if target_album is not None and uploaded:

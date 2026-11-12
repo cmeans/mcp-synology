@@ -506,7 +506,7 @@ def _request_block(req: dict[str, Any]) -> str:
     space = "Shared Space" if req.get("library") == "shared_space" else "personal space"
     lines = [
         f"Photo request {quoted_name(req.get('subject'), '(no subject)')} → "
-        f"{shown_folder(req.get('folder_home_path', ''))} ({space})",
+        f"{shown_folder(req.get('folder_home_path'))} ({space})",
         f"  Link:      {req.get('sharing_link', '—')}",
         f"  Limit:     {_limit(int(req.get('filesize_limit') or 0))} · "
         f"{_expiry(int(req.get('expiration') or 0))}",
@@ -572,7 +572,7 @@ async def photo_request(
                     str(e.get("subject", "")),
                     # The cell adds " (shared)" after the folder: one holding " (" is
                     # quoted, so a folder named "/Up (shared)" can't read as Shared Space's.
-                    shown_folder(e.get("folder_home_path", ""))
+                    shown_folder(e.get("folder_home_path"))
                     + (" (shared)" if e.get("library") == "shared_space" else ""),
                     _limit(int(e.get("filesize_limit") or 0)),
                     _expiry(int(e.get("expiration") or 0)).removeprefix("expires "),

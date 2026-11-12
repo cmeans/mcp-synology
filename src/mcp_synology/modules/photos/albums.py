@@ -25,6 +25,7 @@ from mcp_synology.modules.photos.helpers import (
     quoted_name,
     quotes_note,
     refs,
+    with_quotes_hint,
 )
 
 if TYPE_CHECKING:
@@ -599,6 +600,7 @@ async def _permission(
                     f"no {kind} {member['name']!r}.",
                     param="members",
                     value=member["name"],
+                    suggestion=with_quotes_hint(None, member["name"]),
                 )
             ref = {"type": kind, "id": int(match[0]["id"])}
             role = member.get("role", "view")
@@ -661,6 +663,7 @@ async def delete_photo_albums(
         ph = Photos(client, "personal", op)
         found: dict[int, str] = {}
         missing: list[str] = []
+        quoted_missing = False  # a name not found that's in a reply's quotes (QA r1 on #709)
         existing = await ph.walk("Browse.Album", version=2, personal=True)
         by_id = {int(a["id"]): a for a in existing}
         for ref in wanted:
@@ -672,6 +675,7 @@ async def delete_photo_albums(
                 matches = [a for a in existing if str(a.get("name", "")).casefold() == name]
             if not matches:
                 missing.append(f"ID {ref.id}" if ref.id is not None else f"named {ref.name!r}")
+                quoted_missing = quoted_missing or (ref.id is None and in_reply_quotes(ref.name))
             elif len(matches) > 1:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(
@@ -696,7 +700,8 @@ async def delete_photo_albums(
         else:
             lines.append("No albums deleted.")
         if missing:
-            lines.append(f"  Not found: {', '.join(missing)}")
+            hint = f" ({QUOTES_HINT})" if quoted_missing else ""
+            lines.append(f"  Not found: {', '.join(missing)}{hint}")
         return "\n".join(lines)
     except SynologyError as e:
         synology_error_response(op, e)
