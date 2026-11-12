@@ -651,7 +651,8 @@ def shown(path: str) -> str:
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
     ``", "`` and nothing else to show is quoted without escapes, unless it holds a
-    backslash (`plain_quoted`, #685, below).
+    backslash (`plain_quoted`, #685, below); so is one that starts or ends with a quote,
+    which would read as a quoted name (#691).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
