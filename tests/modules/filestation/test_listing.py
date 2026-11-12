@@ -1330,7 +1330,7 @@ class TestRecycleBinSearch:
     async def test_an_unreadable_subfolder_holding_a_comma_is_quoted(
         self, mock_client: DsmClient
     ) -> None:
-        """#685: a list joined by ", " quotes a name holding ", ", so it reads as one."""
+        """#685, #693: a name holding ", " is quoted, and each unlisted folder has its own line."""
         names = ["a, photos", "b"]
         tree = {_BIN: [_entry(f"{_BIN}/{n}", isdir=True) for n in names]}
         errors = {f"{_BIN}/{n}": 407 for n in names}

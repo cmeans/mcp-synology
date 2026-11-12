@@ -471,6 +471,28 @@ class TestDeletes:
             "The folders:\n  /a, b (2 item(s) directly in it)\n  /c (2 item(s) directly in it)"
         ), out
 
+    @respx.mock
+    async def test_one_folder_holding_a_comma_is_quoted(self) -> None:
+        """Pre-QA r1 on #693: one folder stays inline, quoted when it holds ", "."""
+        ids = {"/a, b": 10, "/c": 11}
+
+        def folder(params: dict[str, Any]) -> dict[str, Any]:
+            data = captured("folder-get-by-name")
+            data["folder"].update(id=ids[params["name"]], name=params["name"])
+            return {"success": True, "data": data}
+
+        fake = FakePhotos().on(FOLDER, "get", 2, folder)
+        fake.on(ITEM, "count", 1, {"count": 2})
+        fake.on(FILE, "delete", 1, captured("fav191_bg-delete"))
+        fake.on(INFO, "get_status", 1, captured("fav191_bg-delete-status"))
+        fake.on("SYNO.Foto.Setting.Admin", "get", 1, captured("qa1_setting-admin-get"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_folders(client, folder_paths=["/a, b"])
+        assert out.startswith("Deleted '/a, b' (2 item(s) directly in it)"), out
+        assert "The folders" not in out, out
+
     @pytest.mark.parametrize(
         ("kwargs", "looked_up"),
         [

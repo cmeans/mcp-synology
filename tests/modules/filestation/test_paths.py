@@ -1173,8 +1173,8 @@ QUOTED = repr(PADDED)
 
 
 class TestPathListsQuoteACommaName:
-    """#685: replies join paths with ", ", so a name holding ", " is quoted wherever a path is
-    shown (`shown`), and a list can't read it as two paths."""
+    """#685: a name holding ", " is quoted wherever a path is shown (`shown`), so the table cell
+    that still joins paths with ", ", or a sentence naming one, can't read it as two."""
 
     COMMA = "/s/a, photos/family"
 
@@ -1278,15 +1278,17 @@ class TestOnePathPerLine:
 
         went = {"/s/b (to photos)": "/s/x"}
         assert where_it_went("/s/b (to photos)", went, "/s/d") == "'/s/b (to photos)' (to /s/x)"
-        # Where it went is the call's own: no marker, so nothing to quote.
-        assert where_it_went("/s/b (to photos)", {}, "/s/d") == "/s/b (to photos)"
+        # Beside a source with a marker of its own, it would read as gone to photos too.
+        assert where_it_went("/s/b (to photos)", {}, "/s/d") == "'/s/b (to photos)'"
+        assert where_it_went("/s/b", {}, "/s/d") == "/s/b"
 
     def test_where_to_look(self) -> None:
         from mcp_synology.modules.filestation.tasks import _where_to_look
 
         assert _where_to_look("copying", "/s/d", ["/s/a"]).startswith("List /s/d to see")
-        two = _where_to_look("moving", "/s/d", ["/s/a"])
-        assert two.startswith("List /s/a and /s/d to see"), two
+        # Two paths are a list too: "List X and Y" read "a and photos" as two (pre-QA r1).
+        two = _where_to_look("moving", "/s/d", ["/s/a and photos"])
+        assert two.endswith(":\n  /s/a and photos\n  /s/d"), two
         many = _where_to_look("moving", "/s/d", ["/s/a and b", "/s/c"])
         assert many == (
             "List these to see what's there (a folder there may be only partly moved):\n"
@@ -1365,6 +1367,58 @@ class TestOnePathPerLine:
                         name = "photos/tasks.py" if file.parent.name == "photos" else file.name
                         found.add((name, func.name))
         assert found <= allowed, sorted(found - allowed)
+
+    def test_no_two_paths_share_a_line_unquoted(self) -> None:
+        """Pre-QA r1: the join guard missed f-strings, ``f"List {a} and {b}"``. A separator a
+        name can hold, between two values of one f-string, is allowed only when both are
+        quoted for it (`shown_beside`, `_escaped_repr`, which always quotes) or the line joins
+        no paths (listed here)."""
+        root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
+        files = [*sorted((root / "filestation").glob("*.py")), root / "photos" / "tasks.py"]
+        quoting = {"shown_beside", "_escaped_repr"}
+        allowed = {
+            ("batch.py", "_with_stop"),  # a message and what the stop did
+            ("photos/tasks.py", "_counts"),  # counts
+            ("photos/tasks.py", "_run_delete"),  # what was deleted and the space's bin note
+            ("photos/tasks.py", "photo_task"),  # a handle and its operation
+        }
+
+        def quoted(value: ast.expr) -> bool:
+            return (
+                isinstance(value, ast.FormattedValue)
+                and isinstance(value.value, ast.Call)
+                and isinstance(value.value.func, ast.Name)
+                and value.value.func.id in quoting
+            )
+
+        found = set()
+        for file in files:
+            name = "photos/tasks.py" if file.parent.name == "photos" else file.name
+            for func in ast.walk(ast.parse(file.read_text())):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for node in ast.walk(func):
+                    if not isinstance(node, ast.JoinedStr):
+                        continue
+                    parts = node.values
+                    for i in range(1, len(parts) - 1):
+                        sep = parts[i]
+                        if (
+                            isinstance(sep, ast.Constant)
+                            and sep.value in (", ", " and ", "; ")
+                            and isinstance(parts[i - 1], ast.FormattedValue)
+                            and isinstance(parts[i + 1], ast.FormattedValue)
+                            and not (quoted(parts[i - 1]) and quoted(parts[i + 1]))
+                        ):
+                            found.add((name, func.name))
+        assert found <= allowed, sorted(found - allowed)
+
+    def test_check_clause_quotes_a_name_holding_and(self) -> None:
+        from mcp_synology.modules.filestation.helpers import shown_beside
+
+        assert shown_beside("/s/a and photos", " and ") == "'/s/a and photos'"
+        assert shown_beside("/s/a", " and ") == "/s/a"
+        assert shown_beside(" /s/pad and x", " and ").startswith("'")  # shown's own quoting
 
 
 class TestPaddedPathsAreShownQuoted:

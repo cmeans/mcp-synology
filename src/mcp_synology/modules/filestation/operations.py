@@ -56,6 +56,7 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
     probe_recycle_status,
     shown,
+    shown_beside,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -1345,7 +1346,11 @@ class CopyMoveAdapter:
         # r3 on #687); a move's or restore's may be in either.
         dest = shown(item.dest or self.dest)
         if self.remove_src:
-            return f"check {shown(item.source)} and {dest} with list_files"
+            # A name holding " and " is quoted, so it can't read as two (pre-QA r1 on #693).
+            return (
+                f"check {shown_beside(item.source, ' and ')} and "
+                f"{shown_beside(item.dest or self.dest, ' and ')} with list_files"
+            )
         return f"check {dest} with list_files"
 
     def retry_advice(self) -> str:

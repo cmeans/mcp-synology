@@ -3192,8 +3192,8 @@ ODD = "/s/rep\u200bort"
             "/s/d",
             "status",
             _err(599),
-            f"List {ODD!r} and /s/d to see what's there; a folder there may be only partly "
-            "restored.",
+            "List these to see what's there (a folder there may be only partly restored):\n"
+            f"  {ODD!r}\n  /s/d",
         ),
         (
             "copy",
@@ -3207,7 +3207,8 @@ ODD = "/s/rep\u200bort"
             "/s/d",
             "status",
             _err(599),
-            f"List {ODD!r} and /s/d to see what's there; a folder there may be only partly moved.",
+            "List these to see what's there (a folder there may be only partly moved):\n"
+            f"  {ODD!r}\n  /s/d",
         ),
         ("copy", "/s/d\u200best", "status", _err(599), repr("/s/d\u200best")),
         ("delete", None, "stop", _ok(RUNNING), repr(ODD)),

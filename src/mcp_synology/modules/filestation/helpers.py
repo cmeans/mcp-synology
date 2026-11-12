@@ -667,9 +667,12 @@ def shown(path: str) -> str:
     show the names DSM returns as DSM does, escaped by the client (#604); their titles, which
     name the path the caller asked about, use ``shown`` (#690).
 
-    A path holding ``", "`` is quoted too (#685): replies list paths joined by ``", "``, where
-    a folder named ``a, photos/family`` would read as two paths, ``/s/a`` and the
-    share-relative ``photos/family`` the server accepts."""
+    A path holding ``", "`` is quoted too (#685): a folder named ``a, photos/family`` would
+    read as two paths, ``/s/a`` and the share-relative ``photos/family`` the server accepts,
+    where a path is written inline in a sentence or in `file_task`'s table cell, the one list
+    still joined by ``", "``; every other list of paths is one a line (#693,
+    `formatting.path_list`). A line that puts other text between or after paths (" and ",
+    " (to ") quotes a path holding it with `shown_beside`."""
     for part in path.split("/"):
         if not part:
             continue
@@ -690,6 +693,14 @@ def shown(path: str) -> str:
         # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
         return _plain_quoted(path)
     return path
+
+
+def shown_beside(path: str, marker: str) -> str:
+    """``path`` as `shown` writes it, quoted (`_plain_quoted`) when it holds ``marker``, the text
+    a line puts right after or between paths (`" and "`, `" (to "`), so a name holding it can't
+    read as that line's structure (pre-QA r1 on #693)."""
+    text = shown(path)
+    return _plain_quoted(path) if marker in path and text == path else text
 
 
 def _plain_quoted(path: str) -> str:
