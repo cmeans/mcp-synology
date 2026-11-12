@@ -156,6 +156,17 @@ class TestListPhotosRouting:
         assert 'no item has the tag "nope"' in out  # as the title writes it (pre-QA r2 on #695)
 
     @respx.mock
+    async def test_unknown_tag_in_a_folder_keeps_photos_in(self) -> None:
+        """Pre-QA r5 on #695: the unknown-tag branch's folder flag was unpinned."""
+        fake = _folders(FakePhotos())
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_path="/mcp-spec-capture", tag="nope")
+        assert out.startswith('Photos in /mcp-spec-capture, tag "nope" ('), out
+
+    @respx.mock
     async def test_place_uses_geocoding_id(self) -> None:
         fake = _folders(FakePhotos())
         fake.on(ITEM, "list", 2, captured("item-list-by-tag")).on(ITEM, "count", 1, {"count": 2})
