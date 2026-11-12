@@ -1035,6 +1035,32 @@ class TestDiscover:
         assert "copying /s/b" in note
 
     @respx.mock
+    async def test_a_task_of_several_paths_lists_them_one_a_line(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#693: another client's task can hold several paths; each goes on its own line under
+        the task's, so a name holding ", " or " and " can't read as two."""
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks, file_task
+
+        two = {
+            **LIST_MOVE,
+            "params": {**LIST_MOVE["params"], "path": ["/s/a and b", "/s/c"]},  # type: ignore[dict-item]
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(two), "status": _ok(two)})
+        )
+        records = TaskRecords()
+        found = await discover_running_tasks(mock_client, records)
+        assert found is not None
+        note = found.text()
+        assert note is not None
+        assert "  moving 2 items to /s/d/ (" in note, note
+        assert "handle `move:FileStation_M1`:\n    /s/a and b\n    /s/c\n" in note, note
+        text = await file_task(mock_client, records=records, handle="move:FileStation_M1")
+        assert "moving on the NAS: 2 items to /s/d/" in text, text
+        assert text.endswith("Its items:\n  /s/a and b\n  /s/c"), text
+
+    @respx.mock
     async def test_discover_nothing_running_returns_none(self, mock_client: DsmClient) -> None:
         from mcp_synology.modules.filestation.tasks import discover_running_tasks
 

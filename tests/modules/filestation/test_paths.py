@@ -1248,6 +1248,125 @@ class TestPathListsQuoteACommaName:
         assert where_it_went("/s/b", {"/s/b": self.COMMA}, "/s/d") == f"/s/b (to {self.COMMA!r})"
 
 
+class TestOnePathPerLine:
+    """#693 (the maintainer's option B): every list of two or more paths in a reply or error is
+    one path a line under its heading, so no separator a name can hold (", ", " and ", "; ")
+    reads as list structure; a name can't hold a line break (#604). One path stays inline."""
+
+    def test_path_list(self) -> None:
+        from mcp_synology.core.formatting import path_list
+
+        assert path_list("Not started", ["/s/a"]) == "Not started: /s/a."
+        assert path_list("Not started", ["/s/a", "/s/b"]) == "Not started:\n  /s/a\n  /s/b"
+        assert path_list("x", ["/a", "/b"], indent="    ") == "x:\n    /a\n    /b"
+
+    def test_what_follows_a_list_starts_its_own_line(self) -> None:
+        from mcp_synology.core.formatting import path_list, sentence, then
+
+        many = path_list("Not started", ["/s/a", "/s/b"])
+        assert then(many, "Run them later.") == many + "\nRun them later."
+        assert then("Failed.", "Run it later.") == "Failed. Run it later."
+        assert then("Failed.", many) == "Failed.\n" + many
+        assert then("", "x") == "x"
+        assert then("x", "") == "x"
+        assert sentence("Failed") == "Failed."
+        assert sentence(many) == many  # no period after an item: it would read as the name's
+
+    def test_a_source_named_like_where_it_went_is_quoted(self) -> None:
+        """#693: ``/s/b (to photos)`` read as a source that went to photos."""
+        from mcp_synology.modules.filestation.tasks import where_it_went
+
+        went = {"/s/b (to photos)": "/s/x"}
+        assert where_it_went("/s/b (to photos)", went, "/s/d") == "'/s/b (to photos)' (to /s/x)"
+        # Where it went is the call's own: no marker, so nothing to quote.
+        assert where_it_went("/s/b (to photos)", {}, "/s/d") == "/s/b (to photos)"
+
+    def test_where_to_look(self) -> None:
+        from mcp_synology.modules.filestation.tasks import _where_to_look
+
+        assert _where_to_look("copying", "/s/d", ["/s/a"]).startswith("List /s/d to see")
+        two = _where_to_look("moving", "/s/d", ["/s/a"])
+        assert two.startswith("List /s/a and /s/d to see"), two
+        many = _where_to_look("moving", "/s/d", ["/s/a and b", "/s/c"])
+        assert many == (
+            "List these to see what's there (a folder there may be only partly moved):\n"
+            "  /s/a and b\n  /s/c\n  /s/d"
+        ), many
+
+    def test_skipped_line(self) -> None:
+        from mcp_synology.modules.filestation.tasks import skipped_line
+
+        line = skipped_line(True, ["/s/a", "/s/b", "/s/c"], ["/s/a", "/s/b"])
+        lines = line.splitlines()
+        assert lines[0].endswith("(not compared):"), line
+        assert lines[1:4] == ["  /s/a", "  /s/b", "  /s/c"], line
+        assert lines[4].startswith("A skipped file is still at the source"), line
+        assert lines[5].startswith("Don't retry these with overwrite=true"), line
+        assert lines[6:8] == ["  /s/a", "  /s/b"], line
+        assert lines[8].startswith("For the others, pass overwrite=true"), line
+
+    def test_handoff_not_started_advice_after_the_list(self) -> None:
+        from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+        text = handoff_reply(
+            verb="Still copying",
+            path="/s/x",
+            handle=Handle("copy", "FileStation_1"),
+            status={},
+            dest="/s/d",
+            done=["/s/a", "/s/b"],
+            not_started=["/s/c", "/s/e"],
+        )
+        assert "\nAlready copied:\n  /s/a\n  /s/b\n" in text, text
+        assert text.endswith(
+            "Not started:\n  /s/c\n  /s/e\nRun them once the task of /s/x finishes."
+        ), text
+
+    def test_a_refusal_lists_each_missing_path(self) -> None:
+        from mcp_synology.core.formatting import error_response, path_list
+        from mcp_synology.modules.filestation.helpers import missing_text
+
+        assert path_list("Get file info failed", [missing_text("/s/a", 408)]) == (
+            "Get file info failed: /s/a: doesn't exist (DSM error 408)."
+        )
+        del error_response  # imported to keep the names the refusals use in one place
+
+    def test_no_path_list_is_joined_inline(self) -> None:
+        """The guard: a ", ", "; " or " and " join in File Station (and Photos' tasks) is one
+        listed here, none of which joins paths. Every list of paths goes through
+        `formatting.path_list`; the one exception is `file_task`'s table cell (`_list_reply`),
+        which can't hold a line per path and joins them with ", ", quoted by `shown`."""
+        root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
+        files = [*sorted((root / "filestation").glob("*.py")), root / "photos" / "tasks.py"]
+        allowed = {
+            ("helpers.py", "validate_additional"),  # field names
+            ("helpers.py", "invisible_problem"),  # code points
+            ("helpers.py", "validate_share_path"),  # share names, in an error of their own
+            ("listing.py", "_recycle_column"),  # task kinds
+            ("operations.py", "_skip_report"),  # counts
+            ("search.py", "search_files"),  # filters
+            ("tasks.py", "_list_reply"),  # the table cell (#693's exception)
+            ("photos/tasks.py", "_what"),  # counts
+        }
+        found = set()
+        for file in files:
+            tree = ast.parse(file.read_text())
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for node in ast.walk(func):
+                    if (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "join"
+                        and isinstance(node.func.value, ast.Constant)
+                        and node.func.value.value in (", ", "; ", " and ")
+                    ):
+                        name = "photos/tasks.py" if file.parent.name == "photos" else file.name
+                        found.add((name, func.name))
+        assert found <= allowed, sorted(found - allowed)
+
+
 class TestPaddedPathsAreShownQuoted:
     """Every error that names a path shows a padded one quoted (`shown`), so the stray
     space is visible; a plain path is shown as is."""
@@ -1956,6 +2075,9 @@ def test_every_pair_is_named_in_one_refusal() -> None:
     message = _error(exc)["message"]
     for pair in ("'/v/a/cover' and '/v/c/cover'", "'/v/a/folder' and '/v/b/folder'"):
         assert pair in message
+    # One pair a line under "Also:" (#693), then the closing sentence on its own line.
+    assert "\nAlso:\n  '/v/a/cover' and '/v/c/cover'\n" in message, message
+    assert message.endswith("\nNothing was changed."), message
 
 
 def test_a_long_list_of_pairs_is_capped() -> None:

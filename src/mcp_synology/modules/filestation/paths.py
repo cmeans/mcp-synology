@@ -31,6 +31,8 @@ from mcp_synology.core.formatting import (
     error_response,
     forges,
     holds_escape,
+    path_list,
+    then,
 )
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
@@ -373,13 +375,17 @@ def refuse_same_names(
     if clashes:
         shown_also = clashes[1:_SAME_NAME_PAIRS_SHOWN]
         more = len(clashes) - 1 - len(shown_also)
-        also = f" Also: {'; '.join(shown_also)}." if shown_also else ""
-        if more:
-            also += f" And {more:,} more."
-        _refuse(
+        # One pair a line when two or more (#693).
+        text = (
             f"{_OP_WORDS.get(tool, tool)} refused: {clashes[0]}, so with overwrite=true one could "
-            f"replace the other (for folders, items of the same name inside them).{also} Nothing "
-            "was changed.",
+            "replace the other (for folders, items of the same name inside them)."
+        )
+        if shown_also:
+            text = then(text, path_list("Also", shown_also))
+        if more:
+            text = then(text, f"And {more:,} more.")
+        _refuse(
+            then(text, "Nothing was changed."),
             param,
             first_clash,
             _same_name_advice(tool, dest_given=dest_given) + _DIFFERENT_FILES,
