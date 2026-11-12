@@ -695,6 +695,27 @@ def shown(path: str) -> str:
     return path
 
 
+def json_quoted(text: str) -> str:
+    """``text`` as a JSON string, for a name set in a line of other text (#695): a ``"`` in it
+    is ``\\"``, so neither a quote nor the line's own separators inside it can read as the
+    line's structure, and each character that draws nothing or a message would hide (a
+    zero-width space, a no-break space, a private-use character) is written ``\\uXXXX``, as
+    `_escaped_repr` writes one, so ``"Ann<ZWSP>"`` can't pass for ``"Ann"``. Still valid
+    JSON for the same text (one outside the BMP as its surrogate pair)."""
+    out = []
+    for c in json.dumps(text, ensure_ascii=False):
+        if c not in '"\\' and (_IGNORABLE.match(c) or c == _BRAILLE_BLANK or _hides(c)):
+            o = ord(c)
+            if o > 0xFFFF:
+                o -= 0x10000
+                out.append(f"\\u{0xD800 + (o >> 10):04x}\\u{0xDC00 + (o & 0x3FF):04x}")
+            else:
+                out.append(f"\\u{o:04x}")
+        else:
+            out.append(c)
+    return "".join(out)
+
+
 def shown_beside(path: str, marker: str) -> str:
     """``path`` as `shown` writes it, quoted (`plain_quoted`) when it holds ``marker``, the text
     a line puts right after or between paths (`" and "`, `" (to "`), so a name holding it can't

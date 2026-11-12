@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -17,7 +16,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
-from mcp_synology.modules.filestation.helpers import shown_beside
+from mcp_synology.modules.filestation.helpers import json_quoted, shown_beside
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
@@ -296,14 +295,17 @@ async def _list(
         # count_with_filter answers 120 without the policy (verified on both versions).
         keys["person"] = [int(p["id"])]
         keys["person_policy"] = "or"
-        described.append(f"person {_named(str(p.get('name') or '(unnamed)'))} ({p['id']})")
+        # The placeholder is the server's text, not a name: unquoted, so it can't pass for a
+        # person named "(unnamed)" (pre-QA r2 on #695).
+        named = _named(str(p["name"])) if p.get("name") else "(unnamed)"
+        described.append(f"person {named} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
         described.append(f"tag {_named(tag)}")
         if tag_id is None:
             heading = _heading(ph, described, filters_text, _order(*sort))
             return (
-                f"{heading}\nNo items: no item has the tag {tag!r} (a tag exists only while "
+                f"{heading}\nNo items: no item has the tag {_named(tag)} (a tag exists only while "
                 "some item has it)."
             )
         keys["general_tag"] = [tag_id]
@@ -342,9 +344,10 @@ async def _list(
 
 
 def _named(name: str) -> str:
-    """A name in the title, JSON-quoted: a ``"`` in it is ``\\"``, so neither a quote nor the
-    title's own separators (``, ``, `` (``) inside it can read as the title's structure (#695)."""
-    return json.dumps(name, ensure_ascii=False)
+    """A name in the title, by `json_quoted` (#695): neither a quote nor the title's own
+    separators (``, ``, `` (``) inside it can read as the title's structure, and a character
+    that draws nothing is written ``\\uXXXX``."""
+    return json_quoted(name)
 
 
 def _heading(ph: Photos, described: list[str], filters: list[str], order: str) -> str:

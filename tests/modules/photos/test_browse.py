@@ -153,7 +153,7 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, tag="nope")
-        assert "no item has the tag 'nope'" in out
+        assert 'no item has the tag "nope"' in out  # as the title writes it (pre-QA r2 on #695)
 
     @respx.mock
     async def test_place_uses_geocoding_id(self) -> None:
@@ -190,6 +190,38 @@ class TestListPhotosRouting:
             out = await list_photos(client, album_id=4)
         assert fake.one(ITEM, "list").params["album_id"] == 4
         assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
+
+    def test_json_quoted_shows_what_draws_nothing(self) -> None:
+        """Pre-QA r2 on #695: json.dumps left a zero-width space raw, so "Ann<ZWSP>" read as
+        "Ann". Escaped, it's still JSON for the same name."""
+        import json
+
+        from mcp_synology.modules.filestation.helpers import json_quoted
+
+        for name, shown_as in [
+            ("Ann", '"Ann"'),
+            ("Ann\u200b", '"Ann\\u200b"'),
+            ("a\u00a0b", '"a\\u00a0b"'),
+            ('x", y', '"x\\", y"'),
+            ("café", '"café"'),
+            ("\U000e0041", '"\\udb40\\udc41"'),  # a tag character, outside the BMP
+        ]:
+            assert json_quoted(name) == shown_as, name
+            assert json.loads(json_quoted(name)) == name
+
+    @respx.mock
+    async def test_an_unnamed_person_isnt_quoted_as_a_name(self) -> None:
+        """Pre-QA r2 on #695: "(unnamed)" is the server's placeholder, not a name to pass back."""
+        person = captured("person-get", PEOPLE)
+        person["list"][0]["name"] = ""
+        fake = FakePhotos().on("SYNO.Foto.Browse.Person", "get", 1, person)
+        fake.on(ITEM, "list_with_filter", 2, {"list": []})
+        fake.on(ITEM, "count_with_filter", 2, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, person_id=12)
+        assert out.startswith("Photos: person (unnamed) (12) ("), out
 
     @respx.mock
     async def test_names_holding_the_titles_other_separators_are_quoted(self) -> None:
