@@ -476,6 +476,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 ```
 
 **Design notes:**
+- Each row's name (and a renamed item's `(as …)` name) is written as File Station's `shown()` writes one, and quoted when it holds `: ` or two spaces, the rows' own separators, so a file named `a.jpg  failed` can't read as another row's state; the folder in the first line is quoted when it holds ` (` (`shown_beside`), as `list_photos`' title does. `download_photos`' rows (`<id>  <name>: <state>`) quote names the same way (#699).
 - `mtime` is the local file's modification time in seconds; Photos uses it as the taken time until EXIF is indexed.
 - Unsupported file types fail with **620**, a missing folder with **621** (verified).
 - **Retry:** an upload that fails with any other code is retried once after 2 s, as the web client does (its retry count is 1; it doesn't retry 604, 605, 620 or 622). vdsm answered **623** to some uploads right after boot, and the retry went through. 621, 117 (below) and the setup and permission codes (105, 160, 602, 801, 803) aren't retried after a delay.

@@ -125,6 +125,21 @@ class TestOriginals:
         assert (tmp_path / "forest-trail.jpg").read_bytes() == b"mine"
 
     @respx.mock
+    async def test_a_name_holding_the_rows_separator_is_quoted(self, tmp_path: Path) -> None:
+        """#699: a name such as "x.jpg: not downloaded: …" wrote a row that read as a
+        failure; quoted, the row's own status is the one after the quotes."""
+        items = _items("ready")
+        items["list"][0]["filename"] = "x.jpg: not downloaded: gone"
+        (tmp_path / "x.jpg: not downloaded: gone").write_bytes(b"mine")
+        install(FakePhotos().on(ITEM, "get", 2, {"list": items["list"][:1]}))
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12], dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+            )
+        assert "12  'x.jpg: not downloaded: gone': not downloaded: another file" in out, out
+
+    @respx.mock
     async def test_existing_file_kept_without_overwrite(self, tmp_path: Path) -> None:
         (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
         install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
@@ -800,6 +815,32 @@ class TestUpload:
             )
         assert "\n  ' pad.jpg'  " in out, out
         assert "\n  \"'a.jpg'\"  " in out, out  # a name in quotes is quoted (pre-QA r4)
+
+    @respx.mock
+    async def test_a_name_holding_the_rows_separators_is_quoted(self, tmp_path: Path) -> None:
+        """#699: a local name holding ": " or the columns' two spaces, and a folder holding
+        " (", were written raw, so a name could read as another row's state."""
+        for name in ("a: failed.jpg", "b  new.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        folder = captured("folder-get-by-name")
+        folder["folder"]["name"] = "/x (shared space)"
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, folder)
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "new", "id": 42}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a: failed.jpg"), str(tmp_path / "b  new.jpg")],
+                allowed_roots=[tmp_path],
+                folder_path="/x (shared space)",
+            )
+        lines = out.splitlines()
+        assert lines[0] == "Uploaded 2 of 2 file(s) to '/x (shared space)' (personal space)", out
+        assert "\n  'a: failed.jpg'  " in out, out
+        assert "\n  'b  new.jpg'  " in out, out
 
     @respx.mock
     async def test_album_and_names_unanswered(

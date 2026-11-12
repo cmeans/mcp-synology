@@ -2090,7 +2090,8 @@ class TestLocalPathsShown:
                         raw = part.conversion != -1
                         if call == "shown_local" and not raw:
                             continue
-                        if call == "shown" and not raw and value.args and a_name(value.args[0]):
+                        named = call in ("shown", "_row_name")  # _row_name calls shown (#699)
+                        if named and not raw and value.args and a_name(value.args[0]):
                             continue
                         # The caller's own file name, refused as given ("Can't save as '..'"),
                         # is quoted with !r as every refusal of an argument is (pre-QA r6).
