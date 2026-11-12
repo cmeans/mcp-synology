@@ -651,7 +651,11 @@ async def upload_photos(
     lines = [f"{head} to {target_shown} ({space_label(sp)})"]
     lines += [f"  {label:<{width}}  {state:<8} {note}" for label, state, note in rows]
     if target_album is not None and uploaded:
-        album_shown = quoted_name(target_album.get("name"))  # #700
+        # The album's ID, then its name: `photo_album` writes `to album 9`, so a name alone
+        # (`to album 2024`) read as an ID (QA r7 on #709).
+        album_shown = (
+            f"{target_album['id']} {quoted_name(target_album.get('name'), beside_id=True)}"
+        )
         try:
             await ph.call(
                 "Browse.NormalAlbum",

@@ -492,6 +492,7 @@ class TestCollections:
         ("name", "heading"),
         [
             ("x", "Folders in '/a matching b' matching x"),
+            ("x matching y", "Folders in '/a matching b' matching \"x matching y\""),  # QA r7
             (None, "Folders in /a matching b"),
         ],
     )

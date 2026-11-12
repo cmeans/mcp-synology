@@ -15,6 +15,7 @@ import datetime
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -29,7 +30,7 @@ from mcp_synology.core.errors import (
     SynologyError,
 )
 from mcp_synology.core.formatting import error_response
-from mcp_synology.modules.filestation.helpers import json_quoted, plain_quoted, shown
+from mcp_synology.modules.filestation.helpers import _edge_quote, json_quoted, plain_quoted, shown
 from mcp_synology.modules.filestation.paths import check_parts
 
 if TYPE_CHECKING:
@@ -73,26 +74,36 @@ def quoted_name(
 ) -> str:
     """An album's, person's, tag's, place's or request's name in a line of a reply: as is,
     or JSON-quoted (`json_quoted`, #695) only when it's needed (maintainer, 2026-11-12, on
-    #709), as `shown_folder` does for a folder. Needed when the name holds what its line
-    puts around a name (`_NAME_MARKS`, or ``also``) or a character JSON escapes (a quote, a
-    backslash, one that draws nothing), has whitespace at an end, starts with a quote or
-    ``(`` (it would read as quoted, or as the server's placeholder), or ends with ``:`` or a
-    quote. ``unnamed`` (the server's placeholder, unquoted) when it has none. A name that
-    isn't text (``0``) is shown as text. A name made of words is shown as it is: wording
-    isn't a boundary (CLAUDE.md). ``beside_id``: the line writes the name right after an ID
-    (``9 Trip``, ``person 12 Jo``), so a name starting with a digit is quoted too, or
-    ``9 12`` would read as two IDs (the #614 confusion; pre-QA r9 on #709)."""
+    #709), as `shown_folder` does for a folder. Needed when the name:
+
+    - holds what its line puts around a name (`_NAME_MARKS`, or ``also``), checked in NFC
+      too, where U+037E and U+0387 become ``;`` and ``·``;
+    - holds a character JSON escapes (a quote, a backslash, one that draws nothing);
+    - has whitespace at an end, starts or ends with any quote mark File Station counts
+      (`_edge_quote`: typographic quotes and a backtick too), starts with ``(`` (it would
+      read as the server's placeholder) or ends with ``:``;
+    - with ``beside_id`` (the line writes it right after an ID: ``9 Trip``, ``person 12
+      Jo``), starts with a digit of any script, or ``9 12`` would read as two IDs (the #614
+      confusion; pre-QA r9 and QA r7 on #709).
+
+    ``unnamed`` (the server's placeholder, unquoted) when it has none. A name that isn't
+    text (``0``) is shown as text. A name made of words is shown as it is: wording isn't a
+    boundary (CLAUDE.md)."""
     text = "" if name is None else str(name)
     if not text:
         return unnamed
     quoted = json_quoted(text)
+    # NFC too: U+037E and U+0387 normalize to ";" and "·", and look the same (QA r7).
+    nfc = unicodedata.normalize("NFC", text)
     needed = (
         quoted != f'"{text}"'
         or text != text.strip()
-        or text.startswith(("'", "("))
-        or text.endswith((":", "'"))
-        or any(m in text for m in (*_NAME_MARKS, *also))
-        or (beside_id and text[:1].isascii() and text[:1].isdigit())
+        or _edge_quote(text)  # any quote mark File Station counts, typographic too (QA r7)
+        or text.startswith("(")
+        or text.endswith(":")
+        or any(m in text or m in nfc for m in (*_NAME_MARKS, *also))
+        # Any digit, not only ASCII: `9 ５ Trip` reads as IDs too (QA r7).
+        or (beside_id and text[:1].isdigit())
     )
     return quoted if needed else text
 
@@ -113,7 +124,7 @@ def shown_folder(path: object, *also: str) -> str:
     return plain_quoted(text) if out == text and marked else out
 
 
-# Replies show names in "…" (`quoted_name`), so a model may pass one back with them. Advice
+# Replies may show a name in "…" (`quoted_name`), so a model may pass one back with them. Advice
 # only, as File Station's for a quoted path (#692): a name that really has quotes still works.
 QUOTES_HINT = "If the name came from a reply in quotes, pass it without them."
 # A folder `shown_folder` quoted, passed back with its quotes (File Station's wording, #692).

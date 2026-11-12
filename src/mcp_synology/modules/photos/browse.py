@@ -572,7 +572,7 @@ async def _collections(
             for r, e in zip(rows, entries, strict=True)
             if wanted in str(e.get("name", "")).casefold()
         ]
-        heading += f" matching {quoted_name(name)}"
+        heading += f" matching {quoted_name(name, '(unnamed)', ' matching ')}"
     total = len(rows)
     shown = rows[offset : offset + limit]
     noun = {"shared_with_me": "album", "person": "person", "place": "place"}.get(kind, kind)

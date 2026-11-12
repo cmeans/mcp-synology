@@ -663,7 +663,13 @@ class TestQuotedNamesAndFolders:
         assert quoted_name("12", beside_id=True) == '"12"'  # `9 12` would read as two IDs
         assert quoted_name("2024 trip", beside_id=True) == '"2024 trip"'
         assert quoted_name("trip 2024", beside_id=True) == "trip 2024"
-        assert quoted_name("\u0661", beside_id=True) == "\u0661"  # ASCII digits only
+        assert quoted_name("\u0661", beside_id=True) == '"\u0661"'  # any script's digit (QA r7)
+        assert quoted_name("\uff15 Trip", beside_id=True) == '"\uff15 Trip"'
+        assert quoted_name("\u201cTrip\u201d") == '"\u201cTrip\u201d"'  # typographic quotes
+        assert quoted_name("\u2018a") == '"\u2018a"' and quoted_name("a\u2019") == '"a\u2019"'
+        assert quoted_name("`Jo`") == '"`Jo`"'
+        assert quoted_name("Jo\u037e Ann") == '"Jo\u037e Ann"'  # NFC makes it "; "
+        assert quoted_name("a \u0387 b") == '"a \u0387 b"'  # NFC makes it " · "
 
     def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
         assert shown_folder("/Trips/2024") == "/Trips/2024"

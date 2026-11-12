@@ -981,7 +981,7 @@ class TestUpload:
                 )
         assert "renamed  id 9" in out and "(as " not in out
         assert (
-            "Couldn't add them to album mcp-spec-album: DSM didn't answer (ReadTimeout). "
+            "Couldn't add them to album 4 mcp-spec-album: DSM didn't answer (ReadTimeout). "
             "Check the album with list_photos before adding again."
         ) in out
         assert "Couldn't read the renamed items' names: ReadTimeout" in caplog.text
@@ -1174,7 +1174,7 @@ class TestUpload:
         assert "skipped  id 9 (already there)" in out
         assert out.startswith("Uploaded 0 of 1 file(s) (1 skipped, already there) to ")
         assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {"id": 4, "item": [9]}
-        assert 'Added 1 item(s) to album "Trip\\" (7)".' in out, out
+        assert 'Added 1 item(s) to album 4 "Trip\\" (7)".' in out, out
         # Nothing was stored, so there's nothing for Photos to index.
         assert "Photos indexes" not in out
 
@@ -1286,7 +1286,7 @@ class TestUpload:
             )
         assert "a.jpg  failed   couldn't read the file (Permission denied)" in out
         assert "renamed  id 9" in out and "(as " not in out
-        assert "Couldn't add them to album mcp-spec-album:" in out
+        assert "Couldn't add them to album 4 mcp-spec-album:" in out
 
     async def test_outside_roots_refused_first(self, tmp_path: Path) -> None:
         inside = tmp_path / "in"
@@ -1935,3 +1935,30 @@ def test_the_extension_kept_must_itself_be_plain() -> None:
     )
     long_name = escape_controls("a\n." + "x" * 31)
     assert _dest_name({"id": 5, "filename": long_name}, "original", set()) == "item-5"
+
+
+@respx.mock
+async def test_upload_album_line_names_the_album_id_then_a_quoted_digit_name(
+    tmp_path: Path,
+) -> None:
+    """QA r7 on #709: `Added 1 item(s) to album 2024.` read as album ID 2024."""
+    (tmp_path / "a.jpg").write_bytes(b"x")
+    album = captured("album-list")
+    album["list"][0]["name"] = "2024"
+    fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-by-name"))
+    fake.on("SYNO.Foto.Browse.Album", "list", 2, album)
+    fake.on("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, {})
+    fake.multipart = lambda _r: httpx.Response(
+        200, json={"success": True, "data": {"action": "new", "id": 42}}
+    )
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await upload_photos(
+            client,
+            local_paths=[str(tmp_path / "a.jpg")],
+            allowed_roots=[tmp_path],
+            folder_path="/",
+            album_name="2024",
+        )
+    assert 'Added 1 item(s) to album 4 "2024".' in out, out
