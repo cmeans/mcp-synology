@@ -640,6 +640,7 @@ class TestQuotedNamesAndFolders:
             assert quoted_name(plain) == plain, plain
         assert quoted_name('Trip" (7)') == '"Trip\\" (7)"'
         assert quoted_name("a, b") == '"a, b"'
+        assert quoted_name("a; b") == '"a; b"'  # delete_photo_albums' list ends with "; "
         assert quoted_name("a (b") == '"a (b"'
         assert quoted_name("a: b") == '"a: b"'
         assert quoted_name("a \u00b7 b") == '"a \u00b7 b"'
