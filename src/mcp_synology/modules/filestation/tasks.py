@@ -31,16 +31,17 @@ from mcp_synology.core.formatting import (
     format_size,
     format_table,
     format_timestamp,
+    path_list,
     synology_error_response,
+    then,
 )
 from mcp_synology.modules.filestation.helpers import (
+    _plain_quoted,
     describe_transport_error,
     dsm_str,
     name_key,
     never_sent,
-    path_list,
     shown,
-    then,
 )
 
 if TYPE_CHECKING:
@@ -651,7 +652,13 @@ SKIP_CAUTION = (
 def where_it_went(path: str, dest_of: dict[str, str] | None, dest: str | None) -> str:
     """A source as a reply names it, with its destination if that isn't the task's own (#585)."""
     went = (dest_of or {}).get(path, dest)
-    return f"{shown(path)} (to {shown(went)})" if went != dest and went else shown(path)
+    if not (went != dest and went):
+        return shown(path)
+    # A source named "b (to photos)" can't read as one that went elsewhere (#693): quoted.
+    source = shown(path)
+    if " (to " in source and source == path:
+        source = _plain_quoted(path)
+    return f"{source} (to {shown(went)})"
 
 
 def skipped_line(

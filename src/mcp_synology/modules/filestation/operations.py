@@ -25,8 +25,11 @@ from mcp_synology.core.formatting import (
     format_size,
     format_status,
     holds_escape,
+    path_list,
     rewrapped_error,
+    sentence,
     synology_error_response,
+    then,
 )
 from mcp_synology.modules.filestation.batch import (
     BatchOutcome,
@@ -50,12 +53,9 @@ from mcp_synology.modules.filestation.helpers import (
     name_key,
     normalize_path,
     path_exists,
-    path_list,
     paths_isdir,
     probe_recycle_status,
-    sentence,
     shown,
-    then,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -375,9 +375,11 @@ async def _refuse_missing_sources(
         err_code, suggestion = unreadable_paths_error(missing)
         error_response(
             err_code,
-            f"{operation} files refused: "
-            + "; ".join(missing_text(p, c) for p, c in missing)
-            + f". Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
+            # One a line when two or more (#693).
+            then(
+                path_list(f"{operation} files refused", [missing_text(p, c) for p, c in missing]),
+                f"Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
+            ),
             retryable=False,
             param="paths",
             value=original,
@@ -1271,11 +1273,14 @@ class CopyMoveAdapter:
         alike = [q for q in self.group[self.group.index(p) + 1 :] if name_key(q) in ran]
         if alike:
             # #580: running them with overwrite=true would replace what it placed.
-            named = ", ".join(map(_escaped_repr, alike))
-            reply += (
-                f"\nNamed like one this call already ran: {named}. "
+            # One a line when two or more (#693).
+            named = path_list(
+                "Named like one this call already ran", [_escaped_repr(q) for q in alike]
+            )
+            reply += "\n" + then(
+                named,
                 "Run them with overwrite=false or send them to another folder: with "
-                "overwrite=true they could replace it."
+                "overwrite=true they could replace it.",
             )
         if not self.multi:
             return reply
@@ -1425,8 +1430,9 @@ async def _copy_move_summary(
         by_dir: dict[str, list[str]] = {}
         for p in ok:
             by_dir.setdefault("/".join(p.split("/")[:-1]), []).append(name(p))
+        # One a line when two or more (#693).
         lines.extend(
-            f"\nMoved sources removed from {shown(d)}/: {', '.join(map(shown, names))}"
+            "\n" + path_list(f"Moved sources removed from {shown(d)}/", [shown(n) for n in names])
             for d, names in sorted(by_dir.items())
         )
 
@@ -1475,9 +1481,11 @@ class DeleteAdapter:
             err_code, suggestion = unreadable_paths_error(missing)
             error_response(
                 err_code,
-                "Delete files refused: "
-                + "; ".join(missing_text(p, c) for p, c in missing)
-                + ". Nothing was deleted.",
+                # One a line when two or more (#693).
+                then(
+                    path_list("Delete files refused", [missing_text(p, c) for p, c in missing]),
+                    "Nothing was deleted.",
+                ),
                 retryable=False,
                 param="paths",
                 value=self.paths_arg,
@@ -2009,11 +2017,15 @@ async def restore_from_recycle_bin(
             if dest_folder
             else await _recreate_missing_folders(client, restore_destinations)
         )
-        note = (
-            f"\nRe-created {', '.join(map(shown, recreated))} (no longer there) to restore into."
-            if recreated
-            else ""
-        )
+        # One a line when two or more (#693).
+        note = ""
+        if len(recreated) == 1:
+            note = f"\nRe-created {shown(recreated[0])} (no longer there) to restore into."
+        elif recreated:
+            note = "\n" + path_list(
+                "Re-created to restore into (they were no longer there)",
+                [shown(p) for p in recreated],
+            )
 
         if dest_folder is None and len(set(restore_destinations)) > 1:
             # Multiple different destinations: one batch, an item and a group per destination's
@@ -2097,9 +2109,17 @@ async def _recreate_missing_folders(
     if denied:
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            "Restore files refused: no permission to use the original folder"
-            f"{'s' if len(denied) > 1 else ''} {', '.join(map(shown, denied))}. "
-            "Nothing was restored.",
+            # One a line when two or more (#693).
+            f"Restore files refused: no permission to use the original folder {shown(denied[0])}. "
+            "Nothing was restored."
+            if len(denied) == 1
+            else then(
+                path_list(
+                    "Restore files refused: no permission to use the original folders",
+                    [shown(p) for p in denied],
+                ),
+                "Nothing was restored.",
+            ),
             retryable=False,
             param="dest_folder",
             value=denied[0],

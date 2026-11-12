@@ -2933,7 +2933,7 @@ class TestCopyMoveHandoff:
             timeout=1,
             records=records,
         )
-        assert "Named like one this call already ran: '/s/x/b', '/s/x/a'." in result
+        assert "Named like one this call already ran:\n  '/s/x/b'\n  '/s/x/a'\nRun them" in result
         record = records.get(Handle("copy", "FileStation_B"))
         assert record is not None
         assert record.earlier == ["/s/a"]
@@ -7263,8 +7263,8 @@ class TestSourcesDsmWontShow:
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == "not_found", err
         assert err["message"] == (
-            "Copy files refused: /w/gone: doesn't exist (DSM error 408); "
-            "/w/locked: no permission (DSM error 407). Nothing was copied."
+            "Copy files refused:\n  /w/gone: doesn't exist (DSM error 408)\n"
+            "  /w/locked: no permission (DSM error 407)\nNothing was copied."
         )
         perm = error_from_code(407, "SYNO.FileStation.List").suggestion
         assert err["suggestion"] == (

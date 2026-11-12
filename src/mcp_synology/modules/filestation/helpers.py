@@ -706,42 +706,6 @@ def _plain_quoted(path: str) -> str:
     return _escaped_repr(path)
 
 
-def path_list(heading: str, items: list[str], indent: str = "  ") -> str:
-    """Paths (already written as replies show them: `shown`, `where_it_went`) under a heading
-    (#693, the maintainer's choice): one inline, ``Heading: /a.``; two or more one a line,
-    indented, ``Heading:`` then ``  /a`` and ``  /b``, so no separator inside a name can read as
-    another item (a name can't hold a newline, #604). What follows a list starts on its own
-    line (`then`), never after an item. ``indent``: deeper for a list under an indented line."""
-    if len(items) == 1:
-        return f"{heading}: {items[0]}."
-    return f"{heading}:" + "".join(f"\n{indent}{item}" for item in items)
-
-
-def then(text: str, more: str) -> str:
-    """``more`` after ``text``: on the same line, or on a line of its own after a list of lines
-    (`path_list`) or when ``more`` is one, so nothing reads as part of a list's last item."""
-    if not more:
-        return text
-    if not text:
-        return more
-    # A list starts its own line too: its heading reads as one, not as part of a sentence.
-    own_line = ends_in_list(text) or "\n" in more
-    return f"{text}\n{more}" if own_line else f"{text} {more}"
-
-
-def sentence(text: str) -> str:
-    """``text`` ending as a sentence: with its period, or as it is when it ends in a list."""
-    if not text or ends_in_list(text) or text.endswith((".", "!", "?")):
-        return text
-    return text + "."
-
-
-def ends_in_list(text: str) -> bool:
-    """``text`` ends with a `path_list` item line."""
-    last = text.rsplit("\n", 1)
-    return len(last) == 2 and last[1].startswith(" ")
-
-
 def normalize_path(path: str) -> str:
     """Normalize a file path for the DSM API.
 

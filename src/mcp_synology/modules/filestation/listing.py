@@ -17,7 +17,9 @@ from mcp_synology.core.formatting import (
     format_size,
     format_table,
     format_timestamp,
+    path_list,
     synology_error_response,
+    then,
 )
 from mcp_synology.modules.filestation.helpers import (
     correct_recycle_status_from_observation,
@@ -717,10 +719,14 @@ async def _search_recycle_bin(
     if found:
         notes.append("Paths are relative to the recycle bin, as a restore takes them.")
     if unreadable:
-        more = f" and {len(unreadable) - 5} more" if len(unreadable) > 5 else ""
-        # Quoted as every other path list is, so a name holding ", " reads as one (#685).
-        skipped = ", ".join(map(shown_path, unreadable[:5]))
-        notes.append(f"Not searched (couldn't be listed): {skipped}{more}.")
+        # One a line when two or more (#693); the count of the rest on a line of its own, so a
+        # folder named "x and 4 more" can't fake it.
+        skipped = path_list(
+            "Not searched (couldn't be listed)", list(map(shown_path, unreadable[:5]))
+        )
+        if len(unreadable) > 5:
+            skipped = then(skipped, f"{len(unreadable) - 5:,} more couldn't be listed either.")
+        notes.append(skipped)
     if stopped:
         notes.append(
             f"Stopped after {folders:,} folder(s) and {entries:,} item(s), so there may be more "
