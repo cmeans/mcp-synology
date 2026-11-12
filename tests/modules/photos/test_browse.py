@@ -463,6 +463,18 @@ class TestCollections:
         assert "/mcp-spec-capture/2024" in out
 
     @respx.mock
+    async def test_folders_heading_quotes_the_parent_and_the_filter(self) -> None:
+        """#700: "Folders in <parent> matching "<name>"" wrote both raw."""
+        parent = {"folder": {"id": 10, "name": "/a (x", "parent": 3}}
+        fake = FakePhotos().on(FOLDER, "get", 2, parent)
+        fake.on(FOLDER, "list", 2, captured("folder-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photo_collections(client, type="folder", parent_id=10, name='2"')
+        assert out.startswith('Folders in \'/a (x\' matching "2\\""'), out
+
+    @respx.mock
     async def test_folders_shared_flag_on_191(self) -> None:
         """1.9.1's sharing_info has only sharing_link; the state is the top-level flag."""
         listed = captured("folder-list", CAPTURE_191)
@@ -559,13 +571,14 @@ class TestGetPhoto:
             tag=[{"id": 3, "name": "a, b"}, {"id": 4, "name": 'x"y'}],
             person=[{"id": 1, "name": "Jo, Ann"}, {"id": 2, "name": ""}],
         )
-        folders = _folders(FakePhotos())
-        install(folders.on(ITEM, "get", 2, item))
+        folder = {"folder": {"id": 10, "name": "/a (Shared Space)", "parent": 3}}
+        install(FakePhotos().on(FOLDER, "get", 2, folder).on(ITEM, "get", 2, item))
         client = make_client()
         async with client:
             out = await get_photo(client, ids=[12])
         assert 'Tags:         "a, b", "x\\"y"' in out, out
         assert 'People:       "Jo, Ann", (unnamed)' in out, out
+        assert "Folder:       '/a (Shared Space)' (personal space)" in out, out
 
     @respx.mock
     async def test_indexing_item_has_no_taken_time_yet(self) -> None:

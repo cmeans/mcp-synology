@@ -597,6 +597,7 @@ class TestPlaceNode:
                 await Photos(client, "personal", "Op").place_node(1, param="condition")
         assert _error(exc)["code"] == "invalid_parameter"
         assert "can't be used in a smart album condition" in str(_error(exc)["message"])
+        assert 'place 1 "Nowhere" can' in str(_error(exc)["message"])  # quoted (#700)
 
     def test_missing_note_empty(self) -> None:
         from mcp_synology.modules.photos.helpers import Photos

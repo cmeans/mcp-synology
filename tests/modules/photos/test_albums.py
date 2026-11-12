@@ -98,6 +98,7 @@ class TestCreate:
         }
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
         assert "Matches 1,234 item(s) now." in out
+        assert 'Created smart album "mcp-spec-smart" (id ' in out  # quoted (#700)
 
     @respx.mock
     async def test_place_condition_uses_the_filter_tree_node(self) -> None:
@@ -340,7 +341,7 @@ class TestChange:
         async with client:
             out = await photo_album(client, action="copy", album_id=4, name="copy")
         assert fake.one(NORMAL, "copy").params == {"name": "copy", "source_album_id": 4}
-        assert "(id 6)" in out
+        assert 'Copied album 4 to "copy" (id 6)' in out  # quoted (#700)
 
     @respx.mock
     async def test_smart_album_items_refused(self) -> None:

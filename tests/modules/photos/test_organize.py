@@ -63,6 +63,25 @@ class TestFolder:
         assert out == "Created /mcp-spec-capture/mcp-spec-capture (id 11, personal space)."
 
     @respx.mock
+    @pytest.mark.parametrize("action", ["create", "rename"])
+    async def test_a_folder_holding_the_space_marker_is_quoted(self, action: str) -> None:
+        """#700: "Created <folder> (id N, space)" read a folder named "/a (id 9" as another."""
+        made = captured("folder-create-duplicate-name")
+        made["folder"]["name"] = "/a (id 9"
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 13, "name": "/a/sub", "parent": 10}}
+        )
+        fake.on(FOLDER, "create", 1, made).on(FOLDER, "rename", 1, made)
+        install(fake)
+        client = make_client()
+        async with client:
+            if action == "create":
+                out = await photo_folder(client, action="create", parent_id=13, name="x")
+            else:
+                out = await photo_folder(client, action="rename", folder_id=13, name="x")
+        assert "'/a (id 9'" in out, out
+
+    @respx.mock
     async def test_rename(self) -> None:
         fake = FakePhotos().on(
             FOLDER, "get", 2, {"folder": {"id": 13, "name": "/a/sub", "parent": 10}}
@@ -719,6 +738,26 @@ class TestPeople:
 
 
 class TestRequests:
+    @respx.mock
+    async def test_a_crafted_subject_and_folder_are_quoted(self) -> None:
+        """#700: the subject was in plain quotes, so `x" (abc)` forged the request's ID on
+        delete, and the folder before " (" read a folder named "/a (Shared Space)" as it."""
+        listed = captured("request-list")
+        listed["list"][0].update(subject='x" (abc)', folder_home_path="/a (Shared Space)")
+        fake = FakePhotos().on(REQ, "list", 1, listed, listed, listed)
+        fake.on(REQ, "update", 1, {}).on(REQ, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            block = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", max_file_mib=10
+            )
+            gone = await photo_request(client, action="delete", request="ZxOc9Ep8q")
+        assert block.startswith(
+            'Photo request "x\\" (abc)" → \'/a (Shared Space)\' (personal space)'
+        ), block
+        assert gone.startswith('Deleted photo request "x\\" (abc)" (ZxOc9Ep8q);'), gone
+
     @respx.mock
     async def test_create(self) -> None:
         fake = FakePhotos().on(REQ, "list", 1, {"list": []})
