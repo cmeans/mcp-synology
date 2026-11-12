@@ -756,7 +756,7 @@ class TestDownloadFile:
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
         """#688 (pre-QA r2): the NAS name, the local file's name and the replaced line quote a
-        tab alike; the local folder stays as the OS writes it."""
+        tab alike; the local path is quoted whole, by shown()'s rule (#691)."""
         name = "a\tb.txt"
         (tmp_path / name).write_text("old")
         file_info = {"path": f"/video/{name}", "name": name, "isdir": False}
@@ -767,7 +767,8 @@ class TestDownloadFile:
         out = await download_file(
             mock_client, path=f"/video/{name}", dest_folder=str(tmp_path), overwrite=True
         )
-        assert f"Downloaded {name!r} (3 B) to {tmp_path}{os.sep}{name!r}" in out, out
+        # The whole local path quoted, as shown() quotes a NAS one (#691).
+        assert f"Downloaded {name!r} (3 B) to {str(tmp_path / name)!r}" in out, out
         assert f"It replaced the {name!r} that was there." in out, out
         assert "\t" not in out, out
 
@@ -1878,3 +1879,227 @@ class TestLocalPathConfinementErrors:
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "invalid_parameter"
         assert error["param"] == "dest_folder"
+
+
+class TestLocalPathsShown:
+    """#691: a local path in a reply or error is written by `shown`'s rule for a NAS path
+    (`shown_local`): as is, or quoted whole when a part holds a tab, padding or a character
+    that draws nothing, the caller's own refused path included."""
+
+    TAB = "a\tb.mkv"
+
+    def test_shown_local(self, tmp_path: Path) -> None:
+        from mcp_synology.modules.filestation.helpers import shown_local
+
+        assert shown_local(tmp_path / "plain.txt") == str(tmp_path / "plain.txt")
+        assert shown_local(tmp_path / self.TAB) == repr(str(tmp_path / self.TAB))
+        assert shown_local(tmp_path / " pad") == repr(str(tmp_path / " pad"))
+        assert shown_local(Path("/")) == os.fspath(Path("/"))  # "\\" on Windows (pre-QA r4)
+        # A folder part counts too, and the whole path is quoted (pre-QA r1, r2).
+        assert shown_local("/home/ x/f.txt") == repr("/home/ x/f.txt")
+        assert shown_local("/home/a, b/f.txt") == "'/home/a, b/f.txt'"
+        # Not normalized: the caller's text as sent (pre-QA r2).
+        assert shown_local("x/./y//z/") == "x/./y//z/"
+        assert shown_local("") == "''"
+        # A part that is itself quoted can't pass for a quoted part (pre-QA r2): it's plain.
+        assert shown_local("/h/'a '/f") == "/h/'a '/f"
+        assert shown_local("/h/a /f") == repr("/h/a /f")
+        # A path that starts or ends with a quote is quoted, so it can't pass for a quoted
+        # path (pre-QA r3).
+        assert shown_local("'/home/x/a.txt'") == "\"'/home/x/a.txt'\""
+
+    def test_a_name_starting_or_ending_with_a_quote_is_quoted(self) -> None:
+        """Pre-QA r4: shown() wrote ``'a.jpg'`` raw, which reads as a quoted ``a.jpg``; NAS and
+        local names alike (upload's and rename's replies, Photos' rows)."""
+        from mcp_synology.modules.filestation.helpers import shown
+
+        assert shown("'a.jpg'") == "\"'a.jpg'\""
+        assert shown('say "hi"') == "'say \"hi\"'"
+        assert shown("/s/it's here") == "/s/it's here"  # a quote inside reads as part of it
+        # Backticks and typographic quotes read as quoting too (pre-QA r5).
+        for wrapped in ("`a.jpg`", "\u2018a.jpg\u2019", "\u201ca.jpg\u201d"):
+            assert shown(wrapped) == repr(wrapped), wrapped
+
+    @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/h/ pad/\u2764\ufe0f",  # padding and an allowed VS16 in another part (pre-QA r3)
+            "/h/a, b/\u2764\ufe0f",
+            "/h/rep\u200bort.pdf",
+            "/h/" + "x" * 300,
+            "/h/a\\b, c",
+            "/h/plain.txt",
+            "'a.jpg'",  # a bare name that starts and ends with a quote (pre-QA r4)
+            "/h/x'",
+        ],
+    )
+    def test_shown_local_matches_shown_on_posix(self, path: str) -> None:
+        """Pre-QA r3: one rule for both, through `_needs_escapes`; a quoted part's reason
+        decides between `plain_quoted` and escapes, not its output."""
+        from mcp_synology.modules.filestation.helpers import shown, shown_local
+
+        assert shown_local(path) == shown(path)
+
+    async def test_a_refused_argument_is_quoted_as_given(self, mock_client: DsmClient) -> None:
+        # shown_local, not repr: repr doubles each Windows backslash (pre-QA r1).
+        given = "/nonexistent/a\tb.txt"
+        with pytest.raises(ToolError) as exc:
+            await upload_file(mock_client, local_path=given, dest_folder="/video/up")
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(": " + repr(given)), message
+        with pytest.raises(ToolError) as exc:
+            await download_file(mock_client, path="/video/m.mkv", dest_folder=given)
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(": " + repr(given)), message
+
+    @respx.mock
+    async def test_a_failed_read_names_the_file_once(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Pre-QA r1: the OS error's text carries its own copy of the path."""
+        local = tmp_path / self.TAB
+        local.write_text("x")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": []}}
+        )
+        error = PermissionError(13, "Permission denied", str(local))
+        with (
+            patch.object(mock_client, "upload", side_effect=error),
+            pytest.raises(ToolError) as exc,
+        ):
+            await upload_file(mock_client, local_path=str(local), dest_folder="/video/up")
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(f"Failed to read local file {str(local)!r}: Permission denied"), (
+            message
+        )
+        assert message.count(str(tmp_path)) == 1, message
+
+    @respx.mock
+    async def test_a_local_file_already_there_is_shown(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"path": "/video/m.mkv", "isdir": False}]}}
+        )
+        (tmp_path / self.TAB).write_text("existing")
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                mock_client, path="/video/m.mkv", dest_folder=str(tmp_path), filename=self.TAB
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(repr(str(tmp_path / self.TAB))), message
+
+    @respx.mock
+    async def test_a_local_folder_in_the_way_is_shown(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"path": "/video/m.mkv", "isdir": False}]}}
+        )
+        (tmp_path / self.TAB).mkdir()
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                mock_client, path="/video/m.mkv", dest_folder=str(tmp_path), filename=self.TAB
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert f"{repr(str(tmp_path / self.TAB))} is a folder" in message, message
+
+    @respx.mock
+    async def test_a_failed_write_names_the_file_shown(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": []}}
+        )
+        for code, start in [(errno.ENOSPC, "No space left"), (errno.EACCES, "Failed to write")]:
+            with (
+                patch.object(mock_client, "download", side_effect=OSError(code, "nope")),
+                pytest.raises(ToolError) as exc,
+            ):
+                await download_file(
+                    mock_client, path="/video/m.mkv", dest_folder=str(tmp_path), filename=self.TAB
+                )
+            message = json.loads(str(exc.value))["error"]["message"]
+            assert start in message, message
+            assert f"{repr(str(tmp_path / self.TAB))}: nope" in message, message
+
+    def test_every_local_path_in_a_message_is_shown(self) -> None:
+        """The guard: in the two transfer modules, a local path's variable in an f-string (or
+        joined to text by ``+`` or ``%``, or passed to ``.format()``) goes
+        through `shown_local` (never ``!r``, which doubles Windows backslashes, nor `shown` on a
+        whole local path, which reads only ``/`` as a separator). `shown` is for a file's own
+        name (``name``, ``effective_name``, ``x.name``), and ``!r`` for the caller's own
+        ``filename`` refused as given. `_dest_name`, which builds a file name, is skipped."""
+        import ast
+
+        root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
+        local = {"local_path", "local_dir", "dest_file", "dest_folder", "local", "value", "path"}
+        allowed: set[tuple[str, str, str]] = set()
+
+        def a_name(arg: ast.expr) -> bool:
+            if isinstance(arg, ast.Name):
+                return arg.id in {"name", "effective_name"}
+            return isinstance(arg, ast.Attribute) and arg.attr == "name"
+
+        found = set()
+        for module in ("filestation", "photos"):
+            tree = ast.parse((root / module / "transfer.py").read_text())
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                if func.name == "_dest_name":
+                    continue
+                for node in ast.walk(func):
+                    # A path joined by + or %, or passed to .format(), with a text (pre-QA r4).
+                    joined: list[ast.expr] = []
+                    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Mod):
+                        joined = [node.left, node.right]
+                    elif (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "format"
+                    ):
+                        joined = [*node.args, *(k.value for k in node.keywords)]
+                    texty = isinstance(node, ast.BinOp) and any(
+                        isinstance(side, ast.Constant | ast.JoinedStr) for side in joined
+                    )
+                    for side in joined if texty or isinstance(node, ast.Call) else []:
+                        wrapped = (
+                            isinstance(side, ast.Call)
+                            and isinstance(side.func, ast.Name)
+                            and side.func.id == "shown_local"
+                        )
+                        names = {x.id for x in ast.walk(side) if isinstance(x, ast.Name)}
+                        if not wrapped and names & {*local, "name"}:
+                            found.add((module, func.name, ast.unparse(side)))
+                    if not isinstance(node, ast.JoinedStr):
+                        continue
+                    texts = [v.value for v in node.values if isinstance(v, ast.Constant)]
+                    if texts and all(t == "/" for t in texts):
+                        continue  # builds a NAS path (f"{dest}/{name}"), not a message
+                    for part in node.values:
+                        if not isinstance(part, ast.FormattedValue):
+                            continue
+                        value = part.value
+                        call = (
+                            value.func.id
+                            if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name))
+                            else ""
+                        )
+                        raw = part.conversion != -1
+                        if call == "shown_local" and not raw:
+                            continue
+                        if call == "shown" and not raw and value.args and a_name(value.args[0]):
+                            continue
+                        # The caller's own file name, refused as given ("Can't save as '..'"),
+                        # is quoted with !r as every refusal of an argument is (pre-QA r6).
+                        refused_name = isinstance(value, ast.Name) and value.id == "effective_name"
+                        if refused_name and part.conversion == ord("r"):
+                            continue
+                        # A local path's name anywhere in the expression: bare, an attribute,
+                        # wrapped in a call (str(local_dir), local_dir.as_posix()), or !r.
+                        names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+                        if names & {*local, "name", "effective_name"}:
+                            found.add((module, func.name, ast.unparse(value)))
+        assert found <= allowed, sorted(found - allowed)
