@@ -26,6 +26,7 @@ from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     ensure_recycle_status,
     file_type_icon,
+    folder_kind,
     missing_paths_suggestion,
     normalize_path,
     path_exists,
@@ -305,6 +306,31 @@ async def list_files(
     try:
         data = await client.request("SYNO.FileStation.List", "list", params=params)
     except SynologyError as e:
+        # DSM answers 401 "Unknown error" for a path under a file (`…/file/child`, vdsm 7.1 to
+        # 7.4.1, #517): one getinfo says it's missing, or a file, as for 408 below.
+        if e.code == 401 and tell_files_apart and not isinstance(e, AuthenticationError):
+            kind = await folder_kind(client, normalized)
+            if kind is not None and kind.kind == "missing":
+                blocked = f": {shown_path(kind.under_file)} is a file" if kind.under_file else ""
+                error_response(
+                    ErrorCode.NOT_FOUND,
+                    f"List files failed: {shown_path(normalized)} doesn't exist on the NAS"
+                    f"{blocked}.",
+                    retryable=False,
+                    param="path",
+                    value=path,
+                    suggestion=missing_paths_suggestion([(normalized, 408)]),
+                )
+            if kind is not None and kind.kind == "file":
+                error_response(
+                    ErrorCode.INVALID_PARAMETER,
+                    f"List files failed: {shown_path(normalized)} is a file, not a folder.",
+                    retryable=False,
+                    param="path",
+                    value=path,
+                    suggestion="list_files lists a folder's contents: use get_file_info for "
+                    "a file, or list its parent folder.",
+                )
         # A re-login refused with its own 408 (an expired password) isn't this path (#460).
         if e.code == 408 and not isinstance(e, AuthenticationError):
             # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,

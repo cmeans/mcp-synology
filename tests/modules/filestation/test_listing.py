@@ -711,6 +711,120 @@ class TestListFiles:
             assert error["code"] == "not_found"
             assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
 
+    @pytest.mark.parametrize(
+        ("getinfo", "code"),
+        [("missing", "not_found"), ("file", "invalid_parameter"), ("folder", "filestation_error")],
+    )
+    @respx.mock
+    async def test_list_files_401_under_a_file(
+        self, mock_client: DsmClient, getinfo: str, code: str
+    ) -> None:
+        """#517: DSM answers 401 "Unknown error" for a path under a file (`…/a.jpg/child`).
+        One getinfo names it missing or a file; a folder it shows keeps DSM's own error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            entry = {"code": 408} if getinfo == "missing" else {"isdir": getinfo == "folder"}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/child")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == code, error
+        if getinfo == "missing":
+            assert error["message"] == (
+                "List files failed: /video/a.jpg/child doesn't exist on the NAS."
+            )
+
+    @pytest.mark.parametrize(
+        ("parent", "code"),
+        [
+            ("file", "not_found"),
+            ("folder", "filestation_error"),
+            ("407", "filestation_error"),  # a parent it can't read: DSM's error stands
+            ("502", "DsmHttpError"),  # a proxy's stall ends the call (pre-QA r4, #282)
+        ],
+    )
+    @respx.mock
+    async def test_list_files_401_as_dsm_answers_it(
+        self, mock_client: DsmClient, parent: str, code: str
+    ) -> None:
+        """#517, as vdsm 7.1 and 7.4.1 answer: getinfo of `…/a.jpg/x/child` is a 401 entry
+        too, and so is `…/a.jpg/x`; the nearest parent that shows is the file, so the path
+        can't exist, and the reply names the file. A folder parent or one it can't read keeps
+        DSM's error; a proxy's error status ends the call (pre-QA r4)."""
+        from mcp_synology.core.errors import DsmHttpError
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            if params["path"].endswith(("/child", "/x")):
+                entry: dict[str, Any] = {"code": 401, "path": params["path"]}
+            elif parent == "502":
+                return httpx.Response(502)
+            elif parent == "407":
+                entry = {"code": 407, "path": params["path"]}
+            else:
+                entry = {"isdir": parent == "folder", "path": params["path"]}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        if code == "DsmHttpError":
+            with pytest.raises(DsmHttpError):
+                await list_files(mock_client, path="/video/a.jpg/x/child")
+            return
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/x/child")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == code
+        if parent == "file":
+            assert error["message"] == (
+                "List files failed: /video/a.jpg/x/child doesn't exist on the NAS: "
+                "/video/a.jpg is a file."
+            )
+
+    @respx.mock
+    async def test_list_files_401_isnt_read_without_tell_files_apart(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r2 on #517: a caller that doesn't tell files apart (list_recycle_bin) keeps
+        DSM's 401, with no getinfo."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            assert request.url.params["method"] != "getinfo", "a getinfo was sent"
+            return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/child", tell_files_apart=False)
+        assert json.loads(str(exc_info.value))["error"]["code"] == "filestation_error"
+
+    @respx.mock
+    async def test_list_files_a_refused_relogins_401_isnt_read_as_a_path(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r1 on #517: a 401 that is a refused re-login isn't this path's, so no getinfo
+        reads it as one."""
+        from mcp_synology.core.errors import AuthenticationError
+        from mcp_synology.modules.filestation import listing
+
+        async def refused(*_args: Any, **_kwargs: Any) -> Any:
+            raise AuthenticationError("refused", code=401)
+
+        checked: list[str] = []
+
+        async def kind(_client: Any, path: str) -> Any:
+            checked.append(path)
+
+        monkeypatch.setattr(mock_client, "request", refused)
+        monkeypatch.setattr(listing, "folder_kind", kind)
+        with pytest.raises(ToolError):
+            await list_files(mock_client, path="/video/a")
+        assert checked == []
+
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
         """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
