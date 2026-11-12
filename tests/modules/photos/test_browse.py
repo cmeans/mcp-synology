@@ -229,6 +229,20 @@ class TestListPhotosRouting:
         assert out.startswith("Photos: person (unnamed) (12) ("), out
 
     @respx.mock
+    async def test_a_folder_ending_in_a_quote_is_quoted(self) -> None:
+        """#701 after #698: shown() quotes a path that starts or ends with a quote, so the title's
+        folder `/Trips'` can't read as a quoted `/Trips`, and the title still reads "Photos in"."""
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/Trips'", "parent": 3}}
+        )
+        fake.on(ITEM, "list", 2, captured("item-list-v2")).on(ITEM, "count", 1, {"count": 9})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_path="/Trips'")
+        assert out.startswith('Photos in "/Trips\'" (personal space'), out
+
+    @respx.mock
     async def test_names_holding_the_titles_other_separators_are_quoted(self) -> None:
         """#695 (pre-QA r1): an album's quote, and " (" in a person's or a folder's name, forged
         the title's ID or its space-and-order group."""

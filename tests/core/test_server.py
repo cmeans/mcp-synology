@@ -2135,13 +2135,11 @@ class TestInstructionComments:
 # +113 over the budget by #692 (#685, the maintainer's Q2): PATH FORMAT says a path a reply
 # shows in quotes is quoted to show its exact characters, so pass what's inside, and that an
 # escape in one stands for the one character it names.
+# +178 by #698 (#691, pre-QA r2): LOCAL MACHINE says a local path a reply shows in quotes is
+# quoted to show its exact characters, as PATH FORMAT says of NAS paths (sent without File
+# Station too).
 # +178 by #701 (#695, pre-QA r5): SYNOLOGY PHOTOS says a name or folder shown in quotes is
 # quoted to show its exact characters (PATH FORMAT says it only with File Station).
-
-
-# +178 by #691 (pre-QA r2): LOCAL MACHINE says a local path a reply shows in quotes is quoted to
-# show its exact characters, as PATH FORMAT says of NAS paths (sent without File Station too).
-# Both together: 61,513 + 178 + 178.
 PAYLOAD_BUDGET_CHARS = 61_869
 
 
