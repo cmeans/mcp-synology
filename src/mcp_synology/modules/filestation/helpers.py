@@ -1110,10 +1110,17 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
 
 
 async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
-    """The nearest of ``path``'s parents DSM reports, when it's a file; None when it's a
-    folder, or none can be read (#517)."""
+    """The file among ``path``'s parents, when one is; None when none is found or a parent
+    can't be read (#517).
+
+    The parents read folders down to the file, then 401 below it (vdsm 7.1: `f0.txt` a file,
+    `f0.txt/x` and `f0.txt/x/y` 401), so the file is found by halving the levels: about
+    log2(depth) requests, not one per level, which a deep path would make outlast a client's
+    60 s (pre-QA r2)."""
     parts = path.rstrip("/").split("/")
-    for end in range(len(parts) - 1, 1, -1):  # nearest parent first, down to the share
+    low, high = 2, len(parts) - 1  # parent lengths: the share (`/<share>`) to the nearest
+    while low <= high:
+        end = (low + high) // 2
         parent = "/".join(parts[:end])
         try:
             data = await client.request(
@@ -1122,11 +1129,15 @@ async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
         except (SynologyError, httpx.HTTPError) as e:
             logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
             return None
-        for entry in data.get("files", []):
-            if isinstance(entry.get("isdir"), bool):
-                return None if entry["isdir"] else parent
-            if entry.get("code") not in (401, None):
-                return None
+        entry: dict[str, Any] = next(iter(data.get("files", [])), {})
+        if entry.get("isdir") is False:
+            return parent
+        if entry.get("isdir") is True:
+            low = end + 1  # a folder: the file, if any, is below it
+        elif entry.get("code") == 401:
+            high = end - 1  # under the file: it's above
+        else:
+            return None  # another code (a 408, a 407) or no answer: can't tell
     return None
 
 

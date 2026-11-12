@@ -782,6 +782,22 @@ class TestListFiles:
             )
 
     @respx.mock
+    async def test_list_files_401_isnt_read_without_tell_files_apart(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Pre-QA r2 on #517: a caller that doesn't tell files apart (list_recycle_bin) keeps
+        DSM's 401, with no getinfo."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            assert request.url.params["method"] != "getinfo", "a getinfo was sent"
+            return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/child", tell_files_apart=False)
+        assert json.loads(str(exc_info.value))["error"]["code"] == "filestation_error"
+
+    @respx.mock
     async def test_list_files_a_refused_relogins_401_isnt_read_as_a_path(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -1917,6 +1917,34 @@ class TestMoreShownSites:
         )
         assert "start" not in [m for m, _ in client.calls]
 
+    @pytest.mark.parametrize("depth", [1, 2, 7, 100])
+    async def test_the_file_above_is_found_in_few_requests(self, depth: int) -> None:
+        """Pre-QA r2 on #517: one getinfo per level let a deep path outlast a client's 60 s.
+        Folders read above the file and 401 below it, so halving finds it in about
+        log2(depth) requests."""
+        import math
+
+        from mcp_synology.modules.filestation.helpers import folder_kind
+
+        file = "/video/a/b/f.txt"
+        below = "/".join(f"d{i}" for i in range(depth))
+        asked: list[str] = []
+
+        class _Deep(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                path = kwargs["params"]["path"]
+                asked.append(path)
+                if path == file:
+                    return {"files": [{"path": path, "isdir": False}]}
+                if path.startswith(file + "/"):
+                    return {"files": [{"path": path, "code": 401}]}
+                return {"files": [{"path": path, "isdir": True}]}
+
+        kind = await folder_kind(_Deep(), f"{file}/{below}")  # type: ignore[arg-type]
+        assert kind is not None and (kind.kind, kind.under_file) == ("missing", file)
+        levels = depth + 4  # the parents from /video down to the path's own
+        assert len(asked) <= 2 + math.ceil(math.log2(levels)), asked
+
     async def test_search_starts_when_the_check_cant_tell(self) -> None:
         """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
         from mcp_synology.modules.filestation.search import search_files
