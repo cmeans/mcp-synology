@@ -22,7 +22,12 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import shown, shown_local
+from mcp_synology.modules.filestation.helpers import (
+    plain_quoted,
+    shown,
+    shown_beside,
+    shown_local,
+)
 from mcp_synology.modules.photos.helpers import (
     SETUP_CODES,
     Photos,
@@ -43,6 +48,32 @@ logger = logging.getLogger(__name__)
 _SIZES = ("original", "xl", "m", "sm")
 _MAX_DOWNLOAD = 50
 _TIMEOUT = 300.0
+_NOT_DOWNLOADED = "not downloaded"
+
+
+def _row_name(name: str, *also: str) -> str:
+    """A name in a transfer row, as `shown` writes it, and quoted when it holds the row's own
+    separators (``": "`` before a status, two spaces between columns), ends in ``":"`` (which
+    the two spaces after it would make ``": "``), starts with ``not downloaded``, case
+    ignored (the status a not-found item's row puts where a name goes) or holds ``also``
+    (``"("`` and ``")"`` for the name inside a renamed upload's ``(as …)``), so a name such
+    as ``cat.jpg: not downloaded`` can't forge its row's status (#699)."""
+    text = shown(name)
+    # A name ending in ":" makes ": " with the two spaces after it (pre-QA r2); one starting
+    # "not downloaded" reads as a not-found row's status (pre-QA r3).
+    forged = name.endswith(":") or name.casefold().startswith(_NOT_DOWNLOADED)
+    if text == name and (forged or any(sep in name for sep in (": ", "  ", *also))):
+        return plain_quoted(name)
+    return text
+
+
+def _folder_shown(folder: str | os.PathLike[str]) -> str:
+    """``download_photos``' local folder as `shown_local` writes it, and quoted when it holds
+    ``" ("``, which the heading puts after it: a folder named ``dl (shared space)`` would
+    read as the heading's own space (pre-QA r1 on #699)."""
+    raw = os.fspath(folder)
+    text = shown_local(raw)
+    return plain_quoted(raw) if " (" in raw and text == raw else text
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -174,7 +205,7 @@ async def download_photos(
             why = "not found"
             if sp == "shared":
                 why += ", or no permission for its Shared Space folder"
-            lines.append(f"  {item_id}  not downloaded: {why}")
+            lines.append(f"  {item_id}  {_NOT_DOWNLOADED}: {why}")
             continue
         name = _dest_name(item, size, used)
         try:
@@ -185,7 +216,7 @@ async def download_photos(
             # DSM didn't answer (a dropped connection or a timeout): the rest would most
             # likely wait out the same timeout, so stop and say which weren't tried.
             lines.append(
-                f"  {item_id}  {shown(name)}: not downloaded: couldn't reach DSM "
+                f"  {item_id}  {_row_name(name)}: not downloaded: couldn't reach DSM "
                 f"({type(e).__name__})"
             )
             rest = unique[n + 1 :]
@@ -196,14 +227,14 @@ async def download_photos(
         retry = retry or retryable
         if result.startswith(_ALREADY_THERE):
             kept += 1
-            lines.append(f"  {item_id}  {shown(name)}: {result}")
+            lines.append(f"  {item_id}  {_row_name(name)}: {result}")
         elif result.startswith("not downloaded"):
-            lines.append(f"  {item_id}  {shown(name)}: {result}")
+            lines.append(f"  {item_id}  {_row_name(name)}: {result}")
         else:
             done += 1
             replaced += result.endswith((f"({_REPLACED})", f"({_REPLACED_LINK})"))
             # A local name built from the NAS's: padding or a tab shows (pre-QA r1 on #691).
-            lines.append(f"  {item_id}  {shown(name)}  {result}")
+            lines.append(f"  {item_id}  {_row_name(name)}  {result}")
     if len(unique) > 1 and retry:
         # A name depends on every item in the call, so retrying only the ones that failed
         # can give one of them another item's file name and, with overwrite=true, replace
@@ -219,7 +250,7 @@ async def download_photos(
     there = f", {kept:,} already there" if kept else ""
     there += f", {replaced:,} replaced a file that was there" if replaced else ""
     head = (
-        f"Downloaded {done:,} of {len(unique):,} item(s) to {shown_local(local_dir)} "
+        f"Downloaded {done:,} of {len(unique):,} item(s) to {_folder_shown(local_dir)} "
         f"({what}, {space_label(sp)}{there})"
     )
     # Only a call that wrote or kept a file has one for a client to open (#640).
@@ -599,7 +630,7 @@ async def upload_photos(
             data = await ph.call("Browse.Item", "get", {"id": renamed, "additional": []}, version=2)
             names = {int(i["id"]): str(i.get("filename", "")) for i in data.get("list", [])}
             rows = [
-                (name, state, f"{note} (as {names[int(note.split()[1])]})")
+                (name, state, f"{note} (as {_row_name(names[int(note.split()[1])], '(', ')')})")
                 if state == "renamed" and int(note.split()[1]) in names
                 else (name, state, note)
                 for name, state, note in rows
@@ -607,14 +638,18 @@ async def upload_photos(
         except (SynologyError, httpx.TransportError) as e:
             # The uploads are done; only the "(as …)" names are missing.
             logger.debug("Couldn't read the renamed items' names: %s", type(e).__name__)
-    # Each local file's name as `shown` writes one, so padding or a tab shows (#691).
-    rows = [(shown(name), state, note) for name, state, note in rows]
+    # Each local file's name as `shown` writes one, so padding or a tab shows (#691), and
+    # quoted when it holds the columns' two spaces (#699).
+    rows = [(_row_name(name), state, note) for name, state, note in rows]
     width = max(len(r[0]) for r in rows)
     # A skipped duplicate is already there, not uploaded: count it apart.
     head = f"Uploaded {len(uploaded) - skipped:,} of {len(files):,} file(s)"
     if skipped:
         head += f" ({skipped:,} skipped, already there)"
-    lines = [f"{head} to {target.get('name')} ({space_label(sp)})"]
+    # The folder, quoted when it holds " (" (or what `shown` quotes), as list_photos' title
+    # writes one (#695, #699).
+    target_shown = shown_beside(str(target.get("name", "")), " (")
+    lines = [f"{head} to {target_shown} ({space_label(sp)})"]
     lines += [f"  {label:<{width}}  {state:<8} {note}" for label, state, note in rows]
     if target_album is not None and uploaded:
         album_shown = quoted_name(target_album.get("name"))  # #700
