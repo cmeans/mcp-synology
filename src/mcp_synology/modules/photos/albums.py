@@ -190,8 +190,9 @@ async def _photo_album(
             created = data["album"]
             lines.append(f"Created smart album {quoted_name(name)} (id {created['id']}).")
             lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
-        # A name another album already has, quotes and all, is a real name (pre-QA r7).
-        lines += quotes_note(name, "album name", before=[a.get("name") for a in same])
+        # Always noted: another album already named this, quotes and all, is most likely the
+        # same mistake made earlier, not proof the quotes are real (QA r5 on #709).
+        lines += quotes_note(name, "album name")
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
