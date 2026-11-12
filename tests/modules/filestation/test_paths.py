@@ -1944,6 +1944,26 @@ class TestMoreShownSites:
         assert kind is not None and (kind.kind, kind.under_file) == ("missing", file)
         levels = depth + 4  # the parents from /video down to the path's own
         assert len(asked) <= 2 + math.ceil(math.log2(levels)), asked
+        assert "/video" not in asked, asked  # a share is never a file (pre-QA r5, r6)
+
+    async def test_a_file_in_the_share_takes_two_requests(self) -> None:
+        """Pre-QA r6 on #517: the walk starts below the share, so a file directly in it is
+        found with the path's own getinfo and the file's."""
+        from mcp_synology.modules.filestation.helpers import folder_kind
+
+        asked: list[str] = []
+
+        class _InShare(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                path = kwargs["params"]["path"]
+                asked.append(path)
+                if path == "/video/f.txt":
+                    return {"files": [{"path": path, "isdir": False}]}
+                return {"files": [{"path": path, "code": 401}]}
+
+        kind = await folder_kind(_InShare(), "/video/f.txt/x")  # type: ignore[arg-type]
+        assert kind is not None and kind.under_file == "/video/f.txt"
+        assert asked == ["/video/f.txt/x", "/video/f.txt"], asked
 
     @pytest.mark.parametrize("stalls", ["check", "walk"])
     async def test_a_nas_that_stops_answering_ends_the_search(self, stalls: str) -> None:

@@ -21,8 +21,6 @@ from mcp_synology.core.errors import (
     AuthenticationError,
     DsmHttpError,
     DsmReplyError,
-    DsmTimeoutError,
-    DsmUnavailableError,
     ErrorCode,
     SynologyError,
     error_from_code,
@@ -1122,16 +1120,11 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
     return None
 
 
-# What a NAS that doesn't answer raises from a request (#517, #282): it ends the call. A GET
-# gives httpx's own transport error; a proxy's error status or a page that isn't DSM's is
-# `DsmHttpError` / `DsmReplyError`; the POST helpers' timeout and unreachable are the others.
-_NO_ANSWER = (
-    httpx.TransportError,
-    DsmHttpError,
-    DsmReplyError,
-    DsmTimeoutError,
-    DsmUnavailableError,
-)
+# What a NAS that doesn't answer raises from a GET request (#517, #282): it ends the call.
+# httpx's own transport error (timeouts included), or a proxy's error status or a page that
+# isn't DSM's (`DsmHttpError`, `DsmReplyError`). `DsmTimeoutError` and `DsmUnavailableError`
+# come only from the POST helpers, which these checks don't use.
+_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
 
 
 def _files(data: Any) -> list[dict[str, Any]]:
