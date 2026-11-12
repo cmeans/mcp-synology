@@ -77,7 +77,7 @@ def shown_folder(path: object, *also: str) -> str:
     ``" ("`` or ``": "``, which the lines that name a folder put after it (``/Trips (Shared
     Space)``, ``… to /Trips: 2 of 2 processed``), so a folder named ``/Trips (Shared Space)``
     can't read as the space (#700); or ends in ``":"`` or holds ``also``, another marker its
-    line puts after it. Every Photos folder in a line of text goes through it."""
+    line puts after it."""
     text = str(path)
     out = shown(text)
     # A name ending in ":" makes ": " with the " (" after it (pre-QA r2).
