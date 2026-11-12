@@ -1004,7 +1004,9 @@ class TestUpload:
     async def test_skip_and_album(self, tmp_path: Path) -> None:
         (tmp_path / "a.jpg").write_bytes(b"x")
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
-        fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
+        album = captured("album-get")
+        album["list"][0]["name"] = 'Trip" (7)'  # #700: a quote can't close the name early
+        fake.on("SYNO.Foto.Browse.Album", "get", 1, album)
         fake.on("SYNO.Foto.Browse.NormalAlbum", "add_item", 1, {"error_list": []})
         fake.multipart = lambda _r: httpx.Response(
             200, json={"success": True, "data": {"action": "ignore", "id": 9}}
@@ -1023,7 +1025,7 @@ class TestUpload:
         assert "skipped  id 9 (already there)" in out
         assert out.startswith("Uploaded 0 of 1 file(s) (1 skipped, already there) to ")
         assert fake.one("SYNO.Foto.Browse.NormalAlbum", "add_item").params == {"id": 4, "item": [9]}
-        assert 'Added 1 item(s) to album "mcp-spec-album".' in out
+        assert 'Added 1 item(s) to album "Trip\\" (7)".' in out, out
         # Nothing was stored, so there's nothing for Photos to index.
         assert "Photos indexes" not in out
 

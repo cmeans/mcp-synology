@@ -29,6 +29,7 @@ from mcp_synology.modules.photos.helpers import (
     check_space,
     invalid,
     one_ref,
+    quoted_name,
     space_label,
 )
 
@@ -616,6 +617,7 @@ async def upload_photos(
     lines = [f"{head} to {target.get('name')} ({space_label(sp)})"]
     lines += [f"  {label:<{width}}  {state:<8} {note}" for label, state, note in rows]
     if target_album is not None and uploaded:
+        album_shown = quoted_name(target_album.get("name"))  # #700
         try:
             await ph.call(
                 "Browse.NormalAlbum",
@@ -623,12 +625,12 @@ async def upload_photos(
                 {"id": int(target_album["id"]), "item": uploaded},
                 personal=True,
             )
-            lines.append(f'Added {len(uploaded):,} item(s) to album "{target_album.get("name")}".')
+            lines.append(f"Added {len(uploaded):,} item(s) to album {album_shown}.")
         except SynologyError as e:
-            lines.append(f'Couldn\'t add them to album "{target_album.get("name")}": {e}')
+            lines.append(f"Couldn't add them to album {album_shown}: {e}")
         except httpx.TransportError as e:
             lines.append(
-                f"Couldn't add them to album \"{target_album.get('name')}\": DSM didn't answer "
+                f"Couldn't add them to album {album_shown}: DSM didn't answer "
                 f"({type(e).__name__}). Check the album with list_photos before adding again."
             )
     if len(uploaded) > skipped:
