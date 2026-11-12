@@ -892,17 +892,23 @@ class TestUpload:
     @respx.mock
     async def test_a_renamed_name_is_quoted_inside_its_parentheses(self, tmp_path: Path) -> None:
         """#699 (pre-QA r1): the name DSM gave a renamed upload is quoted when it holds the
-        row's separators or the ")" that closes its "(as …)"."""
-        for name in ("a.jpg", "b.jpg"):
+        row's separators, the ")" that closes its "(as …)" or a "(" (pre-QA r3)."""
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
             (tmp_path / name).write_bytes(b"x")
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
         fake.on(
             ITEM,
             "get",
             2,
-            {"list": [{"id": 47, "filename": "a_1.jpg  failed"}, {"id": 48, "filename": "b).jpg"}]},
+            {
+                "list": [
+                    {"id": 47, "filename": "a_1.jpg  failed"},
+                    {"id": 48, "filename": "b).jpg"},
+                    {"id": 49, "filename": "c (d.jpg"},
+                ]
+            },
         )
-        answers = iter([47, 48])
+        answers = iter([47, 48, 49])
         fake.multipart = lambda _r: httpx.Response(
             200, json={"success": True, "data": {"action": "rename", "id": next(answers)}}
         )
@@ -911,12 +917,13 @@ class TestUpload:
         async with client:
             out = await upload_photos(
                 client,
-                local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
+                local_paths=[str(tmp_path / n) for n in ("a.jpg", "b.jpg", "c.jpg")],
                 allowed_roots=[tmp_path],
                 folder_path="/",
             )
         assert "renamed  id 47 (as 'a_1.jpg  failed')" in out, out
         assert "renamed  id 48 (as 'b).jpg')" in out, out
+        assert "renamed  id 49 (as 'c (d.jpg')" in out, out  # pre-QA r3
 
     @respx.mock
     async def test_album_and_names_unanswered(
