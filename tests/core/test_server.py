@@ -2140,7 +2140,9 @@ class TestInstructionComments:
 # Station too).
 # +178 by #701 (#695, pre-QA r5): SYNOLOGY PHOTOS says a name or folder shown in quotes is
 # quoted to show its exact characters (PATH FORMAT says it only with File Station).
-PAYLOAD_BUDGET_CHARS = 61_869
+# +116 by #709 (#700, QA r1): SYNOLOGY PHOTOS says an escape the NAS's text needed shows doubled
+# inside quotes, and decoding gives that escape back to pass.
+PAYLOAD_BUDGET_CHARS = 61_985
 
 
 class TestPayloadBudget:
