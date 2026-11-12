@@ -7530,10 +7530,34 @@ class TestSourcesDsmWontShow:
             "Already copied before this failure:\n  /w/src/f\n  /w/src/u.txt\n"
             "Of those, these met an item of the other kind (a file or a folder) under the same "
             "name, and what DSM did with it isn't known: /w/src/f. "
-            "Of those, for these, whether anything was already there couldn't be checked: "
-            "/w/src/u.txt."
+            "Of those, these couldn't be checked for what was already there: /w/src/u.txt."
         ), message
         assert "recycle bin" not in message, message
+
+    def test_the_note_follows_the_done_list_not_a_later_one(self) -> None:
+        """Pre-QA r2 on #693: "Of those" names the list just above it, so the note must follow
+        the done list, never a skipped list after it (moving the anchor failed no test)."""
+        from mcp_synology.core.formatting import path_list, then
+        from mcp_synology.modules.filestation.operations import (
+            _REPLACED_FILE,
+            _with_replaced_note,
+        )
+
+        message = then(
+            then(
+                "Move files failed.",
+                path_list("Already moved before this failure", ["/s/a", "/s/b"]),
+            ),
+            path_list("Skipped in whole or in part", ["/s/c", "/s/e"]),
+        )
+        error = ToolError(json.dumps({"status": "error", "error": {"message": message}}))
+        replaced = {"/s/a": _REPLACED_FILE, "/s/b": _REPLACED_FILE}
+        out = json.loads(
+            str(_with_replaced_note(error, "Move", ["/s/a", "/s/b"], replaced, {}, "/d"))
+        )
+        text = out["error"]["message"]
+        assert text.index("Of those") < text.index("Skipped"), text
+        assert "  /s/b\nOf those, these replaced what was already there:\n  /s/a\n  /s/b\n" in text
 
     @respx.mock
     async def test_a_not_started_name_cant_move_the_note(self, mock_client: DsmClient) -> None:

@@ -816,7 +816,7 @@ def _with_replaced_note(
             "name, and what DSM did with it isn't known",
             other,
         ),
-        ("Of those, for these, whether anything was already there couldn't be checked", unchecked),
+        ("Of those, these couldn't be checked for what was already there", unchecked),
     ):
         if names:
             added = then(added, path_list(heading, names))

@@ -589,7 +589,9 @@ async def test_a_poll_errors_reply_says_how_the_stop_ended(
     with pytest.raises(ToolError) as raised:
         await tool.call(mock_client, TaskRecords())
     error = json.loads(str(raised.value))["error"]
-    assert says.lower() in error["message"].lower(), error["message"]
+    # After the not-started list, a sentence of its own line, not appended to the last path's
+    # (#693; pre-QA r2: the branch was untested).
+    assert f"\n  /s/d2\n{says[0].upper()}{says[1:]}" in error["message"], error["message"]
     assert bool(error.get("handle")) == handle
     if handle:
         assert error["retryable"] is False
