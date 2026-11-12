@@ -589,7 +589,7 @@ async def test_a_poll_errors_reply_says_how_the_stop_ended(
     with pytest.raises(ToolError) as raised:
         await tool.call(mock_client, TaskRecords())
     error = json.loads(str(raised.value))["error"]
-    assert says in error["message"], error["message"]
+    assert says.lower() in error["message"].lower(), error["message"]
     assert bool(error.get("handle")) == handle
     if handle:
         assert error["retryable"] is False
@@ -685,7 +685,8 @@ async def test_a_restores_recreated_folder_note_comes_before_not_started(
     monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
     text = await tool.call(mock_client, TaskRecords())
     assert "Re-created /s/o2 (no longer there)" in text, text
-    assert text.rstrip().splitlines()[-1].startswith("Not started:"), text
+    assert "\nNot started (run them in another call):\n" in text, text
+    assert text.index("Re-created /s/o2") < text.index("Not started"), text
 
 
 async def test_an_item_started_near_the_end_still_gets_its_least_wait(

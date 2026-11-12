@@ -1219,13 +1219,13 @@ class TestPathListsQuoteACommaName:
         except ToolError as e:
             error = e
         out = _error_of(_with_not_started(error, [self.COMMA, "/s/b"]))
-        assert out["message"].endswith(f"Not started: {self.COMMA!r}, /s/b."), out
+        assert out["message"].endswith(f"Not started:\n  {self.COMMA!r}\n  /s/b"), out
 
     def test_already_done(self) -> None:
         from mcp_synology.modules.filestation.operations import _already_done
 
         text = _already_done("Copy", [self.COMMA, "/s/b"])
-        assert text == f". Already copied before this failure: {self.COMMA!r}, /s/b", text
+        assert text == f"Already copied before this failure:\n  {self.COMMA!r}\n  /s/b", text
 
     def test_handoffs_lists(self) -> None:
         from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
@@ -1526,7 +1526,7 @@ class TestPaddedPathsAreShownQuoted:
     def test_plain_paths_stay_plain(self) -> None:
         from mcp_synology.modules.filestation.operations import _already_done
 
-        assert _already_done("Delete", ["/video/a b"]).endswith(": /video/a b")
+        assert _already_done("Delete", ["/video/a b"]).endswith(": /video/a b.")
 
 
 def _error_of(err: ToolError) -> dict[str, Any]:

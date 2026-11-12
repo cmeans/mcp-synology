@@ -38,7 +38,6 @@ from mcp_synology.modules.filestation.batch import (
     no_scope,
     run_batch,
 )
-from mcp_synology.modules.filestation.batch import unstop as _unstop
 from mcp_synology.modules.filestation.helpers import (
     _escaped_repr,
     _is_dot,
@@ -51,9 +50,12 @@ from mcp_synology.modules.filestation.helpers import (
     name_key,
     normalize_path,
     path_exists,
+    path_list,
     paths_isdir,
     probe_recycle_status,
+    sentence,
     shown,
+    then,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -349,12 +351,14 @@ def _already_done(
     text = ""
     if done:
         past = _PAST_TENSE.get(operation, "processed")
-        text = f". Already {past} before this failure: " + ", ".join(map(named, done))
+        # One a line when there are two or more (#693).
+        text = path_list(f"Already {past} before this failure", [named(p) for p in done])
     if skipped:
         # A skip's advice warns here too: retrying one named like what landed replaces it (#580).
         ran = [*(done or []), *(landed or []), *([failing] if failing else [])]
-        line = skipped_line(operation != "Copy", skipped, ran, dest_of=dest_of, dest=dest)
-        text += ". " + line.removesuffix(".")
+        text = then(
+            text, skipped_line(operation != "Copy", skipped, ran, dest_of=dest_of, dest=dest)
+        )
     return text
 
 
@@ -551,8 +555,8 @@ def _partial_note(
         else ""
     )
     return (
-        f". Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
-        f"{past} before it stopped, so check there before trying again"
+        f"Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
+        f"{past} before it stopped, so check there before trying again."
     )
 
 
@@ -575,18 +579,22 @@ def _copy_move_result(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: {_code_text(err_code)} on path: {shown(str(err_path))}"
-            + _partial_note(status, [(err_path, err_code)], operation, path, dest)
-            + _already_done(
-                operation,
-                done,
-                skipped_so_far,
-                dest_of=dest_of,
-                dest=dest,
-                failing=path,
-                landed=landed,
-            )
-            + ".",
+            then(
+                then(
+                    f"{operation} files failed: {_code_text(err_code)} on path: "
+                    f"{shown(str(err_path))}.",
+                    _partial_note(status, [(err_path, err_code)], operation, path, dest),
+                ),
+                _already_done(
+                    operation,
+                    done,
+                    skipped_so_far,
+                    dest_of=dest_of,
+                    dest=dest,
+                    failing=path,
+                    landed=landed,
+                ),
+            ),
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -606,19 +614,25 @@ def _copy_move_result(
         mapped = error_from_code(failed[0][1] if failed else 0, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: "
-            + "; ".join(f"{shown(p)} ({_code_text(code)})" for p, code in failed)
-            + _partial_note(status, failed, operation, path, dest)
-            + _already_done(
-                operation,
-                done,
-                skipped_so_far,
-                dest_of=dest_of,
-                dest=dest,
-                failing=path,
-                landed=landed,
-            )
-            + ".",
+            then(
+                then(
+                    # One a line when two or more failed (#693).
+                    path_list(
+                        f"{operation} files failed",
+                        [f"{shown(p)} ({_code_text(code)})" for p, code in failed],
+                    ),
+                    _partial_note(status, failed, operation, path, dest),
+                ),
+                _already_done(
+                    operation,
+                    done,
+                    skipped_so_far,
+                    dest_of=dest_of,
+                    dest=dest,
+                    failing=path,
+                    landed=landed,
+                ),
+            ),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -784,39 +798,38 @@ def _with_replaced_note(
     except (ValueError, KeyError, TypeError):
         return error
     past = _PAST_TENSE.get(operation, "processed")
-    clauses = []
-    if files:
-        clauses.append(f"these replaced what was already there: {', '.join(files)}")
-    if folders:
-        clauses.append(
-            "these merged into the folder(s) already there, replacing files with the same "
-            f"names: {', '.join(folders)}"
-        )
-    if other:
-        clauses.append(
-            "these met an item of the other kind (a file or a folder) under the same name, "
-            f"and what DSM did with it isn't known: {', '.join(other)}"
-        )
-    if unchecked:
-        clauses.append(
-            f"for these, whether anything was already there couldn't be checked: "
-            f"{', '.join(unchecked)}"
-        )
-    added = f"Of what was {past}, {'; '.join(clauses)}"
+    # One list per kind, each one a line when two or more (#693), after the list of what was
+    # done, which they're part of.
+    added = ""
+    for heading, names in (
+        ("Of those, these replaced what was already there", files),
+        (
+            "Of those, these merged into the folder(s) already there, replacing files with the "
+            "same names",
+            folders,
+        ),
+        (
+            "Of those, these met an item of the other kind (a file or a folder) under the same "
+            "name, and what DSM did with it isn't known",
+            other,
+        ),
+        ("Of those, for these, whether anything was already there couldn't be checked", unchecked),
+    ):
+        if names:
+            added = then(added, path_list(heading, names))
     if files or folders:
-        added += ". A file replaced this way may not be in the recycle bin"
+        added = then(added, "A file replaced this way may not be in the recycle bin.")
     # Right after the list of what was done, which this call wrote (_already_done), so a
-    # name holding ". Not started: " can't move it (pre-QA r6 on #623); otherwise at the end.
-    anchor = f"Already {past} before this failure: " + ", ".join(
-        where_it_went(q, went, dest) for q in done
+    # name holding "Not started: " can't move it (pre-QA r6 on #623); otherwise at the end.
+    anchor = path_list(
+        f"Already {past} before this failure", [where_it_went(q, went, dest) for q in done]
     )
     at = message.rfind(anchor)
     if at >= 0:
         end = at + len(anchor)
-        # What follows the list starts with its period; a message ending there gets one.
-        body["error"]["message"] = f"{message[:end]}. {added}{message[end:] or '.'}"
+        body["error"]["message"] = then(message[:end], added) + message[end:]
     else:
-        body["error"]["message"] = f"{_unstop(message)}. {added}."
+        body["error"]["message"] = then(sentence(message), added)
     return rewrapped_error(body)
 
 
@@ -1625,9 +1638,10 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
             )
         error_response(
             mapped.error_code,
-            "Delete files failed: "
-            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in failed)
-            + ".",
+            # One a line when two or more failed (#693).
+            path_list(
+                "Delete files failed", [f"{shown(p)} (DSM error {code})" for p, code in failed]
+            ),
             retryable=mapped.retryable,
             param="paths",
             value=path,

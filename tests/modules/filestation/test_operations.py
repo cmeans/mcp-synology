@@ -3921,7 +3921,7 @@ class TestDeleteFailurePartway:
         )
         assert json.loads(str(out))["error"]["message"] == (
             "Failed. Failed on: /video/x... Already deleted before this failure: "
-            "/video/notes.... Not started: /video/v1., /video/b."
+            "/video/notes....\nNot started:\n  /video/v1.\n  /video/b"
         )
 
     def test_an_error_that_isnt_the_envelope_is_kept(self) -> None:
@@ -6130,7 +6130,7 @@ async def test_a_task_starting_during_an_earlier_path_is_seen(
     message = json.loads(str(refused.value))["error"]["message"]
     # The mock answers every destination name as there, so /b/big replaced one (#620).
     assert message.endswith(
-        "Already moved before this failure: /b/big. Of what was moved, these replaced what was "
+        "Already moved before this failure: /b/big. Of those, these replaced what was "
         "already there: /b/big. A file replaced this way may not be in the recycle bin."
     ), message
     assert started == ["/b/big"]
@@ -7311,7 +7311,7 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/a.txt. Of what was copied, these "
+            "Already copied before this failure: /w/src/a.txt. Of those, these "
             "replaced what was already there: /w/src/a.txt. A file replaced this way may not "
             "be in the recycle bin."
         ), message
@@ -7368,8 +7368,8 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already restored before this failure: /s/#recycle/x/a (to /s/x). Of what was "
-            "restored, these replaced what was already there: /s/#recycle/x/a (to /s/x). A file "
+            "Already restored before this failure: /s/#recycle/x/a (to /s/x). Of those, "
+            "these replaced what was already there: /s/#recycle/x/a (to /s/x). A file "
             "replaced this way may not be in the recycle bin."
         ), message
 
@@ -7398,7 +7398,7 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/f. Of what was copied, these merged "
+            "Already copied before this failure: /w/src/f. Of those, these merged "
             "into the folder(s) already there, replacing files with the same names: /w/src/f. "
             "A file replaced this way may not be in the recycle bin."
         ), message
@@ -7441,10 +7441,10 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/a.txt, /w/src/f. Of what was copied, "
-            "these replaced what was already there: /w/src/a.txt; these merged into the "
-            "folder(s) already there, replacing files with the same names: /w/src/f. A file "
-            "replaced this way may not be in the recycle bin."
+            "Already copied before this failure:\n  /w/src/a.txt\n  /w/src/f\n"
+            "Of those, these replaced what was already there: /w/src/a.txt. "
+            "Of those, these merged into the folder(s) already there, replacing files with the "
+            "same names: /w/src/f. A file replaced this way may not be in the recycle bin."
         ), message
 
     @respx.mock
@@ -7527,10 +7527,11 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/f, /w/src/u.txt. Of what was copied, "
-            "these met an item of the other kind (a file or a folder) under the same name, and "
-            "what DSM did with it isn't known: /w/src/f; for these, whether anything was "
-            "already there couldn't be checked: /w/src/u.txt."
+            "Already copied before this failure:\n  /w/src/f\n  /w/src/u.txt\n"
+            "Of those, these met an item of the other kind (a file or a folder) under the same "
+            "name, and what DSM did with it isn't known: /w/src/f. "
+            "Of those, for these, whether anything was already there couldn't be checked: "
+            "/w/src/u.txt."
         ), message
         assert "recycle bin" not in message, message
 
@@ -7579,7 +7580,7 @@ class TestSourcesDsmWontShow:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert (
             # A name holding ", " is quoted in every list, so it can't read as two (#685).
-            "Already copied before this failure: '/w/src/a, b'. Of what was copied, these "
+            "Already copied before this failure: '/w/src/a, b'. Of those, these "
             "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
             "be in the recycle bin. Not started: "
         ) in message, message

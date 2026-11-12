@@ -39,7 +39,15 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import rewrapped_error
 from mcp_synology.modules.filestation import tasks as _tasks
-from mcp_synology.modules.filestation.helpers import _escaped_repr, dsm_str, shown
+from mcp_synology.modules.filestation.helpers import (
+    _escaped_repr,
+    dsm_str,
+    ends_in_list,
+    path_list,
+    sentence,
+    shown,
+    then,
+)
 from mcp_synology.modules.filestation.tasks import (
     STOP_WAIT,
     Handle,
@@ -573,8 +581,15 @@ async def batch_reply(adapter: TaskAdapter, batch: BatchOutcome, note: str = "")
                 f"{len(batch.items):,} item(s); the rest weren't started (listed last).\n"
                 + text
                 + note
-                + f"\nNot started: {', '.join(shown(x.source) for x in rest)}. Run {them} in "
-                "another call."
+                + "\n"
+                # One a line when two or more, the advice in the heading (#693).
+                + (
+                    f"Not started: {shown(rest[0].source)}. Run it in another call."
+                    if len(rest) == 1
+                    else path_list(
+                        f"Not started (run {them} in another call)", [shown(x.source) for x in rest]
+                    )
+                )
             )
             return text
         return text + note
@@ -725,11 +740,11 @@ def _with_progress(
     # ``_escaped_repr`` writes it.
     names_it = names_path(message, failed) or _escaped_repr(failed) in message
     if not names_it:
-        message = unstop(message) + f". Failed on: {shown(failed)}."
+        message = then(sentence(message), f"Failed on: {shown(failed)}.")
     details["param"] = "paths"
     details["value"] = failed
     if done:
-        message = unstop(message) + done + "."
+        message = then(sentence(message), done)
         # Something ran: the same call again would repeat or meet it, so only what's left can
         # be retried, after a check (#482; the maintainer's Q5 on #512).
         details["retryable"] = False
@@ -755,7 +770,10 @@ def _with_not_started(error: ToolError, rest: list[str]) -> ToolError:
         message = str(body["error"]["message"])
     except (ValueError, KeyError, TypeError):
         return error
-    body["error"]["message"] = unstop(message) + f". Not started: {', '.join(map(shown, rest))}."
+    # One a line when two or more (#693).
+    body["error"]["message"] = then(
+        sentence(message), path_list("Not started", [shown(p) for p in rest])
+    )
     return rewrapped_error(body)
 
 
@@ -782,12 +800,16 @@ def _with_stop(error: ToolError, outcome: ItemOutcome) -> ToolError:
     try:
         body = json.loads(str(error))
         details = body["error"]
-        message = str(details["message"]).removesuffix(".")
+        message = str(details["message"])
     except (ValueError, KeyError, TypeError):
         return error
-    # Only the message's own period goes: a path ending in a dot keeps it (`/s/report.`).
     says = _STOP_SAYS[outcome.stop].format(shown(outcome.item.source))
-    details["message"] = f"{message}; {says}."
+    if ends_in_list(message):
+        # After a list of lines, a sentence of its own (#693).
+        details["message"] = f"{message}\n{says[0].upper()}{says[1:]}."
+    else:
+        # Only the message's own period goes: a path ending in a dot keeps it (`/s/report.`).
+        details["message"] = f"{message.removesuffix('.')}; {says}."
     if outcome.handoff is not None:
         handle = str(outcome.handoff.handle)
         details["handle"] = handle
