@@ -1945,6 +1945,30 @@ class TestMoreShownSites:
         levels = depth + 4  # the parents from /video down to the path's own
         assert len(asked) <= 2 + math.ceil(math.log2(levels)), asked
 
+    @pytest.mark.parametrize("stalls", ["check", "walk"])
+    async def test_a_nas_that_stops_answering_ends_the_search(self, stalls: str) -> None:
+        """Pre-QA r3 on #517: a check that timed out let the search start and time out too,
+        twice the client's timeout, past claude.ai's 60 s. The transport error ends the call,
+        in the check and in its parent walk, and no search starts."""
+        import httpx
+
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Stalls(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                self.calls.append((method, kwargs.get("params") or {}))
+                if method == "getinfo":
+                    path = kwargs["params"]["path"]
+                    if stalls == "walk" and path.endswith("/child"):
+                        return {"files": [{"path": path, "code": 401}]}
+                    raise httpx.ReadTimeout("no answer")
+                return await super().request(api, method, **kwargs)
+
+        client = _Stalls(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(httpx.ReadTimeout):
+            await search_files(client, folder_path="/video/a/child", pattern="x")  # type: ignore[arg-type]
+        assert "start" not in [m for m, _ in client.calls]
+
     async def test_search_starts_when_the_check_cant_tell(self) -> None:
         """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
         from mcp_synology.modules.filestation.search import search_files

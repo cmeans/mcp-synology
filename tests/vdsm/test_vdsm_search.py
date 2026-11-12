@@ -145,7 +145,10 @@ class TestVdsmFolderChecks:
         error = self._error(exc)
         # getinfo answers 401 for it too; its parent is a file, so it can't exist.
         assert (error["code"], error["retryable"]) == ("not_found", False), error
-        assert error["message"].endswith(f": {dated_folder}/f0.txt is a file."), error
+        assert error["message"] == (
+            f"List files failed: {dated_folder}/f0.txt/{below} doesn't exist on the NAS: "
+            f"{dated_folder}/f0.txt is a file."
+        ), error
 
     @pytest.mark.parametrize("below", ["child", "x/y/child"])
     async def test_search_a_path_under_a_file(
@@ -159,4 +162,7 @@ class TestVdsmFolderChecks:
             await search_files(client, folder_path=f"{dated_folder}/f0.txt/{below}", pattern="x")
         error = self._error(exc)
         assert (error["code"], error["retryable"]) == ("not_found", False), error
-        assert error["message"].endswith(f": {dated_folder}/f0.txt is a file."), error
+        assert error["message"] == (
+            f"Search files failed: {dated_folder}/f0.txt/{below} doesn't exist on the NAS: "
+            f"{dated_folder}/f0.txt is a file."
+        ), error
