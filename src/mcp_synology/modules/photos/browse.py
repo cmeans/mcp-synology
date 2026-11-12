@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
+from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
@@ -278,16 +280,19 @@ async def _list(
         f = await ph.folder(folder)
         folder_id = int(f["id"])
         keys["folder"] = [folder_id]
-        described.append(str(f.get("name", "")) or "/")
+        # Quoted when it holds ", " (or padding, an invisible character): the title joins
+        # what was asked for with ", ", so a folder named "a, person X" could read as two (#695).
+        described.append(shown(str(f.get("name", "")) or "/"))
     if person is not None:
         p = await ph.person(person)
         # count_with_filter answers 120 without the policy (verified on both versions).
         keys["person"] = [int(p["id"])]
         keys["person_policy"] = "or"
-        described.append(f"person {p.get('name') or '(unnamed)'} ({p['id']})")
+        described.append(f"person {shown(str(p.get('name') or '(unnamed)'))} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        described.append(f'tag "{tag}"')
+        # JSON-quoted: a " inside a tag can't close it early (#695).
+        described.append(f"tag {json.dumps(tag, ensure_ascii=False)}")
         if tag_id is None:
             heading = _heading(ph, described, filters_text, _order(*sort))
             return (
@@ -333,7 +338,7 @@ def _heading(ph: Photos, described: list[str], filters: list[str], order: str) -
     """``Photos in /Trips/2024 (personal space; newest first)``, as the spec shows."""
     if not described:
         lead = "All photos and videos"
-    elif described[0].startswith("/"):
+    elif described[0].lstrip("'\"").startswith("/"):  # a folder, quoted or not (#695)
         lead = f"Photos in {', '.join(described)}"
     else:
         lead = f"Photos: {', '.join(described)}"

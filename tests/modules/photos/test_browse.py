@@ -105,6 +105,35 @@ class TestListPhotosRouting:
         assert 'Photos: tag "MCP-SPEC-TAG" (personal space; 2024-01-01 to 2024-12-31' in out
 
     @respx.mock
+    async def test_the_title_quotes_names_holding_its_separator(self) -> None:
+        """#695: the title joins the folder, person and tag with ", ", so each is quoted when
+        it holds ", " (a tag's quotes JSON-escaped), and none can read as another."""
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/a, person X (3)", "parent": 3}}
+        )
+        person = captured("person-get", PEOPLE)
+        person["list"][0]["name"] = 'Ann, tag "y"'
+        fake.on("SYNO.Foto.Browse.Person", "get", 1, person)
+        tags = captured("tag-list")
+        tags["list"][0]["name"] = 'x", person Bob'
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags)
+        fake.on(ITEM, "list_with_filter", 2, {"list": []})
+        fake.on(ITEM, "count_with_filter", 2, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(
+                client,
+                folder_path="/a, person X (3)",
+                person_id=12,
+                tag='x", person Bob',
+            )
+        head = out.splitlines()[0]
+        assert head.startswith(
+            'Photos in \'/a, person X (3)\', person \'Ann, tag "y"\' (12), tag "x\\", person Bob" ('
+        ), head
+
+    @respx.mock
     async def test_person_sends_policy(self) -> None:
         fake = _folders(FakePhotos())
         fake.on("SYNO.Foto.Browse.Person", "get", 1, captured("person-get", PEOPLE))
