@@ -1854,10 +1854,154 @@ class TestMoreShownSites:
     async def test_search_lost_task(self) -> None:
         from mcp_synology.modules.filestation.search import search_files
 
-        client = _FakeClient(methods={"start": {"taskid": "T1"}, "list": {"finished": True}})
+        client = _FakeClient(
+            existing={PADDED}, methods={"start": {"taskid": "T1"}, "list": {"finished": True}}
+        )
         with pytest.raises(ToolError) as exc:
             await search_files(client, folder_path=PADDED, pattern="x")  # type: ignore[arg-type]
         assert f"lost the search task for {QUOTED}" in _error(exc)["message"]
+
+    async def test_search_a_missing_folder(self) -> None:
+        """#517: DSM answered 600 "access denied" or a lost task; it's not_found, naming the
+        path as given (padded, quoted), and nothing is started."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        client = _FakeClient(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=PADDED, pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("not_found", False)
+        assert error["message"] == f"Search files failed: {QUOTED} doesn't exist on the NAS."
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_search_a_file(self) -> None:
+        """#517: DSM lost the task, and the reply said to retry; it's invalid_parameter."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _File(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    return {"files": [{"path": "/video/f.txt", "isdir": False}]}
+                return await super().request(api, method, **kwargs)
+
+        client = _File(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path="/video/f.txt", pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("invalid_parameter", False)
+        assert "/video/f.txt is a file, not a folder" in error["message"]
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_search_a_path_under_a_file_names_the_file(self) -> None:
+        """#517 (pre-QA r1): getinfo answers 401 for a path under a file; the nearest parent is
+        the file, so the path can't exist, and the reply names the file."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _UnderFile(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    path = kwargs["params"]["path"]
+                    if path == "/video/f.txt":
+                        return {"files": [{"path": path, "isdir": False}]}
+                    return {"files": [{"path": path, "code": 401}]}
+                return await super().request(api, method, **kwargs)
+
+        client = _UnderFile(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path="/video/f.txt/x/y", pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            "Search files failed: /video/f.txt/x/y doesn't exist on the NAS: "
+            "/video/f.txt is a file."
+        )
+        assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize("depth", [1, 2, 7, 100])
+    async def test_the_file_above_is_found_in_few_requests(self, depth: int) -> None:
+        """Pre-QA r2 on #517: one getinfo per level let a deep path outlast a client's 60 s.
+        Folders read above the file and 401 below it, so halving finds it in about
+        log2(depth) requests."""
+        import math
+
+        from mcp_synology.modules.filestation.helpers import folder_kind
+
+        file = "/video/a/b/f.txt"
+        below = "/".join(f"d{i}" for i in range(depth))
+        asked: list[str] = []
+
+        class _Deep(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                path = kwargs["params"]["path"]
+                asked.append(path)
+                if path == file:
+                    return {"files": [{"path": path, "isdir": False}]}
+                if path.startswith(file + "/"):
+                    return {"files": [{"path": path, "code": 401}]}
+                return {"files": [{"path": path, "isdir": True}]}
+
+        kind = await folder_kind(_Deep(), f"{file}/{below}")  # type: ignore[arg-type]
+        assert kind is not None and (kind.kind, kind.under_file) == ("missing", file)
+        levels = depth + 4  # the parents from /video down to the path's own
+        assert len(asked) <= 2 + math.ceil(math.log2(levels)), asked
+        assert "/video" not in asked, asked  # a share is never a file (pre-QA r5, r6)
+
+    async def test_a_file_in_the_share_takes_two_requests(self) -> None:
+        """Pre-QA r6 on #517: the walk starts below the share, so a file directly in it is
+        found with the path's own getinfo and the file's."""
+        from mcp_synology.modules.filestation.helpers import folder_kind
+
+        asked: list[str] = []
+
+        class _InShare(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                path = kwargs["params"]["path"]
+                asked.append(path)
+                if path == "/video/f.txt":
+                    return {"files": [{"path": path, "isdir": False}]}
+                return {"files": [{"path": path, "code": 401}]}
+
+        kind = await folder_kind(_InShare(), "/video/f.txt/x")  # type: ignore[arg-type]
+        assert kind is not None and kind.under_file == "/video/f.txt"
+        assert asked == ["/video/f.txt/x", "/video/f.txt"], asked
+
+    @pytest.mark.parametrize("stalls", ["check", "walk"])
+    async def test_a_nas_that_stops_answering_ends_the_search(self, stalls: str) -> None:
+        """Pre-QA r3 on #517: a check that timed out let the search start and time out too,
+        twice the client's timeout, past claude.ai's 60 s. The transport error ends the call,
+        in the check and in its parent walk, and no search starts."""
+        import httpx
+
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Stalls(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                self.calls.append((method, kwargs.get("params") or {}))
+                if method == "getinfo":
+                    path = kwargs["params"]["path"]
+                    if stalls == "walk" and path.endswith("/child"):
+                        return {"files": [{"path": path, "code": 401}]}
+                    raise httpx.ReadTimeout("no answer")
+                return await super().request(api, method, **kwargs)
+
+        client = _Stalls(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(httpx.ReadTimeout):
+            await search_files(client, folder_path="/video/a/child", pattern="x")  # type: ignore[arg-type]
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_search_starts_when_the_check_cant_tell(self) -> None:
+        """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        client = _FakeClient(
+            codes={"/video/x": 407},
+            methods={
+                "start": {"taskid": "T1"},
+                "list": {"finished": True, "total": 0, "files": []},
+            },
+        )
+        await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        assert "start" in [m for m, _ in client.calls]
 
     async def test_upload_already_exists(self, tmp_path: Any) -> None:
         from mcp_synology.modules.filestation.transfer import upload_file
