@@ -895,6 +895,35 @@ class TestUpload:
         assert lines[-2:] == [f"  {paths[2]}", f"  {paths[3]}"]
 
     @respx.mock
+    async def test_the_not_tried_list_quotes_a_padded_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r5 on #691: the list to send again wrote each path raw, so a trailing space
+        or a tab was lost on the way back; it's quoted as the rows are."""
+        from mcp_synology.modules.photos import transfer
+
+        names = ("a.jpg", "c.jpg ", "d\tx.jpg")
+        for name in names:
+            (tmp_path / name).write_bytes(b"x")
+        clock = [100.0]
+        monkeypatch.setattr(transfer.time, "monotonic", lambda: clock[0])
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            clock[0] += 40
+            return httpx.Response(200, json={"success": True, "data": {"action": "new", "id": 41}})
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        paths = [str(tmp_path / n) for n in names]
+        async with client:
+            out = await upload_photos(
+                client, local_paths=paths, allowed_roots=[tmp_path], budget=30, folder_path="/"
+            )
+        assert out.splitlines()[-2:] == [f"  {paths[1]!r}", f"  {paths[2]!r}"], out
+
+    @respx.mock
     @pytest.mark.parametrize(
         ("budget", "on_duplicate", "uploaded", "footer"),
         [

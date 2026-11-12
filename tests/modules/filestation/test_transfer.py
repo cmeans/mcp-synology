@@ -1916,6 +1916,9 @@ class TestLocalPathsShown:
         assert shown("'a.jpg'") == "\"'a.jpg'\""
         assert shown('say "hi"') == "'say \"hi\"'"
         assert shown("/s/it's here") == "/s/it's here"  # a quote inside reads as part of it
+        # Backticks and typographic quotes read as quoting too (pre-QA r5).
+        for wrapped in ("`a.jpg`", "\u2018a.jpg\u2019", "\u201ca.jpg\u201d"):
+            assert shown(wrapped) == repr(wrapped), wrapped
 
     @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
     @pytest.mark.parametrize(
@@ -2032,7 +2035,7 @@ class TestLocalPathsShown:
 
         root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
         local = {"local_path", "local_dir", "dest_file", "dest_folder", "local", "value", "path"}
-        allowed = {("photos", "upload_photos", "value")}
+        allowed: set[tuple[str, str, str]] = set()
 
         def a_name(arg: ast.expr) -> bool:
             if isinstance(arg, ast.Name):
@@ -2072,6 +2075,9 @@ class TestLocalPathsShown:
                             found.add((module, func.name, ast.unparse(side)))
                     if not isinstance(node, ast.JoinedStr):
                         continue
+                    texts = [v.value for v in node.values if isinstance(v, ast.Constant)]
+                    if texts and all(t == "/" for t in texts):
+                        continue  # builds a NAS path (f"{dest}/{name}"), not a message
                     for part in node.values:
                         if not isinstance(part, ast.FormattedValue):
                             continue
@@ -2089,6 +2095,6 @@ class TestLocalPathsShown:
                         # A local path's name anywhere in the expression: bare, an attribute,
                         # wrapped in a call (str(local_dir), local_dir.as_posix()), or !r.
                         names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
-                        if names & {*local, "name"}:
+                        if names & {*local, "name", "effective_name"}:
                             found.add((module, func.name, ast.unparse(value)))
         assert found <= allowed, sorted(found - allowed)

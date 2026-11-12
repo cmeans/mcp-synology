@@ -692,9 +692,14 @@ def shown(path: str) -> str:
     return path
 
 
+# Marks a model reads as quoting or code: straight and typographic quotes, a backtick
+# (pre-QA r5 on #691).
+_QUOTES = ("'", '"', "`", "\u2018", "\u2019", "\u201c", "\u201d")
+
+
 def _edge_quote(text: str) -> bool:
     """``text`` starts or ends with a quote, so written as is it could read as quoted."""
-    return text.startswith(("'", '"')) or text.endswith(("'", '"'))
+    return text.startswith(_QUOTES) or text.endswith(_QUOTES)
 
 
 def _needs_escapes(part: str) -> bool:

@@ -648,5 +648,7 @@ async def upload_photos(
             "not tried. To continue, call upload_photos again with the same arguments and "
             f"only these local_paths ({why}):"
         )
-        lines += [f"  {value}" for value in left]
+        # Quoted as the rows above are, so padding or a tab survives being sent again (pre-QA
+        # r5 on #691); LOCAL MACHINE says to pass what's inside the quotes.
+        lines += [f"  {shown_local(value)}" for value in left]
     return "\n".join(lines)
