@@ -57,9 +57,12 @@ from mcp_synology.modules.filestation.helpers import (
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
+    Plan,
     ResolvedPath,
     bin_index,
     bin_item_origin,
+    plan_deletes,
+    plan_landings,
     refuse_bad_name,
     resolve_bin_items,
 )
@@ -236,10 +239,14 @@ async def copy_files(
     timeout: float = 120.0,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
+    paths_arg: Sequence[str] | None = None,
 ) -> str:
-    """Copy files or folders to a destination."""
+    """Copy files or folders to a destination. ``paths_arg``: the caller's own text for
+    ``paths``, which the landing checks' refusals quote (#684)."""
     text, _ = await _copy_move(
         client,
+        tool="copy_files",
+        given=paths_arg if paths_arg is not None else paths,
         paths=paths,
         dest_folder=dest_folder,
         overwrite=overwrite,
@@ -261,11 +268,14 @@ async def move_files(
     timeout: float = 120.0,
     records: TaskRecords | None = None,
     on_progress: ProgressCallback | None = None,
+    paths_arg: Sequence[str] | None = None,
 ) -> str:
     """Move files or folders to a new location (a share root, a whole bin or a user's home
-    folder is refused by `resolve_paths`, #479, #510)."""
+    folder is refused by `resolve_paths`, #479, #510). ``paths_arg``: as `copy_files`'."""
     text, _ = await _copy_move(
         client,
+        tool="move_files",
+        given=paths_arg if paths_arg is not None else paths,
         paths=paths,
         dest_folder=dest_folder,
         overwrite=overwrite,
@@ -873,6 +883,9 @@ async def _copy_move(
     on_progress: ProgressCallback | None = None,
     fresh: Sequence[str] = (),
     share_name: str = "",
+    plan: Plan | None = None,
+    tool: str = "",
+    given: Sequence[str] = (),
 ) -> tuple[str, bool]:
     """Shared implementation for copy and move operations, and a restore to one place.
 
@@ -888,10 +901,19 @@ async def _copy_move(
     Returns ``(text, handed_off)``. When a path's task outlives ``timeout`` it is
     handed off (#245): the text is the handoff reply, and the remaining paths are listed as not
     started. ``fresh``: folders this call re-created, so nothing in them was already there.
+    ``plan``: a restore's, which checked every item's landing already; or, with none, this
+    checks them before any DSM request, as ``tool`` with the caller's own text ``given`` (which a
+    refusal quotes): one or the other, never both (#684).
     """
     _refuse_no_paths(operation, paths)
-    normalized = _collapse_overlaps([normalize_path(p) for p in paths], drop_nested=remove_src)
     dest = normalize_path(dest_folder)
+    sources = [normalize_path(p) for p in paths]
+    if plan is None:
+        assert tool and given, "_copy_move: a plan, or the tool and the caller's text"
+        plan = plan_landings(tool, given, sources, [dest] * len(sources), overwrite=overwrite)
+    else:
+        assert not tool and not given, "_copy_move: a plan, or the tool and its text, not both"
+    normalized = _collapse_overlaps(sources, drop_nested=remove_src)
     items = [Item(p, dest) for p in normalized]
     adapter = CopyMoveAdapter(
         client,
@@ -905,7 +927,13 @@ async def _copy_move(
         share_name=share_name,
     )
     outcome = await run_batch(
-        client, adapter, items, budget=Budget(timeout), records=records, on_progress=on_progress
+        client,
+        adapter,
+        plan,
+        items,
+        budget=Budget(timeout),
+        records=records,
+        on_progress=on_progress,
     )
     return await batch_reply(adapter, outcome), outcome.last is not None
 
@@ -1648,7 +1676,10 @@ async def delete_files(
     and trivially correct.
     """
     _refuse_no_paths("Delete", paths)
-    normalized = _collapse_overlaps([normalize_path(p) for p in paths])
+    # A delete lands nowhere: its plan only says which sources the batch may run (#684).
+    sources = [normalize_path(p) for p in paths]
+    plan = plan_deletes(sources)
+    normalized = _collapse_overlaps(sources)
     adapter = DeleteAdapter(
         client,
         normalized,
@@ -1658,7 +1689,13 @@ async def delete_files(
     )
     items = [Item(p, None) for p in normalized]
     outcome = await run_batch(
-        client, adapter, items, budget=Budget(timeout), records=records, on_progress=on_progress
+        client,
+        adapter,
+        plan,
+        items,
+        budget=Budget(timeout),
+        records=records,
+        on_progress=on_progress,
     )
     return await batch_reply(adapter, outcome)
 
@@ -1896,6 +1933,11 @@ async def restore_from_recycle_bin(
     destinations, the items after the handed-off one are listed as not started.
     """
     share_name = share.strip("/").split("/")[0]
+    # Normalized once, so the plan's landings and the items' are the same text (pre-QA r2 on
+    # #684: `/video/Restored/` planned one landing and ran another).
+    # An empty one is no destination (each item goes back where it was), not the root (pre-QA
+    # r3 on #694: normalize_path("") is "/").
+    dest_folder = ResolvedPath(normalize_path(dest_folder)) if dest_folder else None
     # One progress token per tool call, shared by every destination's task (#245).
     on_progress = MonotonicProgress.wrap(on_progress)
 
@@ -1909,6 +1951,15 @@ async def restore_from_recycle_bin(
         else:
             # /video/#recycle/Shows/Ep1.mkv -> /video/Shows
             restore_destinations.append(bin_item_origin(share_name, item))
+    # Before any DSM request, as the handler ran them (#684): the refusals' order is kept.
+    plan = plan_landings(
+        "restore_from_recycle_bin",
+        paths,
+        full_paths,
+        restore_destinations,
+        overwrite=overwrite,
+        dest_given=dest_folder is not None,
+    )
 
     await _refuse_missing_sources(client, "Restore", full_paths, paths)
     destinations = [dest_folder or d for d in restore_destinations]
@@ -1972,6 +2023,7 @@ async def restore_from_recycle_bin(
             outcome = await run_batch(
                 client,
                 adapter,
+                plan,
                 items,
                 budget=Budget(timeout),
                 records=records,
@@ -1983,6 +2035,7 @@ async def restore_from_recycle_bin(
         actual_dest = dest_folder or restore_destinations[0]
         result, _ = await _copy_move(
             client,
+            plan=plan,
             paths=full_paths,
             dest_folder=actual_dest,
             overwrite=overwrite,

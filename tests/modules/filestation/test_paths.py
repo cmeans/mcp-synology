@@ -10,9 +10,11 @@ Three layers:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
 import json
+from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin
 from unittest.mock import AsyncMock
 
@@ -1642,6 +1644,28 @@ async def _tool(tool: str, client: _FakeClient | None = None, **settings: Any) -
 
 
 class TestToolWiring:
+    @pytest.mark.parametrize("tool", ["copy_files", "move_files"])
+    async def test_a_landing_refusal_quotes_the_callers_own_text(self, tool: str) -> None:
+        """#684 (pre-QA r2): the checks run in the operation, and still quote the caller's
+        text, threaded through ``paths_arg``, not the resolved path."""
+        fn = await _tool(tool)
+        with pytest.raises(ToolError) as exc:
+            await fn(ctx=_fake_mcp_ctx(), paths=["video/sub/#recycle"], dest_folder="/video")
+        error = _error(exc)
+        assert "'video/sub/#recycle'" in error["message"], error
+        assert error["value"] == "video/sub/#recycle", error
+
+    async def test_a_restores_landing_refusal_quotes_the_callers_own_text(self) -> None:
+        """#694 (pre-QA r3): a restore's landing refusal quotes the item as given."""
+        fn = await _tool("restore_from_recycle_bin", _FakeClient({"/video/#recycle/sub/#recycle"}))
+        with pytest.raises(ToolError) as exc:
+            await fn(
+                ctx=_fake_mcp_ctx(), share="video", paths=["sub/#recycle"], dest_folder="/video"
+            )
+        error = _error(exc)
+        assert "'sub/#recycle'" in error["message"], error
+        assert error["value"] == "sub/#recycle", error
+
     async def test_rename_to_recycle_at_a_shares_top(self) -> None:
         fn = await _tool("rename")
         with pytest.raises(ToolError) as exc:
@@ -2320,3 +2344,84 @@ def test_a_forging_path_refusal_keeps_its_callers_advice() -> None:
     with pytest.raises(ToolError) as exc:
         resolve_bin_items("video", ["Shows/a\nb"], "paths")
     assert "as list_recycle_bin shows it" in _error(exc)["suggestion"]
+
+
+class TestPlanIsTheOnlyWayIntoABatch:
+    """#684 (#512's Q2b): `run_batch` takes a `Plan`, which only `plan_landings` builds, after
+    `refuse_planted_bin` and `refuse_same_names` passed. Only a delete, which lands nowhere,
+    plans without landings."""
+
+    SRC = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
+
+    def _calls(self, name: str) -> list[tuple[Path, ast.Call]]:
+        found = []
+        for file in self.SRC.rglob("*.py"):
+            for node in ast.walk(ast.parse(file.read_text())):
+                if isinstance(node, ast.Call):
+                    func = node.func
+                    called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+                    if called == name:
+                        found.append((file, node))
+        return found
+
+    def test_a_plan_is_built_only_in_paths_py(self) -> None:
+        files = {file.name for file, _ in self._calls("Plan")}
+        assert files <= {"paths.py"}, files
+
+    def test_only_a_delete_plans_without_landings(self) -> None:
+        """`plan_landings` requires landings (mypy holds it), and only `delete_files` calls
+        `plan_deletes`."""
+        callers = {
+            (file.name, self._enclosing(file, call)) for file, call in self._calls("plan_deletes")
+        }
+        assert callers == {("operations.py", "delete_files")}, callers
+
+    def _enclosing(self, file: Path, call: ast.Call) -> str:
+        """The top-level function holding ``call`` (by its line)."""
+        functions = (ast.AsyncFunctionDef, ast.FunctionDef)
+        for node in ast.parse(file.read_text()).body:
+            lines = {n.lineno for n in ast.walk(node) if isinstance(n, ast.Call)}
+            if isinstance(node, functions) and call.lineno in lines:
+                return node.name
+        return ""
+
+    def test_a_plan_cant_be_built_by_hand_or_changed(self) -> None:
+        from mcp_synology.modules.filestation.paths import Plan, plan_deletes
+
+        with pytest.raises(TypeError, match="only by paths.plan_landings"):
+            Plan(frozenset({("/s/a", None)}), object())
+        plan = plan_deletes(["/s/a"])
+        with pytest.raises(AttributeError):
+            plan.runs = frozenset()  # type: ignore[attr-defined]
+
+    async def test_run_batch_refuses_an_item_landing_elsewhere(self) -> None:
+        """Pre-QA r1: the plan holds each source with its landing, so a source checked for one
+        folder can't run to another."""
+        from mcp_synology.modules.filestation.batch import Budget, Item, run_batch
+        from mcp_synology.modules.filestation.paths import plan_landings
+
+        plan = plan_landings("copy_files", ["/s/a"], ["/s/a"], ["/s/d"], overwrite=False)
+        with pytest.raises(RuntimeError, match="didn't check"):
+            await run_batch(
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+                plan,
+                [Item("/s/a", "/s/other")],
+                budget=Budget(1.0),
+                records=None,
+            )
+
+    async def test_run_batch_refuses_an_item_the_plan_didnt_check(self) -> None:
+        from mcp_synology.modules.filestation.batch import Budget, Item, run_batch
+        from mcp_synology.modules.filestation.paths import plan_deletes
+
+        plan = plan_deletes(["/s/a"])
+        with pytest.raises(RuntimeError, match="didn't check"):
+            await run_batch(
+                None,  # type: ignore[arg-type]
+                None,  # type: ignore[arg-type]
+                plan,
+                [Item("/s/a", None), Item("/s/b", None)],
+                budget=Budget(1.0),
+                records=None,
+            )

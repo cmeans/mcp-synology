@@ -1,5 +1,6 @@
 """What DSM does when two sources share a landing: the facts `refuse_same_names` and the skip
-report rest on (#495, #580). They go through the operations, behind the tool layer's refusal.
+report rest on (#495, #580). They go through the operations with the landing checks skipped
+(the fixture below).
 
 Run: ``uv run pytest tests/vdsm -m vdsm --no-cov --dsm-version 7.2.2 -k same_names``
 """
@@ -29,6 +30,18 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 pytestmark = pytest.mark.vdsm
+
+
+@pytest.fixture(autouse=True)
+def _behind_the_landing_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests probe what DSM does when sources share a landing, so they run the
+    operations with the two landing checks skipped. Since #684 they run in the operation's
+    plan (`paths.plan_landings`), not in the tool layer, so a plain call would be refused first.
+    The plan still holds every source and landing, so `run_batch`'s check holds."""
+    from mcp_synology.modules.filestation import paths
+
+    monkeypatch.setattr(paths, "refuse_same_names", lambda *args, **kwargs: None)
+    monkeypatch.setattr(paths, "refuse_planted_bin", lambda *args, **kwargs: None)
 
 
 class Tree:

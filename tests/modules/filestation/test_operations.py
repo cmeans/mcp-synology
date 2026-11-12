@@ -1318,6 +1318,21 @@ class TestRestoreFromRecycleBin:
         assert "[+]" in result
 
     @respx.mock
+    @pytest.mark.parametrize("dest", ["/video/Restored/", "video/Restored", ""])
+    async def test_restore_to_a_dest_written_another_way(
+        self, mock_client: DsmClient, dest: str
+    ) -> None:
+        """Pre-QA r2 on #684: the plan and the items agree on the destination's spelling."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
+        result = await restore_from_recycle_bin(
+            mock_client,
+            share="video",
+            paths=["old_ep.mkv"],
+            dest_folder=dest,  # type: ignore[arg-type]
+        )
+        assert "[+]" in result
+
+    @respx.mock
     async def test_restore_full_path(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_async_task_side_effect())
         result = await restore_from_recycle_bin(
@@ -6451,15 +6466,18 @@ async def test_a_restore_to_several_places_keeps_its_record_until_it_returns(
 
 @respx.mock
 async def test_a_calls_own_finished_task_isnt_a_clash_for_its_next_source(
-    mock_client: DsmClient, no_poll_wait: None
+    mock_client: DsmClient, no_poll_wait: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """vdsm on #597: two sources of one call landing one name were refused by its own record."""
     calls: list[dict[str, str]] = []
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
         side_effect=_dsm_with_running(_a_task_landing("/none"), calls)
     )
-    # The operation itself, as vdsm's probes call it: refuse_same_names runs before it, in the
-    # tool's path check, and isn't this check's job.
+    # The record check alone: refuse_same_names (in the operation's plan since #684) refuses
+    # this call first, so it's skipped here to reach the record.
+    from mcp_synology.modules.filestation import paths
+
+    monkeypatch.setattr(paths, "refuse_same_names", lambda *args, **kwargs: None)
     await move_files(mock_client, paths=["/a/n", "/b/n"], dest_folder="/d", overwrite=True)
     assert [c["path"] for c in calls if c.get("method") == "start"] == ["/a/n", "/b/n"]
 
@@ -6943,6 +6961,8 @@ class TestOverwriteNoteEdges:
         )
         text, _ = await _copy_move(
             mock_client,
+            tool="restore_from_recycle_bin",
+            given=["/w/src/f"],
             paths=["/w/src/f"],
             dest_folder="/w/dst",
             overwrite=True,

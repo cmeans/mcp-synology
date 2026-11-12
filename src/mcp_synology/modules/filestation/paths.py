@@ -63,6 +63,49 @@ class ResolvedPath(str):
     __slots__ = ()
 
 
+_PLAN_TOKEN = object()
+
+
+class Plan:
+    """What a batch may run (#512's Q2b, #684): each checked source with where it lands
+    (None for a delete). Built only by `plan_landings` (after `refuse_planted_bin` and
+    `refuse_same_names` passed) or `plan_deletes`, and the only thing `batch.run_batch` takes,
+    which refuses an item whose source and landing the plan doesn't hold."""
+
+    __slots__ = ("_runs",)
+
+    def __init__(self, runs: frozenset[tuple[str, str | None]], token: object) -> None:
+        if token is not _PLAN_TOKEN:
+            raise TypeError("A Plan is built only by paths.plan_landings or paths.plan_deletes")
+        self._runs = runs
+
+    def allows(self, source: str, dest: str | None) -> bool:
+        """``source`` landing at ``dest`` (None for a delete) is one this plan checked."""
+        return (source, dest) in self._runs
+
+
+def plan_landings(
+    tool: str,
+    given: Sequence[str],
+    resolved: Sequence[str],
+    landings: Sequence[str],
+    *,
+    overwrite: bool,
+    dest_given: bool = True,
+) -> Plan:
+    """Check where each of ``resolved`` lands (``landings``, one per source) and return the
+    `Plan` a copy, move or restore batch runs. Run before any DSM request, so a refusal comes
+    where it always did: ``given`` are the caller's own values, quoted in it."""
+    refuse_planted_bin(tool, given, resolved, landings)
+    refuse_same_names(tool, given, resolved, landings, overwrite=overwrite, dest_given=dest_given)
+    return Plan(frozenset(zip(resolved, landings, strict=True)), _PLAN_TOKEN)
+
+
+def plan_deletes(resolved: Sequence[str]) -> Plan:
+    """The `Plan` of a delete, which lands nowhere, so it has no landing checks."""
+    return Plan(frozenset((path, None) for path in resolved), _PLAN_TOKEN)
+
+
 class PathRole(enum.Enum):
     """What a path argument may name. The structural rules live here, not in each tool."""
 
@@ -96,10 +139,10 @@ PATH_PARAMS: dict[str, dict[str, PathRole]] = {
 # bin-relative items (`resolve_bin_items`).
 NAME_PARAMS: dict[str, str] = {"rename": "new_name", "upload_file": "filename"}
 BIN_ITEM_PARAMS: dict[str, str] = {"restore_from_recycle_bin": "paths"}
-# Tools that put sources into a destination; each calls `refuse_planted_bin` (a source named
+# Tools that put sources into a destination; each runs `refuse_planted_bin` (a source named
 # `#recycle` landing where it would be a bin) and `refuse_same_names` (two sources replacing
-# each other). test_paths.py runs each through both, and fails if a tool with sources and a
-# DEST isn't listed here.
+# each other) through `plan_landings`, first thing in its operation (#684). test_paths.py runs
+# each through both, and fails if a tool with sources and a DEST isn't listed here.
 PLANTED_BIN_TOOLS: frozenset[str] = frozenset(
     {"copy_files", "move_files", "restore_from_recycle_bin"}
 )

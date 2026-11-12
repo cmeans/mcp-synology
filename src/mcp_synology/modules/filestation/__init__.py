@@ -347,10 +347,7 @@ def register(ctx: "RegisterContext") -> None:
         restore_from_recycle_bin,
     )
     from mcp_synology.modules.filestation.paths import (
-        bin_item_origin,
-        refuse_planted_bin,
         refuse_restore_into_a_bin,
-        refuse_same_names,
         resolve_bin_items,
         resolve_paths,
     )
@@ -942,14 +939,12 @@ def register(ctx: "RegisterContext") -> None:
             [dest] = await resolve_paths(
                 client, known_shares, "copy_files", "dest_folder", [dest_folder]
             )
-            refuse_planted_bin("copy_files", paths, sources, [dest] * len(sources))
-            refuse_same_names(
-                "copy_files", paths, sources, [dest] * len(sources), overwrite=overwrite
-            )
+            # The landing checks run first thing in the operation, on the same lists (#684).
             return _reply(
                 await copy_files(
                     client,
                     paths=sources,
+                    paths_arg=paths,
                     dest_folder=dest,
                     overwrite=overwrite,
                     timeout=copy_move_wait,
@@ -989,14 +984,12 @@ def register(ctx: "RegisterContext") -> None:
             [dest] = await resolve_paths(
                 client, known_shares, "move_files", "dest_folder", [dest_folder]
             )
-            refuse_planted_bin("move_files", paths, sources, [dest] * len(sources))
-            refuse_same_names(
-                "move_files", paths, sources, [dest] * len(sources), overwrite=overwrite
-            )
+            # The landing checks run first thing in the operation, on the same lists (#684).
             return _reply(
                 await move_files(
                     client,
                     paths=sources,
+                    paths_arg=paths,
                     dest_folder=dest,
                     overwrite=overwrite,
                     timeout=copy_move_wait,
@@ -1216,17 +1209,8 @@ def register(ctx: "RegisterContext") -> None:
                 else None
             )
             refuse_restore_into_a_bin(paths, items, bin_share.strip("/"), dest, dest_folder or None)
-            # Each item goes to dest, or back to the folder it was deleted from.
-            landings = [dest or bin_item_origin(bin_share.strip("/"), item) for item in items]
-            refuse_planted_bin("restore_from_recycle_bin", paths, items, landings)
-            refuse_same_names(
-                "restore_from_recycle_bin",
-                paths,
-                items,
-                landings,
-                overwrite=overwrite,
-                dest_given=dest is not None,
-            )
+            # The landing checks run first thing in the operation, each item to dest or back to
+            # the folder it was deleted from (#684).
             return _reply(
                 await restore_from_recycle_bin(
                     client,
