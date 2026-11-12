@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NoReturn
 
@@ -16,7 +17,14 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError, error_from_code
+from mcp_synology.core.errors import (
+    AuthenticationError,
+    DsmHttpError,
+    DsmReplyError,
+    ErrorCode,
+    SynologyError,
+    error_from_code,
+)
 from mcp_synology.core.formatting import (
     ESCAPED_NAME_ADVICE,
     RGI_FLAG_TAGS,
@@ -1143,6 +1151,96 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
             return False
         if isinstance(entry.get("isdir"), bool):
             return True
+    return None
+
+
+# What a NAS that doesn't answer raises from a GET request (#517, #282): it ends the call.
+# httpx's own transport error (timeouts included), or a proxy's error status or a page that
+# isn't DSM's (`DsmHttpError`, `DsmReplyError`). `DsmTimeoutError` and `DsmUnavailableError`
+# come only from the POST helpers, which these checks don't use.
+_NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+
+
+def _files(data: Any) -> list[dict[str, Any]]:
+    """``getinfo``'s ``files`` entries that are objects; nothing for a malformed reply, which
+    then reads as "can't tell" (pre-QA r5 on #517)."""
+    files = data.get("files") if isinstance(data, dict) else None
+    return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
+
+
+@dataclass(frozen=True)
+class FolderKind:
+    """What `folder_kind` found: ``kind`` is ``"folder"``, ``"file"`` or ``"missing"``;
+    ``under_file`` is the file that makes a missing path impossible, for a path under a file."""
+
+    kind: str
+    under_file: str | None = None
+
+
+async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
+    """One ``getinfo``: a folder, a file or a missing path (DSM's 408 entry), or None when the
+    answer shows none of these (another code, such as 407, or no entry) or DSM answers the
+    request with an error code: a caller then lets DSM's own answer stand (#517).
+
+    A NAS that doesn't answer ends the call, since the request after the check would wait as
+    long again, past a client's 60 s (pre-QA r3): a transport error or timeout raises, as in
+    `get_dir_size`'s pre-check, and so does a proxy's error status or a reply that isn't DSM's
+    (`DsmHttpError`, `DsmReplyError`), which is how a proxy reports the same stall (#282)."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    try:
+        data = await client.request(
+            "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+        )
+    except _NO_ANSWER:
+        raise
+    except SynologyError as e:
+        logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
+        return None
+    for entry in _files(data):
+        if entry.get("code") == 408:
+            return FolderKind("missing")
+        if entry.get("code") == 401:
+            # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm
+            # 7.1 to 7.4.1): a file among its parents means it can't exist.
+            blocker = await _file_above(client, path, version)
+            return FolderKind("missing", blocker) if blocker else None
+        if isinstance(entry.get("isdir"), bool):
+            return FolderKind("folder" if entry["isdir"] else "file")
+    return None
+
+
+async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
+    """The file among ``path``'s parents, when one is; None when none is found or DSM answers
+    a parent with an error code (#517). A NAS that doesn't answer raises, as in `folder_kind`.
+
+    The parents read folders down to the file, then 401 below it (vdsm 7.1: `f0.txt` a file,
+    `f0.txt/x` and `f0.txt/x/y` 401), so the file is found by halving the levels: about
+    log2(depth) requests, not one per level, which a deep path would make outlast a client's
+    60 s (pre-QA r2)."""
+    parts = path.rstrip("/").split("/")
+    # Parent lengths below the share (never a file) to the nearest parent (pre-QA r5).
+    low, high = 3, len(parts) - 1
+    while low <= high:
+        end = (low + high) // 2
+        parent = "/".join(parts[:end])
+        try:
+            data = await client.request(
+                "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
+            )
+        except _NO_ANSWER:
+            raise
+        except SynologyError as e:
+            logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
+            return None
+        entry: dict[str, Any] = next(iter(_files(data)), {})
+        if entry.get("isdir") is False:
+            return parent
+        if entry.get("isdir") is True:
+            low = end + 1  # a folder: the file, if any, is below it
+        elif entry.get("code") == 401:
+            high = end - 1  # under the file: it's above
+        else:
+            return None  # another code (a 408, a 407) or no answer: can't tell
     return None
 
 

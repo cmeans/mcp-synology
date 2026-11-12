@@ -85,3 +85,84 @@ class TestVdsmSearchFilters:
         assert _names(after) == ["f3.txt", "f4.txt"]
         before = await search_files(client, folder_path=dated_folder, mtime_to=_iso(_T2))
         assert _names(before) == ["f0.txt", "f1.txt"]
+
+
+class TestVdsmFolderChecks:
+    """#517: a missing folder, a padded one and a file where a folder is expected got
+    misleading DSM answers (600 "access denied", a lost task the reply called retryable, List's
+    401 "Unknown error"). search_files and list_files now check with getinfo first, so each is
+    named for what it is. Run as the non-admin test user and as admin."""
+
+    @pytest.fixture(params=["nas_client", "admin_client"])
+    def client(self, request: pytest.FixtureRequest) -> Any:
+        return request.getfixturevalue(request.param)[0]
+
+    @staticmethod
+    def _error(exc: pytest.ExceptionInfo[Any]) -> dict[str, Any]:
+        import json
+
+        return json.loads(str(exc.value))["error"]  # type: ignore[no-any-return]
+
+    @pytest.mark.parametrize("suffix", ["/gone", " "])
+    async def test_search_a_missing_folder(
+        self, client: Any, dated_folder: str, suffix: str
+    ) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.modules.filestation.search import search_files
+
+        missing = dated_folder + suffix
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=missing, pattern="x")
+        error = self._error(exc)
+        assert (error["code"], error["retryable"]) == ("not_found", False), error
+        assert (
+            error["message"] == f"Search files failed: {shown(missing)} doesn't exist on the NAS."
+        )
+
+    async def test_search_a_file(self, client: Any, dated_folder: str) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.modules.filestation.search import search_files
+
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=f"{dated_folder}/f0.txt", pattern="x")
+        error = self._error(exc)
+        assert (error["code"], error["retryable"]) == ("invalid_parameter", False), error
+        assert "is a file, not a folder" in error["message"]
+
+    @pytest.mark.parametrize("below", ["child", "x/y/child"])  # deep: 401 above it too
+    async def test_list_a_path_under_a_file(
+        self, client: Any, dated_folder: str, below: str
+    ) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.modules.filestation.listing import list_files
+
+        with pytest.raises(ToolError) as exc:
+            await list_files(client, path=f"{dated_folder}/f0.txt/{below}")
+        error = self._error(exc)
+        # getinfo answers 401 for it too; its parent is a file, so it can't exist.
+        assert (error["code"], error["retryable"]) == ("not_found", False), error
+        assert error["message"] == (
+            f"List files failed: {dated_folder}/f0.txt/{below} doesn't exist on the NAS: "
+            f"{dated_folder}/f0.txt is a file."
+        ), error
+
+    @pytest.mark.parametrize("below", ["child", "x/y/child"])
+    async def test_search_a_path_under_a_file(
+        self, client: Any, dated_folder: str, below: str
+    ) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.modules.filestation.search import search_files
+
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=f"{dated_folder}/f0.txt/{below}", pattern="x")
+        error = self._error(exc)
+        assert (error["code"], error["retryable"]) == ("not_found", False), error
+        assert error["message"] == (
+            f"Search files failed: {dated_folder}/f0.txt/{below} doesn't exist on the NAS: "
+            f"{dated_folder}/f0.txt is a file."
+        ), error

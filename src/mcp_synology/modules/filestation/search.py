@@ -20,7 +20,9 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     file_type_icon,
+    folder_kind,
     matches_pattern,
+    missing_paths_suggestion,
     normalize_path,
     parse_human_size,
     parse_mtime,
@@ -73,6 +75,32 @@ async def search_files(
     # that causes silent failures (same issue as CopyMove/Delete).
     search_version = min(2, client.negotiate_version("SYNO.FileStation.Search", max_version=2))
     logger.debug("Using Search API v%d", search_version)
+
+    # The folder first (#517): DSM answers a missing folder with 600 "Search folder access
+    # denied", a padded missing one and a file with a task it then loses, so a model would
+    # retry or read an empty answer. A check that can't tell leaves DSM's answer.
+    kind = await folder_kind(client, normalized)
+    if kind is not None and kind.kind == "missing":
+        # A path under a file names the file, so the model needn't look for it (pre-QA r1).
+        blocked = f": {shown(kind.under_file)} is a file" if kind.under_file else ""
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Search files failed: {shown(normalized)} doesn't exist on the NAS{blocked}.",
+            retryable=False,
+            param="folder_path",
+            value=folder_path,
+            suggestion=missing_paths_suggestion([(normalized, 408)]),
+        )
+    if kind is not None and kind.kind == "file":
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Search files failed: {shown(normalized)} is a file, not a folder.",
+            retryable=False,
+            param="folder_path",
+            value=folder_path,
+            suggestion="search_files searches inside a folder: pass the folder that holds the "
+            "file, or use get_file_info for the file itself.",
+        )
 
     # Start search
     start_params: dict[str, Any] = {
