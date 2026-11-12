@@ -744,7 +744,7 @@ class TestListFiles:
             ("file", "not_found"),
             ("folder", "filestation_error"),
             ("407", "filestation_error"),  # a parent it can't read: DSM's error stands
-            ("502", "filestation_error"),  # a parent check that fails: the same
+            ("502", "DsmHttpError"),  # a proxy's stall ends the call (pre-QA r4, #282)
         ],
     )
     @respx.mock
@@ -753,8 +753,9 @@ class TestListFiles:
     ) -> None:
         """#517, as vdsm 7.1 and 7.4.1 answer: getinfo of `…/a.jpg/x/child` is a 401 entry
         too, and so is `…/a.jpg/x`; the nearest parent that shows is the file, so the path
-        can't exist, and the reply names the file. A folder parent, one it can't read, or a
-        failed check keeps DSM's error."""
+        can't exist, and the reply names the file. A folder parent or one it can't read keeps
+        DSM's error; a proxy's error status ends the call (pre-QA r4)."""
+        from mcp_synology.core.errors import DsmHttpError
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = request.url.params
@@ -771,6 +772,10 @@ class TestListFiles:
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        if code == "DsmHttpError":
+            with pytest.raises(DsmHttpError):
+                await list_files(mock_client, path="/video/a.jpg/x/child")
+            return
         with pytest.raises(ToolError) as exc_info:
             await list_files(mock_client, path="/video/a.jpg/x/child")
         error = json.loads(str(exc_info.value))["error"]

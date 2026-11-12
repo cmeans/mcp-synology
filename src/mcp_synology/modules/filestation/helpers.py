@@ -16,7 +16,16 @@ import httpx
 import regex
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError, error_from_code
+from mcp_synology.core.errors import (
+    AuthenticationError,
+    DsmHttpError,
+    DsmReplyError,
+    DsmTimeoutError,
+    DsmUnavailableError,
+    ErrorCode,
+    SynologyError,
+    error_from_code,
+)
 from mcp_synology.core.formatting import (
     ESCAPED_NAME_ADVICE,
     RGI_FLAG_TAGS,
@@ -1075,6 +1084,10 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
     return None
 
 
+# What a NAS that doesn't answer raises from a request (#517, #282): it ends the call.
+_NO_ANSWER = (DsmTimeoutError, DsmUnavailableError, DsmHttpError, DsmReplyError)
+
+
 @dataclass(frozen=True)
 class FolderKind:
     """What `folder_kind` found: ``kind`` is ``"folder"``, ``"file"`` or ``"missing"``;
@@ -1086,14 +1099,22 @@ class FolderKind:
 
 async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     """One ``getinfo``: a folder, a file or a missing path (DSM's 408 entry), or None when the
-    answer shows none of these (another code, such as 407, or no entry) or the request fails:
-    a caller then lets DSM's own answer stand (#517)."""
+    answer shows none of these (another code, such as 407, or no entry) or DSM answers the
+    request with an error code: a caller then lets DSM's own answer stand (#517).
+
+    A NAS that doesn't answer ends the call, as `get_dir_size`'s pre-check does, since the
+    request after the check would wait as long again, past a client's 60 s (pre-QA r3): a
+    transport error or timeout raises, and so does a proxy's error status or a reply that
+    isn't DSM's (`DsmHttpError`, `DsmReplyError`), which is how a proxy reports the same
+    stall (#282)."""
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     try:
         data = await client.request(
             "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
         )
-    except (SynologyError, httpx.HTTPError) as e:
+    except _NO_ANSWER:
+        raise
+    except SynologyError as e:
         logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
         return None
     for entry in data.get("files", []):
@@ -1110,8 +1131,8 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
 
 
 async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
-    """The file among ``path``'s parents, when one is; None when none is found or a parent
-    can't be read (#517).
+    """The file among ``path``'s parents, when one is; None when none is found or DSM answers
+    a parent with an error code (#517). A NAS that doesn't answer raises, as in `folder_kind`.
 
     The parents read folders down to the file, then 401 below it (vdsm 7.1: `f0.txt` a file,
     `f0.txt/x` and `f0.txt/x/y` 401), so the file is found by halving the levels: about
@@ -1126,7 +1147,9 @@ async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
             data = await client.request(
                 "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
             )
-        except (SynologyError, httpx.HTTPError) as e:
+        except _NO_ANSWER:
+            raise
+        except SynologyError as e:
             logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
             return None
         entry: dict[str, Any] = next(iter(data.get("files", [])), {})
