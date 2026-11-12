@@ -1894,7 +1894,7 @@ class TestLocalPathsShown:
         assert shown_local(tmp_path / "plain.txt") == str(tmp_path / "plain.txt")
         assert shown_local(tmp_path / self.TAB) == repr(str(tmp_path / self.TAB))
         assert shown_local(tmp_path / " pad") == repr(str(tmp_path / " pad"))
-        assert shown_local(Path("/")) == "/"
+        assert shown_local(Path("/")) == os.fspath(Path("/"))  # "\\" on Windows (pre-QA r4)
         # A folder part counts too, and the whole path is quoted (pre-QA r1, r2).
         assert shown_local("/home/ x/f.txt") == repr("/home/ x/f.txt")
         assert shown_local("/home/a, b/f.txt") == "'/home/a, b/f.txt'"
@@ -1908,6 +1908,15 @@ class TestLocalPathsShown:
         # path (pre-QA r3).
         assert shown_local("'/home/x/a.txt'") == "\"'/home/x/a.txt'\""
 
+    def test_a_name_starting_or_ending_with_a_quote_is_quoted(self) -> None:
+        """Pre-QA r4: shown() wrote ``'a.jpg'`` raw, which reads as a quoted ``a.jpg``; NAS and
+        local names alike (upload's and rename's replies, Photos' rows)."""
+        from mcp_synology.modules.filestation.helpers import shown
+
+        assert shown("'a.jpg'") == "\"'a.jpg'\""
+        assert shown('say "hi"') == "'say \"hi\"'"
+        assert shown("/s/it's here") == "/s/it's here"  # a quote inside reads as part of it
+
     @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
     @pytest.mark.parametrize(
         "path",
@@ -1918,6 +1927,8 @@ class TestLocalPathsShown:
             "/h/" + "x" * 300,
             "/h/a\\b, c",
             "/h/plain.txt",
+            "'a.jpg'",  # a bare name that starts and ends with a quote (pre-QA r4)
+            "/h/x'",
         ],
     )
     def test_shown_local_matches_shown_on_posix(self, path: str) -> None:
@@ -2011,7 +2022,8 @@ class TestLocalPathsShown:
             assert f"{repr(str(tmp_path / self.TAB))}: nope" in message, message
 
     def test_every_local_path_in_a_message_is_shown(self) -> None:
-        """The guard: in the two transfer modules, a local path's variable in an f-string goes
+        """The guard: in the two transfer modules, a local path's variable in an f-string (or
+        joined to text by ``+`` or ``%``, or passed to ``.format()``) goes
         through `shown_local` (never ``!r``, which doubles Windows backslashes, nor `shown` on a
         whole local path, which reads only ``/`` as a separator). `shown` is for a file's own
         name (``name``, ``effective_name``, ``x.name``). Listed: the not-tried list, sent back
@@ -2036,6 +2048,28 @@ class TestLocalPathsShown:
                 if func.name == "_dest_name":
                     continue
                 for node in ast.walk(func):
+                    # A path joined by + or %, or passed to .format(), with a text (pre-QA r4).
+                    joined: list[ast.expr] = []
+                    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Mod):
+                        joined = [node.left, node.right]
+                    elif (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "format"
+                    ):
+                        joined = [*node.args, *(k.value for k in node.keywords)]
+                    texty = isinstance(node, ast.BinOp) and any(
+                        isinstance(side, ast.Constant | ast.JoinedStr) for side in joined
+                    )
+                    for side in joined if texty or isinstance(node, ast.Call) else []:
+                        wrapped = (
+                            isinstance(side, ast.Call)
+                            and isinstance(side.func, ast.Name)
+                            and side.func.id == "shown_local"
+                        )
+                        names = {x.id for x in ast.walk(side) if isinstance(x, ast.Name)}
+                        if not wrapped and names & {*local, "name"}:
+                            found.add((module, func.name, ast.unparse(side)))
                     if not isinstance(node, ast.JoinedStr):
                         continue
                     for part in node.values:

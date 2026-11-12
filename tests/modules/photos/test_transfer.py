@@ -784,6 +784,7 @@ class TestUpload:
     async def test_a_padded_local_name_is_shown_in_its_row(self, tmp_path: Path) -> None:
         """#691 (pre-QA r1): the rows wrote each local file's name raw."""
         (tmp_path / " pad.jpg").write_bytes(b"x")
+        (tmp_path / "'a.jpg'").write_bytes(b"x")
         fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
         fake.multipart = lambda _r: httpx.Response(
             200, json={"success": True, "data": {"action": "new", "id": 42}}
@@ -793,11 +794,12 @@ class TestUpload:
         async with client:
             out = await upload_photos(
                 client,
-                local_paths=[str(tmp_path / " pad.jpg")],
+                local_paths=[str(tmp_path / " pad.jpg"), str(tmp_path / "'a.jpg'")],
                 allowed_roots=[tmp_path],
                 folder_path="/",
             )
         assert "\n  ' pad.jpg'  " in out, out
+        assert "\n  \"'a.jpg'\"  " in out, out  # a name in quotes is quoted (pre-QA r4)
 
     @respx.mock
     async def test_album_and_names_unanswered(

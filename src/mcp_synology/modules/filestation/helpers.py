@@ -681,12 +681,19 @@ def shown(path: str) -> str:
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
-    if ", " in path:
+    if ", " in path or _edge_quote(path):
         # Quoted only, with no escapes: nothing else needs showing, so what's inside the
         # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
-        # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
+        # #692: repr doubled a backslash, `C:\new` read as `C:\\new`). A name that starts or
+        # ends with a quote is quoted too, so `'a.jpg'` can't read as a quoted `a.jpg`
+        # (pre-QA r4 on #691).
         return plain_quoted(path)
     return path
+
+
+def _edge_quote(text: str) -> bool:
+    """``text`` starts or ends with a quote, so written as is it could read as quoted."""
+    return text.startswith(("'", '"')) or text.endswith(("'", '"'))
 
 
 def _needs_escapes(part: str) -> bool:
@@ -715,7 +722,7 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
     if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
         return _escaped_repr(text)
-    if not text or ", " in text or text.startswith(("'", '"')) or text.endswith(("'", '"')):
+    if not text or ", " in text or _edge_quote(text):
         return plain_quoted(text)
     return text
 
