@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NoReturn
 
@@ -1074,10 +1075,19 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
     return None
 
 
-async def folder_kind(client: DsmClient, path: str) -> str | None:
-    """One ``getinfo``: ``"folder"``, ``"file"`` or ``"missing"`` (DSM's 408 entry), or None
-    when the answer shows none of these (another code, such as 407, or no entry) or the
-    request fails: a caller then lets DSM's own answer stand (#517)."""
+@dataclass(frozen=True)
+class FolderKind:
+    """What `folder_kind` found: ``kind`` is ``"folder"``, ``"file"`` or ``"missing"``;
+    ``under_file`` is the file that makes a missing path impossible, for a path under a file."""
+
+    kind: str
+    under_file: str | None = None
+
+
+async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
+    """One ``getinfo``: a folder, a file or a missing path (DSM's 408 entry), or None when the
+    answer shows none of these (another code, such as 407, or no entry) or the request fails:
+    a caller then lets DSM's own answer stand (#517)."""
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     try:
         data = await client.request(
@@ -1088,19 +1098,20 @@ async def folder_kind(client: DsmClient, path: str) -> str | None:
         return None
     for entry in data.get("files", []):
         if entry.get("code") == 408:
-            return "missing"
+            return FolderKind("missing")
         if entry.get("code") == 401:
             # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm
-            # 7.4.1): a file among its parents means it can't exist.
-            return await _missing_under_a_file(client, path, version)
+            # 7.1 to 7.4.1): a file among its parents means it can't exist.
+            blocker = await _file_above(client, path, version)
+            return FolderKind("missing", blocker) if blocker else None
         if isinstance(entry.get("isdir"), bool):
-            return "folder" if entry["isdir"] else "file"
+            return FolderKind("folder" if entry["isdir"] else "file")
     return None
 
 
-async def _missing_under_a_file(client: DsmClient, path: str, version: int) -> str | None:
-    """``"missing"`` when the nearest of ``path``'s parents that DSM reports is a file; None
-    when it's a folder, or none can be read (#517)."""
+async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
+    """The nearest of ``path``'s parents DSM reports, when it's a file; None when it's a
+    folder, or none can be read (#517)."""
     parts = path.rstrip("/").split("/")
     for end in range(len(parts) - 1, 1, -1):  # nearest parent first, down to the share
         parent = "/".join(parts[:end])
@@ -1113,7 +1124,7 @@ async def _missing_under_a_file(client: DsmClient, path: str, version: int) -> s
             return None
         for entry in data.get("files", []):
             if isinstance(entry.get("isdir"), bool):
-                return None if entry["isdir"] else "missing"
+                return None if entry["isdir"] else parent
             if entry.get("code") not in (401, None):
                 return None
     return None

@@ -80,16 +80,18 @@ async def search_files(
     # denied", a padded missing one and a file with a task it then loses, so a model would
     # retry or read an empty answer. A check that can't tell leaves DSM's answer.
     kind = await folder_kind(client, normalized)
-    if kind == "missing":
+    if kind is not None and kind.kind == "missing":
+        # A path under a file names the file, so the model needn't look for it (pre-QA r1).
+        blocked = f": {shown(kind.under_file)} is a file" if kind.under_file else ""
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Search files failed: {shown(normalized)} doesn't exist on the NAS.",
+            f"Search files failed: {shown(normalized)} doesn't exist on the NAS{blocked}.",
             retryable=False,
             param="folder_path",
             value=folder_path,
             suggestion=missing_paths_suggestion([(normalized, 408)]),
         )
-    if kind == "file":
+    if kind is not None and kind.kind == "file":
         error_response(
             ErrorCode.INVALID_PARAMETER,
             f"Search files failed: {shown(normalized)} is a file, not a folder.",

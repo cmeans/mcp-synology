@@ -739,30 +739,70 @@ class TestListFiles:
             )
 
     @pytest.mark.parametrize(
-        ("parent", "code"), [("file", "not_found"), ("folder", "filestation_error")]
+        ("parent", "code"),
+        [
+            ("file", "not_found"),
+            ("folder", "filestation_error"),
+            ("407", "filestation_error"),  # a parent it can't read: DSM's error stands
+            ("502", "filestation_error"),  # a parent check that fails: the same
+        ],
     )
     @respx.mock
     async def test_list_files_401_as_dsm_answers_it(
         self, mock_client: DsmClient, parent: str, code: str
     ) -> None:
-        """#517, as vdsm 7.4.1 answers: getinfo of `…/a.jpg/child` is a 401 entry too, and
-        its parent shows as a file, so the path can't exist. A folder parent keeps DSM's
-        error."""
+        """#517, as vdsm 7.1 and 7.4.1 answer: getinfo of `…/a.jpg/x/child` is a 401 entry
+        too, and so is `…/a.jpg/x`; the nearest parent that shows is the file, so the path
+        can't exist, and the reply names the file. A folder parent, one it can't read, or a
+        failed check keeps DSM's error."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = request.url.params
             if params["method"] != "getinfo":
                 return httpx.Response(200, json={"success": False, "error": {"code": 401}})
-            if params["path"].endswith("/child"):
+            if params["path"].endswith(("/child", "/x")):
                 entry: dict[str, Any] = {"code": 401, "path": params["path"]}
+            elif parent == "502":
+                return httpx.Response(502)
+            elif parent == "407":
+                entry = {"code": 407, "path": params["path"]}
             else:
                 entry = {"isdir": parent == "folder", "path": params["path"]}
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
-            await list_files(mock_client, path="/video/a.jpg/child")
-        assert json.loads(str(exc_info.value))["error"]["code"] == code
+            await list_files(mock_client, path="/video/a.jpg/x/child")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == code
+        if parent == "file":
+            assert error["message"] == (
+                "List files failed: /video/a.jpg/x/child doesn't exist on the NAS: "
+                "/video/a.jpg is a file."
+            )
+
+    @respx.mock
+    async def test_list_files_a_refused_relogins_401_isnt_read_as_a_path(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r1 on #517: a 401 that is a refused re-login isn't this path's, so no getinfo
+        reads it as one."""
+        from mcp_synology.core.errors import AuthenticationError
+        from mcp_synology.modules.filestation import listing
+
+        async def refused(*_args: Any, **_kwargs: Any) -> Any:
+            raise AuthenticationError("refused", code=401)
+
+        checked: list[str] = []
+
+        async def kind(_client: Any, path: str) -> Any:
+            checked.append(path)
+
+        monkeypatch.setattr(mock_client, "request", refused)
+        monkeypatch.setattr(listing, "folder_kind", kind)
+        with pytest.raises(ToolError):
+            await list_files(mock_client, path="/video/a")
+        assert checked == []
 
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:

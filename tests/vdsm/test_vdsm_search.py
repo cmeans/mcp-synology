@@ -142,6 +142,7 @@ class TestVdsmFolderChecks:
         error = self._error(exc)
         # getinfo answers 401 for it too; its parent is a file, so it can't exist.
         assert (error["code"], error["retryable"]) == ("not_found", False), error
+        assert error["message"].endswith(f": {dated_folder}/f0.txt is a file."), error
 
     async def test_search_a_path_under_a_file(self, client: Any, dated_folder: str) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
@@ -152,3 +153,4 @@ class TestVdsmFolderChecks:
             await search_files(client, folder_path=f"{dated_folder}/f0.txt/child", pattern="x")
         error = self._error(exc)
         assert (error["code"], error["retryable"]) == ("not_found", False), error
+        assert error["message"].endswith(f": {dated_folder}/f0.txt is a file."), error
