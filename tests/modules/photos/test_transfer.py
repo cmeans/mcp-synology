@@ -65,6 +65,41 @@ class TestOriginals:
         assert "999  not downloaded: not found" in out
 
     @respx.mock
+    async def test_local_names_and_folder_are_shown(self, tmp_path: Path) -> None:
+        """#691 (pre-QA r1): the folder and each item's local name, built from the NAS's, show
+        a tab or padding; they were written raw."""
+        data = _items("ready", "ready")
+        data["list"][0]["filename"] = " pad.jpg"
+        data["list"][1]["filename"] = "a\tb.jpg"
+        fake = FakePhotos().on(ITEM, "get", 2, data)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), binary(b"two!"))
+        install(fake)
+        folder = tmp_path / "d\tx"
+        folder.mkdir()
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(folder), allowed_roots=[tmp_path]
+            )
+        assert out.startswith(f"Downloaded 2 of 2 item(s) to {str(folder)!r} "), out
+        assert "  12  ' pad.jpg'  " in out, out
+        assert "  15  'a\\tb.jpg'  " in out, out
+
+    async def test_a_missing_local_path_is_quoted(self, tmp_path: Path) -> None:
+        """#691 (pre-QA r2): the refusals named the caller's path raw, then with !r."""
+        gone = str(tmp_path / "a\tb")
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await download_photos(client, ids=[12], dest_folder=gone, allowed_roots=[tmp_path])
+            assert _error(exc)["message"].endswith(f"local folder not found: {gone!r}")
+            with pytest.raises(ToolError) as exc:
+                await upload_photos(
+                    client, local_paths=[gone], allowed_roots=[tmp_path], folder_path="/"
+                )
+            assert _error(exc)["message"].endswith(f"not a local file: {gone!r}")
+
+    @respx.mock
     async def test_a_proxy_page_is_not_saved(self, tmp_path: Path) -> None:
         """A login page in front of the NAS isn't saved as the photo (#292)."""
         (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
@@ -746,6 +781,27 @@ class TestUpload:
         assert "b.jpg  failed   couldn't read the file (No such file or directory)" in out
 
     @respx.mock
+    async def test_a_padded_local_name_is_shown_in_its_row(self, tmp_path: Path) -> None:
+        """#691 (pre-QA r1): the rows wrote each local file's name raw."""
+        (tmp_path / " pad.jpg").write_bytes(b"x")
+        (tmp_path / "'a.jpg'").write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "new", "id": 42}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / " pad.jpg"), str(tmp_path / "'a.jpg'")],
+                allowed_roots=[tmp_path],
+                folder_path="/",
+            )
+        assert "\n  ' pad.jpg'  " in out, out
+        assert "\n  \"'a.jpg'\"  " in out, out  # a name in quotes is quoted (pre-QA r4)
+
+    @respx.mock
     async def test_album_and_names_unanswered(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -837,6 +893,35 @@ class TestUpload:
             "renamed copies):"
         )
         assert lines[-2:] == [f"  {paths[2]}", f"  {paths[3]}"]
+
+    @respx.mock
+    async def test_the_not_tried_list_quotes_a_padded_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r5 on #691: the list to send again wrote each path raw, so a trailing space
+        or a tab was lost on the way back; it's quoted as the rows are."""
+        from mcp_synology.modules.photos import transfer
+
+        names = ("a.jpg", "c.jpg ", "d\tx.jpg")
+        for name in names:
+            (tmp_path / name).write_bytes(b"x")
+        clock = [100.0]
+        monkeypatch.setattr(transfer.time, "monotonic", lambda: clock[0])
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+
+        def multipart(_r: httpx.Request) -> httpx.Response:
+            clock[0] += 40
+            return httpx.Response(200, json={"success": True, "data": {"action": "new", "id": 41}})
+
+        fake.multipart = multipart
+        install(fake)
+        client = make_client()
+        paths = [str(tmp_path / n) for n in names]
+        async with client:
+            out = await upload_photos(
+                client, local_paths=paths, allowed_roots=[tmp_path], budget=30, folder_path="/"
+            )
+        assert out.splitlines()[-2:] == [f"  {paths[1]!r}", f"  {paths[2]!r}"], out
 
     @respx.mock
     @pytest.mark.parametrize(

@@ -4,3 +4,5 @@ LOCAL MACHINE:
 This MCP server runs on the user's {platform} machine.
 Home directory: {home_dir}
 Local paths in tool calls refer to this machine's local filesystem.
+A local path a reply shows in quotes is quoted to show its exact characters: pass what's
+inside the quotes, each escape (\t, \u200b, \\) standing for the one character it names.

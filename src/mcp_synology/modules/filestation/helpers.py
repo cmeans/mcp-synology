@@ -6,6 +6,7 @@ import contextlib
 import fnmatch
 import json
 import logging
+import os
 import re
 import unicodedata
 from datetime import UTC, datetime
@@ -650,11 +651,14 @@ def shown(path: str) -> str:
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
     ``", "`` and nothing else to show is quoted without escapes, unless it holds a
-    backslash (`plain_quoted`, #685, below).
+    backslash (`plain_quoted`, #685, below); so is one that starts or ends with a quote,
+    which would read as a quoted name (#691).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
-    (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
+    (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458), but a
+    path on this machine, refused or not, goes through `shown_local` (#691: repr doubles each
+    Windows backslash); an
     error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible or the path holds
     ``", "``), and so does a reply
@@ -673,26 +677,60 @@ def shown(path: str) -> str:
     still joined by ``", "``; every other list of paths is one a line (#693,
     `formatting.path_list`). A line that puts other text between or after paths (" and ",
     " (to ") quotes a path holding it with `shown_beside`."""
-    for part in path.split("/"):
-        if not part:
-            continue
-        # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s
-        # repeated-mark search grows with the cube of a long run of different marks (the
-        # stdlib NFD it once used was quadratic: QA round 3 on #515), and new names are
-        # capped at 255 bytes before it runs.
-        if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
-            return _escaped_repr(path)
-        if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
-            return _escaped_repr(path)
+    if any(_needs_escapes(part) for part in path.split("/") if part):
+        return _escaped_repr(path)
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
-    if ", " in path:
+    if ", " in path or _edge_quote(path):
         # Quoted only, with no escapes: nothing else needs showing, so what's inside the
         # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
-        # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
+        # #692: repr doubled a backslash, `C:\new` read as `C:\\new`). A name that starts or
+        # ends with a quote is quoted too, so `'a.jpg'` can't read as a quoted `a.jpg`
+        # (pre-QA r4 on #691).
         return plain_quoted(path)
     return path
+
+
+# Marks a model reads as quoting or code: straight and typographic quotes, a backtick
+# (pre-QA r5 on #691).
+_QUOTES = ("'", '"', "`", "\u2018", "\u2019", "\u201c", "\u201d")
+
+
+def _edge_quote(text: str) -> bool:
+    """``text`` starts or ends with a quote, so written as is it could read as quoted."""
+    return text.startswith(_QUOTES) or text.endswith(_QUOTES)
+
+
+def _needs_escapes(part: str) -> bool:
+    """Whether a path's ``part`` holds what `shown` writes with escapes: padding, a character
+    that doesn't print or that `invisible_problem` refuses. A part longer than any NAS name
+    counts unchecked: `invisible_problem`'s repeated-mark search grows with the cube of a long
+    run of different marks (the stdlib NFD it once used was quadratic: QA round 3 on #515),
+    and new names are capped at 255 bytes before it runs."""
+    if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
+        return True
+    return part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part))
+
+
+def shown_local(path: str | os.PathLike[str]) -> str:
+    """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
+    OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
+    what `shown` would quote, padding, a tab, a character that draws nothing or ``", "``; then
+    the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
+    `_escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
+    FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
+    read like a quoted one (pre-QA r2 on #691). A path that starts or ends with a quote is
+    quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't normalized
+    (``Path`` would drop ``./`` and a trailing slash), so the caller's own path reads as they
+    sent it."""
+    text = os.fspath(path)
+    seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
+    if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
+        return _escaped_repr(text)
+    if not text or ", " in text or _edge_quote(text):
+        return plain_quoted(text)
+    return text
 
 
 def shown_beside(path: str, marker: str) -> str:
