@@ -15,6 +15,7 @@ import datetime
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -110,13 +111,19 @@ def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
 
 
 def quotes_note(
-    name: object, what: str, fix: str = "rename it without them", *, before: object = None
+    name: object, what: str, fix: str = "rename it without them", *, before: object = ()
 ) -> list[str]:
     """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
     quotes are now part of the name (QA r1 on #709). Empty otherwise, and when ``name`` is
-    what it was ``before`` the call: a name that really has quotes, passed back as it is,
-    isn't one taken from a reply's quotes (QA r2)."""
-    if not in_reply_quotes(name) or (before is not None and str(before) == str(name)):
+    a name it had ``before`` the call (one name, or several: a merge keeps any of the
+    people's names): a name that really has quotes, passed back as it is, isn't one taken
+    from a reply's quotes (QA r2). Compared in NFC, case kept: a reply shows a name as
+    stored, and a client may normalize it on the way back (QA r3)."""
+    if not in_reply_quotes(name):
+        return []
+    earlier = before if isinstance(before, (list, tuple, set, frozenset)) else (before,)
+    nfc = unicodedata.normalize("NFC", str(name))
+    if any(b is not None and unicodedata.normalize("NFC", str(b)) == nfc for b in earlier):
         return []
     return [
         f"Note: the {what} {quoted_name(name)} starts and ends with a quote mark, which is "
@@ -446,11 +453,14 @@ class Photos:
         else:
             path = check_folder_path(ref.name or "", ref.param)
             params = {"id": 0} if path == "/" else {"name": path}
+            # The path DSM was asked for, not the caller's text: beside "starting with /"
+            # advice, `'Up'` read as if the "/" were missing (QA r3 on #709).
+            checked = path
         try:
             data = await self.call("Browse.Folder", "get", params, version=2)
         except SynologyError as e:
             if e.code == 642:
-                what = ref.id if ref.id is not None else repr(ref.name)
+                what = ref.id if ref.id is not None else repr(checked)
                 advice = missing_advice or "list_photo_collections type=folder lists them."
                 given = (ref.name or "").strip()
                 if ref.id is None and len(given) >= 3 and given[0] == given[-1] in "'\"":

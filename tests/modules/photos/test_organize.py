@@ -1295,3 +1295,35 @@ async def test_several_new_tags_in_quotes_get_one_note() -> None:
         "now part of them. If they came from a reply in quotes, remove them and add the tags "
         "without them."
     ], out
+
+
+@respx.mock
+async def test_merge_keeping_a_merged_persons_quoted_name_has_no_note() -> None:
+    """QA r3 on #709: `name` may be a merged person's own name, quotes and all."""
+    people = captured("person-list", PEOPLE)
+    people["list"][1]["name"] = '"Jo"'
+    fake = FakePhotos().on(PERSON, "list", 1, people)
+    fake.on(PERSON, "get", 1, captured("person-get", PEOPLE))
+    fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await merge_people(client, target_id=12, merge_names=['"Jo"'], name='"Jo"')
+        other = await merge_people(client, target_id=12, merge_names=['"Jo"'], name='"Al"')
+    assert "Note:" not in out, out
+    assert "Note: the person's name" in other, other
+
+
+@respx.mock
+async def test_photo_request_missing_folder_names_the_path_dsm_was_asked_for() -> None:
+    """QA r3 on #709: the caller's `Up` was echoed beside "starting with /" advice."""
+    fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+    fake.error("SYNO.Foto.Browse.Folder", "get", 2, 642)
+    install(fake)
+    client = make_client()
+    async with client:
+        with pytest.raises(ToolError) as exc:
+            await photo_request(client, action="create", subject="s", folder_path="Up")
+    err = _error(exc)
+    assert "no folder '/Up' in the personal space." in err["message"], err
+    assert err["value"] == "Up", err

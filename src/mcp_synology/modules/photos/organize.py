@@ -488,9 +488,9 @@ async def merge_people(
             f"Merged {len(merged):,} people into person {keep_id} "
             f"{quoted_name(now.get('name'))} (now {count} items)."
         )
-        return "\n".join(
-            [merged_line, *quotes_note(name, "person's name", before=keep.get("name"))]
-        )
+        # Any of the people's names kept as it was, quotes and all, gets no note (QA r3).
+        kept_names = [keep.get("name"), *(m.get("name") for m in merged.values())]
+        return "\n".join([merged_line, *quotes_note(name, "person's name", before=kept_names)])
     except SynologyError as e:
         synology_error_response(op, e)
 

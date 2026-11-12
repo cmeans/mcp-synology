@@ -1009,3 +1009,18 @@ class TestNamesPassedBackInQuotes:
         assert padded.splitlines()[-1].endswith(f"({self.HINT})"), padded
         assert "Note:" not in same, same
         assert "Note:" not in bare, bare
+
+    @respx.mock
+    async def test_qa_r3_copy_and_nfc_keep_a_name_that_had_its_quotes(self) -> None:
+        """QA r3 on #709: copying an album really named `"Trip"` under that name, or a rename
+        to the same name sent back in NFC when it's stored NFD, gets no note."""
+        nfd = '"Café"'
+        fake = FakePhotos().on(ALBUM, "get", 1, _album(name='"Trip"'), _album(name=nfd))
+        fake.on(NORMAL, "copy", 1, captured("album-copy")).on(ALBUM, "set_name", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            copied = await photo_album(client, action="copy", album_id=4, name='"Trip"')
+            renamed = await photo_album(client, action="rename", album_id=4, name='"Café"')
+        assert "Note:" not in copied, copied
+        assert "Note:" not in renamed, renamed

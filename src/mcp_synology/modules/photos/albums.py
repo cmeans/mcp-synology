@@ -262,7 +262,7 @@ async def _photo_album(
         )
         copied = data["album"]
         lines.append(f"Copied album {album_id} to {quoted_name(name)} (id {copied['id']}).")
-        lines += quotes_note(name, "album name")
+        lines += quotes_note(name, "album name", before=target.get("name"))
         album_id = int(copied["id"])
     else:
         cond = await _condition(ph, condition or {})
