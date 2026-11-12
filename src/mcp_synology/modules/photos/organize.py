@@ -195,14 +195,16 @@ async def tag_photos(
                 lines += [
                     f"  {n}"
                     for n in quotes_note(
-                        quoted_new[0], "new tag", "remove it and add the tag without them"
+                        quoted_new[0],
+                        "new tag",
+                        "remove the tag and add it again without the quote marks",
                     )
                 ]
             elif quoted_new:
                 lines.append(
                     f"  Note: the new tags {', '.join(quoted_name(t) for t in quoted_new)} start "
                     "and end with a quote mark, which is now part of them. If they came from a "
-                    "reply in quotes, remove them and add the tags without them."
+                    "reply in quotes, remove the tags and add them again without the quote marks."
                 )
             if rejected:
                 lines.append(
@@ -502,7 +504,7 @@ _REQUEST_ACTIONS = ("create", "list", "update", "delete")
 
 def _subject_note(subject: str | None, before: object = None) -> list[str]:
     return quotes_note(
-        subject, "subject", "update the request's subject without them", before=before
+        subject, "subject", "update the request's subject without the quote marks", before=before
     )
 
 

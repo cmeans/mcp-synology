@@ -913,7 +913,7 @@ class TestNamesPassedBackInQuotes:
     HINT = "If the name came from a reply in quotes, pass it without them."
     NOTE = (
         'Note: the album name "\\"Trip\\"" starts and ends with a quote mark, which is now '
-        "part of it. If it came from a reply in quotes, rename it without them."
+        "part of it. If it came from a reply in quotes, rename it without the quote marks."
     )
 
     @respx.mock
@@ -1014,7 +1014,7 @@ class TestNamesPassedBackInQuotes:
     async def test_qa_r3_copy_and_nfc_keep_a_name_that_had_its_quotes(self) -> None:
         """QA r3 on #709: copying an album really named `"Trip"` under that name, or a rename
         to the same name sent back in NFC when it's stored NFD, gets no note."""
-        nfd = '"Café"'
+        nfd = '"Cafe\u0301"'
         fake = FakePhotos().on(ALBUM, "get", 1, _album(name='"Trip"'), _album(name=nfd))
         fake.on(NORMAL, "copy", 1, captured("album-copy")).on(ALBUM, "set_name", 1, {})
         install(fake)

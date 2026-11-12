@@ -1114,8 +1114,8 @@ class TestNamesPassedBackInQuotes:
             out = await tag_photos(client, action="add", ids=[12], tags=['"beach"', "new2"])
         assert (
             '\n  Note: the new tag "\\"beach\\"" starts and ends with a quote mark, which is '
-            "now part of it. If it came from a reply in quotes, remove it and add the tag "
-            "without them." in out
+            "now part of it. If it came from a reply in quotes, remove the tag and add it again "
+            "without the quote marks." in out
         ), out
         assert out.count("Note: the new tag") == 1, out  # not for "new2"
 
@@ -1169,7 +1169,8 @@ class TestNamesPassedBackInQuotes:
         client = make_client()
         note = (
             'Note: the person\'s name "\\"Jo\\"" starts and ends with a quote mark, which '
-            "is now part of it. If it came from a reply in quotes, rename it without them."
+            "is now part of it. If it came from a reply in quotes, rename it without the quote "
+            "marks."
         )
         async with client:
             renamed = await edit_person(client, action="rename", person_id=12, name='"Jo"')
@@ -1191,7 +1192,7 @@ class TestNamesPassedBackInQuotes:
         tail = (
             'Note: the subject "\\"S\\"" starts and ends with a quote mark, which is now '
             "part of it. If it came from a reply in quotes, update the request's subject "
-            "without them."
+            "without the quote marks."
         )
         async with client:
             updated = await photo_request(
@@ -1292,8 +1293,8 @@ async def test_several_new_tags_in_quotes_get_one_note() -> None:
     notes = [line for line in out.splitlines() if "Note: the new tag" in line]
     assert notes == [
         '  Note: the new tags "\\"a\\"", "\\"b\\"" start and end with a quote mark, which is '
-        "now part of them. If they came from a reply in quotes, remove them and add the tags "
-        "without them."
+        "now part of them. If they came from a reply in quotes, remove the tags and add them "
+        "again without the quote marks."
     ], out
 
 

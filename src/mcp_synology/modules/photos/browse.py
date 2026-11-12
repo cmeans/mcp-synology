@@ -304,14 +304,16 @@ async def _list(
         described.append(f"person {quoted_name(p.get('name'))} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        described.append(f"tag {quoted_name(tag)}")
+        # The caller's own text, `""` when empty: `(unnamed)` is for a name missing from the
+        # NAS (pre-QA r6 on #709).
+        described.append(f"tag {json_quoted(tag)}")
         if tag_id is None:
             heading = _heading(
                 ph, described, filters_text, _order(*sort), in_folder=folder is not None
             )
             hint = f" {QUOTES_HINT}" if in_reply_quotes(tag) else ""
             return (
-                f"{heading}\nNo items: no item has the tag {quoted_name(tag)} (a tag exists only "
+                f"{heading}\nNo items: no item has the tag {json_quoted(tag)} (a tag exists only "
                 f"while some item has it).{hint}"
             )
         keys["general_tag"] = [tag_id]

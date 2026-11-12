@@ -797,3 +797,14 @@ class TestNamesPassedBackInQuotes:
             plain = await list_photos(client, tag="nope")
         assert out.endswith(f"while some item has it). {self.HINT}"), out
         assert self.HINT not in plain, plain
+
+
+@respx.mock
+async def test_an_empty_tag_is_shown_as_the_callers_text() -> None:
+    """Pre-QA r6 on #709: `(unnamed)` is for a name missing from the NAS, not the caller's
+    empty tag."""
+    install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list")))
+    client = make_client()
+    async with client:
+        out = await list_photos(client, tag="")
+    assert 'no item has the tag "" (' in out and "(unnamed)" not in out, out

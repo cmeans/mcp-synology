@@ -111,7 +111,7 @@ def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
 
 
 def quotes_note(
-    name: object, what: str, fix: str = "rename it without them", *, before: object = ()
+    name: object, what: str, fix: str = "rename it without the quote marks", *, before: object = ()
 ) -> list[str]:
     """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
     quotes are now part of the name (QA r1 on #709). Empty otherwise, and when ``name`` is
