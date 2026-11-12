@@ -891,6 +891,30 @@ class TestUpload:
         assert "\n  'b  new.jpg'  " in out, out
 
     @respx.mock
+    async def test_the_folder_goes_through_shown_folder(self, tmp_path: Path) -> None:
+        """#700: the first line's folder is written as every Photos folder in a line of text,
+        so one holding ": " is quoted too (#699's ``shown_beside(…, " (")`` left it raw)."""
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        folder = captured("folder-get-by-name")
+        folder["folder"]["name"] = "/Trips: 2 of 2"
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, folder)
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "new", "id": 42}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg")],
+                allowed_roots=[tmp_path],
+                folder_path="/Trips: 2 of 2",
+            )
+        assert out.splitlines()[0] == (
+            "Uploaded 1 of 1 file(s) to '/Trips: 2 of 2' (personal space)"
+        ), out
+
+    @respx.mock
     async def test_a_renamed_name_is_quoted_inside_its_parentheses(self, tmp_path: Path) -> None:
         """#699 (pre-QA r1): the name DSM gave a renamed upload is quoted when it holds the
         row's separators, the ")" that closes its "(as …)" or a "(" (pre-QA r3)."""

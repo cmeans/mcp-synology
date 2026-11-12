@@ -637,6 +637,8 @@ class TestQuotedNamesAndFolders:
         assert quoted_name("Ann\u200b") == '"Ann\\u200b"'
         assert quoted_name("") == "(unnamed)"
         assert quoted_name(None, "(no subject)") == "(no subject)"
+        assert quoted_name(0) == '"0"'  # not text, but a name, not missing (QA r1)
+        assert quoted_name(False) == '"False"'
 
     def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
         assert shown_folder("/Trips/2024") == "/Trips/2024"
@@ -648,3 +650,5 @@ class TestQuotedNamesAndFolders:
         assert shown_folder("/a matching b", " matching ") == "'/a matching b'"
         assert shown_folder("/a, b") == "'/a, b'"  # shown()'s own rule (#685)
         assert shown_folder("/pad \t (x)") == shown("/pad \t (x)")  # escapes kept
+        assert shown_folder(None) == "(unnamed)"  # a reply with no name (QA r1)
+        assert shown_folder("") == ""

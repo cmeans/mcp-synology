@@ -67,8 +67,8 @@ def quoted_name(name: object, unnamed: str = "(unnamed)") -> str:
     """An album's, person's, tag's or request's name in a reply, JSON-quoted (`json_quoted`,
     #695), so a ``"``, ``", "`` or ``" ("`` inside it can't read as the line's structure;
     ``unnamed`` (the server's placeholder, unquoted so it can't pass for a name) when it has
-    none (#700)."""
-    text = str(name or "")
+    none (#700). A name that isn't text (``0``) is shown as text, not as missing (QA r1)."""
+    text = "" if name is None else str(name)
     return json_quoted(text) if text else unnamed
 
 
@@ -77,7 +77,10 @@ def shown_folder(path: object, *also: str) -> str:
     ``" ("`` or ``": "``, which the lines that name a folder put after it (``/Trips (Shared
     Space)``, ``… to /Trips: 2 of 2 processed``), so a folder named ``/Trips (Shared Space)``
     can't read as the space (#700); or ends in ``":"`` or holds ``also``, another marker its
-    line puts after it."""
+    line puts after it. A missing path (``None``, a DSM reply with no name) is the
+    placeholder ``(unnamed)``, unquoted, as `quoted_name` writes a missing name (QA r1)."""
+    if path is None:
+        return "(unnamed)"
     text = str(path)
     out = shown(text)
     # A name ending in ":" makes ": " with the " (" after it (pre-QA r2).

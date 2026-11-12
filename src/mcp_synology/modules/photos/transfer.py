@@ -25,7 +25,6 @@ from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
     plain_quoted,
     shown,
-    shown_beside,
     shown_local,
 )
 from mcp_synology.modules.photos.helpers import (
@@ -35,6 +34,7 @@ from mcp_synology.modules.photos.helpers import (
     invalid,
     one_ref,
     quoted_name,
+    shown_folder,
     space_label,
 )
 
@@ -646,9 +646,8 @@ async def upload_photos(
     head = f"Uploaded {len(uploaded) - skipped:,} of {len(files):,} file(s)"
     if skipped:
         head += f" ({skipped:,} skipped, already there)"
-    # The folder, quoted when it holds " (" (or what `shown` quotes), as list_photos' title
-    # writes one (#695, #699).
-    target_shown = shown_beside(str(target.get("name", "")), " (")
+    # The folder, as every Photos folder in a line of text is written (#699, #700).
+    target_shown = shown_folder(target.get("name", ""))
     lines = [f"{head} to {target_shown} ({space_label(sp)})"]
     lines += [f"  {label:<{width}}  {state:<8} {note}" for label, state, note in rows]
     if target_album is not None and uploaded:

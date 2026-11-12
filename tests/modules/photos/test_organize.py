@@ -904,6 +904,26 @@ class TestRequests:
         assert "its link stops working" in gone
 
     @respx.mock
+    async def test_list_quotes_a_folder_holding_the_cells_space_marker(self) -> None:
+        """QA r1 on #709: the Folder cell adds " (shared)" after the folder, so a personal
+        request on a folder named "/Up (shared)" read the same as a Shared Space one on "/Up"."""
+        listed = captured("request-list")
+        mine, team = (
+            json.loads(json.dumps(listed["list"][0])),
+            json.loads(json.dumps(listed["list"][0])),
+        )
+        mine.update(passphrase="Mine1", folder_home_path="/Up (shared)", library="personal")
+        team.update(passphrase="Team1", folder_home_path="/Up", library="shared_space")
+        fake = FakePhotos().on(REQ, "list", 1, {**listed, "list": [mine, team]})
+        install(fake)
+        client = make_client()
+        async with client:
+            table = await photo_request(client, action="list")
+        rows = {r.split()[0]: r for r in table.splitlines()[4:]}
+        assert "  '/Up (shared)'  " in rows["Mine1"], table
+        assert "  /Up (shared)  " in rows["Team1"], table
+
+    @respx.mock
     @pytest.mark.parametrize(
         ("description", "note"), [("   ", None), ("  bring snacks ", "bring snacks")]
     )

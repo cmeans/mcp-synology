@@ -549,7 +549,9 @@ async def photo_request(
                 [
                     str(e.get("passphrase", "")),
                     str(e.get("subject", "")),
-                    str(e.get("folder_home_path", ""))
+                    # The cell adds " (shared)" after the folder: one holding " (" is
+                    # quoted, so a folder named "/Up (shared)" can't read as Shared Space's.
+                    shown_folder(e.get("folder_home_path", ""))
                     + (" (shared)" if e.get("library") == "shared_space" else ""),
                     _limit(int(e.get("filesize_limit") or 0)),
                     _expiry(int(e.get("expiration") or 0)).removeprefix("expires "),
