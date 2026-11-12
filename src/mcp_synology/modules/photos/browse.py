@@ -17,7 +17,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
-from mcp_synology.modules.filestation.helpers import shown
+from mcp_synology.modules.filestation.helpers import shown_beside
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
@@ -243,14 +243,16 @@ async def _list(
         data = await ph.call("Search.Search", "list_item", {"keyword": keyword, **page})
         items = data.get("list", [])
         total = int((await ph.call("Search.Search", "count_item", {"keyword": keyword}))["count"])
-        return await _render(ph, f'search "{keyword}"', [], "search order", items, total, offset)
+        return await _render(
+            ph, f"search {_named(keyword)}", [], "search order", items, total, offset
+        )
 
     if album is not None:
         found = await ph.album(album)
         params = {"album_id": int(found["id"]), **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int(found.get("item_count", 0))
-        source = f'album "{found.get("name", "")}" ({found["id"]})'
+        source = f"album {_named(str(found.get('name', '')))} ({found['id']})"
         return await _render(ph, source, [], _order(*sort), items, total, offset)
 
     if concept is not None:
@@ -263,7 +265,13 @@ async def _list(
         total = int(listed[0].get("item_count", 0)) if listed else None
         name = listed[0].get("name", "") if listed else ""
         return await _render(
-            ph, f"concept {name or concept}".strip(), [], _order(*sort), items, total, offset
+            ph,
+            f"concept {_named(str(name)) if name else concept}",
+            [],
+            _order(*sort),
+            items,
+            total,
+            offset,
         )
 
     if place is not None:
@@ -280,19 +288,18 @@ async def _list(
         f = await ph.folder(folder)
         folder_id = int(f["id"])
         keys["folder"] = [folder_id]
-        # Quoted when it holds ", " (or padding, an invisible character): the title joins
-        # what was asked for with ", ", so a folder named "a, person X" could read as two (#695).
-        described.append(shown(str(f.get("name", "")) or "/"))
+        # Plain unless it holds what `shown` quotes or the title's other separator, " (": the
+        # title joins what was asked for with ", " and ends each with " (…)" (#695).
+        described.append(shown_beside(str(f.get("name", "")) or "/", " ("))
     if person is not None:
         p = await ph.person(person)
         # count_with_filter answers 120 without the policy (verified on both versions).
         keys["person"] = [int(p["id"])]
         keys["person_policy"] = "or"
-        described.append(f"person {shown(str(p.get('name') or '(unnamed)'))} ({p['id']})")
+        described.append(f"person {_named(str(p.get('name') or '(unnamed)'))} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        # JSON-quoted: a " inside a tag can't close it early (#695).
-        described.append(f"tag {json.dumps(tag, ensure_ascii=False)}")
+        described.append(f"tag {_named(tag)}")
         if tag_id is None:
             heading = _heading(ph, described, filters_text, _order(*sort))
             return (
@@ -332,6 +339,12 @@ async def _list(
     counted = await ph.call("Browse.Item", "count_with_filter", keys, version=version)
     total = int(counted.get("count", 0))
     return await _render(ph, None, described, _order(*sort), items, total, offset, filters_text)
+
+
+def _named(name: str) -> str:
+    """A name in the title, JSON-quoted: a ``"`` in it is ``\\"``, so neither a quote nor the
+    title's own separators (``, ``, `` (``) inside it can read as the title's structure (#695)."""
+    return json.dumps(name, ensure_ascii=False)
 
 
 def _heading(ph: Photos, described: list[str], filters: list[str], order: str) -> str:

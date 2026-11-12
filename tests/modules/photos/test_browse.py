@@ -130,7 +130,8 @@ class TestListPhotosRouting:
             )
         head = out.splitlines()[0]
         assert head.startswith(
-            'Photos in \'/a, person X (3)\', person \'Ann, tag "y"\' (12), tag "x\\", person Bob" ('
+            'Photos in \'/a, person X (3)\', person "Ann, tag \\"y\\"" (12), '
+            'tag "x\\", person Bob" ('
         ), head
 
     @respx.mock
@@ -191,6 +192,36 @@ class TestListPhotosRouting:
         assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
 
     @respx.mock
+    async def test_names_holding_the_titles_other_separators_are_quoted(self) -> None:
+        """#695 (pre-QA r1): an album's quote, and " (" in a person's or a folder's name, forged
+        the title's ID or its space-and-order group."""
+        album = captured("album-get")
+        album["list"][0]["name"] = 'Trip" (7)'
+        fake = _folders(FakePhotos()).on("SYNO.Foto.Browse.Album", "get", 1, album)
+        fake.on(ITEM, "list", 2, captured("item-list-album"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, album_id=4)
+        assert out.startswith('Photos: album "Trip\\" (7)" (4) ('), out
+
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/a (shared space)", "parent": 3}}
+        )
+        person = captured("person-get", PEOPLE)
+        person["list"][0]["name"] = "Ann (13)"
+        fake.on("SYNO.Foto.Browse.Person", "get", 1, person)
+        fake.on(ITEM, "list_with_filter", 2, {"list": []})
+        fake.on(ITEM, "count_with_filter", 2, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_path="/a (shared space)", person_id=12)
+        assert out.startswith(
+            "Photos in '/a (shared space)', person \"Ann (13)\" (12) (personal space"
+        ), out
+
+    @respx.mock
     async def test_favorite_on_191_uses_v7(self) -> None:
         fake = FakePhotos().on(FOLDER, "get", 2, _FOLDER_10)
         fake.on(ITEM, "list_with_filter", 7, captured("fav_lwf-favorite-v7", CAPTURE_191))
@@ -216,7 +247,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, concept=1)
         assert fake.one(ITEM, "list").params["concept_id"] == 1
-        assert "concept dog" in out
+        assert 'concept "dog"' in out
 
     @respx.mock
     async def test_concept_without_get_result_gives_no_total(self) -> None:
