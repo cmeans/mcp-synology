@@ -151,6 +151,7 @@ class TestOriginals:
         assert _row_name("a (b.jpg", "(", ")") == "'a (b.jpg'"
         assert _row_name("not downloaded") == "'not downloaded'"  # pre-QA r3
         assert _row_name("not downloaded.jpg") == "'not downloaded.jpg'"
+        assert _row_name("Not Downloaded.jpg") == "'Not Downloaded.jpg'"  # pre-QA r4
 
     @respx.mock
     async def test_every_row_and_the_folder_quote_a_separator(self, tmp_path: Path) -> None:

@@ -53,14 +53,14 @@ _NOT_DOWNLOADED = "not downloaded"
 def _row_name(name: str, *also: str) -> str:
     """A name in a transfer row, as `shown` writes it, and quoted when it holds the row's own
     separators (``": "`` before a status, two spaces between columns), ends in ``":"`` (which
-    the two spaces after it would make ``": "``), starts with ``not downloaded`` (the status a
-    not-found item's row puts where a name goes) or holds ``also`` (``"("`` and ``")"`` for
-    the name inside a renamed upload's ``(as …)``), so a name such as
-    ``cat.jpg: not downloaded`` can't forge its row's status (#699)."""
+    the two spaces after it would make ``": "``), starts with ``not downloaded``, case
+    ignored (the status a not-found item's row puts where a name goes) or holds ``also``
+    (``"("`` and ``")"`` for the name inside a renamed upload's ``(as …)``), so a name such
+    as ``cat.jpg: not downloaded`` can't forge its row's status (#699)."""
     text = shown(name)
     # A name ending in ":" makes ": " with the two spaces after it (pre-QA r2); one starting
     # "not downloaded" reads as a not-found row's status (pre-QA r3).
-    forged = name.endswith(":") or name.startswith(_NOT_DOWNLOADED)
+    forged = name.endswith(":") or name.casefold().startswith(_NOT_DOWNLOADED)
     if text == name and (forged or any(sep in name for sep in (": ", "  ", *also))):
         return plain_quoted(name)
     return text
