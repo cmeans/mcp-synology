@@ -1290,10 +1290,13 @@ class TestAWorkingFolderConfigIsntLoaded:
 class TestPreQa5OnPr541:
     """What pre-QA r5 on #541 found the wording and the tests left open."""
 
-    def test_a_joiner_in_the_home_folder_reaches_the_model_as_is(
+    def test_a_joiner_in_the_home_folder_reaches_the_model_shown(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Quoting it would give the model an escaped path that isn't the real one."""
+        """#697: the home folder is written as LOCAL PATHS writes its folders (`shown_local`):
+        a joiner where Unicode doesn't use one (here between Latin letters) is escaped, and
+        LOCAL MACHINE says an escape stands for the one character it names (#698). Before, it
+        went raw, so the model couldn't see it."""
         home = tmp_path / "a\u200cb"
         skip_unless_the_locale_can_encode(str(home))
         home.mkdir()
@@ -1302,7 +1305,8 @@ class TestPreQa5OnPr541:
         path = _in_a_config(tmp_path, f"allowed_local_paths: [{allowed}]")
         monkeypatch.setenv("HOME", str(home))
         instructions = create_server(validate_config(path)).instructions or ""
-        assert f"Home directory: {home}\n" in instructions
+        assert f"Home directory: {str(home)!r}\n" in instructions  # repr escapes the ZWNJ
+        assert "\u200c" not in instructions.split("Home directory: ", 1)[1].split("\n", 1)[0]
 
     def test_a_link_loop_at_home_isnt_told_only_to_fix_permissions(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

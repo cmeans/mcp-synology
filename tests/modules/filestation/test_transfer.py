@@ -2057,7 +2057,7 @@ class TestLocalPathsShown:
             # `r` is each allowed folder (`for r in roots`), so a raw `str(r)` is caught.
             "core/local_paths.py": {"value", "path", "refused", "resolved", "entry", "r"},
             "modules/downloadstation/tasks.py": {"torrent_file_path", "path"},
-            "server.py": {"r"},
+            "server.py": {"r", "root"},
         }
         allowed: set[tuple[str, str, str]] = set()
 

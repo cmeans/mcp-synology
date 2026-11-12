@@ -1586,7 +1586,7 @@ def _local_root_problems(config: AppConfig, settings: dict[str, BaseModel | None
         for root in roots:
             if has_control_character(str(root)):
                 msg = (
-                    f"the folder {str(root)!r} has a control character, line break or lone "
+                    f"the folder {shown_local(root)} has a control character, line break or lone "
                     "surrogate in its path. If no setting names it, it's the Downloads default: "
                     "set allowed_local_paths to another folder"
                 )
@@ -1638,11 +1638,10 @@ def create_server(config: AppConfig) -> MCPServer:
         "instance_id": config.instance_id,
         "host": conn.host if conn else "unknown",
         "port": str(conn.port) if conn else "5000",
-        # Quoted if a line break in it could forge a line of the instructions (pre-QA r4 on #541).
-        # Not for a joiner or no-break space, which names need: repr would escape the real path.
-        "home_dir": repr(str(Path.home()))
-        if has_control_character(str(Path.home()))
-        else str(Path.home()),
+        # As LOCAL PATHS below writes its folders (`shown_local`, #697): quoted when a part
+        # holds a line break (which could forge a line, pre-QA r4 on #541), padding, `, ` or a
+        # character that draws nothing; a joiner Unicode uses stays as written.
+        "home_dir": shown_local(Path.home()),
         "platform": _platform_label(),
     }
     server_name = suggested_server_name(config)

@@ -315,7 +315,7 @@ class TestInstructionsPerModule:
         text = _instructions(**modules)
         local = text.index("LOCAL MACHINE:")
         # Directly before LOCAL PATHS, with nothing (e.g. PERMISSIONS) between them.
-        assert "local filesystem.\nA local path a reply shows in quotes" in text
+        assert "local filesystem.\nA local path shown in quotes (in a reply," in text
         assert "the one character it names.\n\nLOCAL PATHS:" in text[local:]
         assert "This MCP server runs on the user's Linux machine." in text
         assert f"Home directory: {Path.home()}" in text
@@ -2140,7 +2140,9 @@ class TestInstructionComments:
 # Station too).
 # +178 by #701 (#695, pre-QA r5): SYNOLOGY PHOTOS says a name or folder shown in quotes is
 # quoted to show its exact characters (PATH FORMAT says it only with File Station).
-PAYLOAD_BUDGET_CHARS = 61_869
+# +43 by #697: LOCAL MACHINE says a quoted local path can appear in its own section or a tool's
+# description too, not only in a reply.
+PAYLOAD_BUDGET_CHARS = 61_912
 
 
 class TestPayloadBudget:
