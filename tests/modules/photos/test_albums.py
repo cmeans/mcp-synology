@@ -833,3 +833,74 @@ class TestDsmErrors:
 def test_album_line_separates_thousands() -> None:
     line = album_line({"id": 9, "name": "Trip", "type": "normal", "item_count": 12_345})
     assert "· 12,345 item(s) ·" in line
+
+
+class TestCraftedNames:
+    """#700: an album name in plain quotes could close its quotes early (`Trip" (7)` read
+    as album 7); each name is now JSON-quoted, its `"` written `\\"`."""
+
+    NAME = 'Trip" (7)'
+    SHOWN = '"Trip\\" (7)"'
+
+    @respx.mock
+    async def test_create(self) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
+        fake.on(ITEM, "get", 2, _items(12))
+        fake.on(NORMAL, "create", 1, captured("album-create"))
+        fake.on(ALBUM, "get", 1, _album())
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(client, action="create", name=self.NAME, ids=[12])
+        assert f"Created album {self.SHOWN} (id 4) with 1 item(s)." in out, out
+
+    @respx.mock
+    async def test_create_smart(self) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on(COND, "peek_item_count", 2, {"count": 1})
+        fake.on(COND, "create", 2, captured("condalbum-create"))
+        fake.on(ALBUM, "get", 1, _album(id=7, type="condition"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(
+                client, action="create_smart", name=self.NAME, condition={"keywords": ["sun"]}
+            )
+        assert f"Created smart album {self.SHOWN} (id " in out, out
+
+    @respx.mock
+    @pytest.mark.parametrize("action", ["rename", "copy"])
+    async def test_rename_and_copy(self, action: str) -> None:
+        fake = FakePhotos().on(ALBUM, "get", 1, _album())
+        fake.on(ALBUM, "set_name", 1, {}).on(NORMAL, "copy", 1, captured("album-copy"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(client, action=action, album_id=4, name=self.NAME)
+        verb = "Renamed" if action == "rename" else "Copied"
+        assert f"{verb} album 4 to {self.SHOWN}" in out, out
+
+    @respx.mock
+    async def test_share_link_head(self) -> None:
+        shared = captured("album-get-shared")
+        shared["list"][0]["name"] = self.NAME
+        fake = FakePhotos().on(ALBUM, "get", 1, shared).on(SHARE, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_share_link(client, action="update", album_id=4, public="none")
+        assert out.startswith(f"Album 4 {self.SHOWN} is shared."), out
+
+    @respx.mock
+    async def test_delete_summary(self) -> None:
+        listed = captured("album-list")
+        for album in listed["list"]:
+            if album["id"] == 4:
+                album["name"] = self.NAME
+        fake = FakePhotos().on(ALBUM, "list", 2, listed).on(ALBUM, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, album_ids=[4])
+        assert f"Deleted 1 album(s): 4 {self.SHOWN}; their photos stay" in out, out

@@ -72,14 +72,15 @@ def quoted_name(name: object, unnamed: str = "(unnamed)") -> str:
     return json_quoted(text) if text else unnamed
 
 
-def shown_folder(path: object) -> str:
+def shown_folder(path: object, *also: str) -> str:
     """A Photos folder path in a reply, as `shown` writes one, and plain-quoted when it holds
     ``" ("`` or ``": "``, which the lines that name a folder put after it (``/Trips (Shared
     Space)``, ``… to /Trips: 2 of 2 processed``), so a folder named ``/Trips (Shared Space)``
-    can't read as the space (#700)."""
+    can't read as the space (#700); or ``also``, another marker its line puts after it."""
     text = str(path)
     out = shown(text)
-    return plain_quoted(text) if out == text and (" (" in text or ": " in text) else out
+    marked = any(m in text for m in (" (", ": ", *also))
+    return plain_quoted(text) if out == text and marked else out
 
 
 def check_space(operation: str, space: str) -> Space:

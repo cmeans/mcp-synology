@@ -223,9 +223,9 @@ class TestTags:
         install(fake)
         client = make_client()
         async with client:
-            out = await tag_photos(client, action="remove", ids=[12], tags=["2024", "gone"])
+            out = await tag_photos(client, action="remove", ids=[12], tags=["2024", "gone, beach"])
         assert fake.one(ITEM, "remove_tag").params == {"id": [12], "tag": [4]}
-        assert "No item has the tag(s) gone" in out
+        assert 'No item has the tag(s) "gone, beach", so' in out, out  # #700
         assert not fake.of(TAG, "create")
 
     @respx.mock
@@ -694,6 +694,22 @@ class TestPeople:
             "name": "Person 1",
         }
         assert out == 'Merged 2 people into person 12 "Person 1" (now 70 items).'
+
+    @respx.mock
+    async def test_merge_quotes_the_kept_person(self) -> None:
+        """#700: the kept person's name was in plain quotes, so `Jo" (now 1` closed it early."""
+        kept = captured("person-get", PEOPLE)
+        kept["list"][0]["name"] = 'Jo" (now 1'
+        fake = FakePhotos().on(PERSON, "list", 1, captured("person-list", PEOPLE))
+        fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
+        fake.on(PERSON, "get", 1, kept)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await merge_people(
+                client, target_name="person 1", merge_names=["Person 2", "Person 3"]
+            )
+        assert out == 'Merged 2 people into person 12 "Jo\\" (now 1" (now 70 items).', out
 
     @respx.mock
     async def test_a_numeric_id_never_merges_a_person_by_name(self) -> None:

@@ -178,10 +178,8 @@ async def tag_photos(
                 where = "to" if action == "add" else "from"
                 lines.append(f"{verb} {shown} {where} {len(found):,} item(s) ({space_label(sp)}).")
             if unknown:
-                lines.append(
-                    f"  No item has the tag(s) {', '.join(unknown)}, so there was nothing to "
-                    "remove."
-                )
+                gone = ", ".join(quoted_name(t) for t in unknown)
+                lines.append(f"  No item has the tag(s) {gone}, so there was nothing to remove.")
             if rejected:
                 lines.append(
                     f"  Rejected by DSM: {rejected_text(rejected)} "
@@ -343,7 +341,7 @@ _PERSON_ACTIONS = ("rename", "hide", "unhide", "set_cover")
 
 
 def person_line(person: dict[str, Any]) -> str:
-    """``Person 12: Jo (70 items, visible, cover: item 26).``"""
+    """``Person 12: "Jo" (70 items, visible, cover: item 26).``"""
     cover = ""
     key = str(((person.get("additional") or {}).get("thumbnail") or {}).get("cache_key", ""))
     if key.split("_")[0].isdigit():

@@ -253,7 +253,7 @@ async def _list(
         params = {"album_id": int(found["id"]), **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int(found.get("item_count", 0))
-        source = f"album {json_quoted(str(found.get('name', '')))} ({found['id']})"
+        source = f"album {quoted_name(found.get('name'))} ({found['id']})"
         return await _render(ph, source, [], _order(*sort), items, total, offset)
 
     if concept is not None:
@@ -299,8 +299,7 @@ async def _list(
         keys["person_policy"] = "or"
         # The placeholder is the server's text, not a name: unquoted, so it can't pass for a
         # person named "(unnamed)" (pre-QA r2 on #695).
-        named = json_quoted(str(p["name"])) if p.get("name") else "(unnamed)"
-        described.append(f"person {named} ({p['id']})")
+        described.append(f"person {quoted_name(p.get('name'))} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
         described.append(f"tag {json_quoted(tag)}")
@@ -547,7 +546,9 @@ async def _collections(
             },
             version=2,
         )
-        heading = f"Folders in {shown_folder(under.get('name') or '/')}"
+        # Quoted when it holds " (", ": " or, with a filter, " matching " (pre-QA r1).
+        also = (" matching ",) if name else ()
+        heading = f"Folders in {shown_folder(under.get('name') or '/', *also)}"
         headers = ["ID", "Path", "Shared"]
         rows = [
             [

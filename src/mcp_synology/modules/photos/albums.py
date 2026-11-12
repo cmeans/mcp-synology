@@ -84,7 +84,7 @@ def _shared(album: dict[str, Any]) -> str:
 
 
 def album_line(album: dict[str, Any]) -> str:
-    """``Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
+    """``Album 9: "Trip 2024" · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
     return (
         f"Album {album['id']}: {quoted_name(album.get('name'))} · {album.get('type', 'normal')} · "
         f"{int(album.get('item_count') or 0):,} item(s) · {_span(album)} · {_shared(album)}"
