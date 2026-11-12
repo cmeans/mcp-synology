@@ -81,9 +81,23 @@ class TestOriginals:
             out = await download_photos(
                 client, ids=[12, 15], dest_folder=str(folder), allowed_roots=[tmp_path]
             )
-        assert out.startswith(f"Downloaded 2 of 2 item(s) to {tmp_path}/'d\\tx' "), out
+        assert out.startswith(f"Downloaded 2 of 2 item(s) to {str(folder)!r} "), out
         assert "  12  ' pad.jpg'  " in out, out
         assert "  15  'a\\tb.jpg'  " in out, out
+
+    async def test_a_missing_local_path_is_quoted(self, tmp_path: Path) -> None:
+        """#691 (pre-QA r2): the refusals named the caller's path raw, then with !r."""
+        gone = str(tmp_path / "a\tb")
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await download_photos(client, ids=[12], dest_folder=gone, allowed_roots=[tmp_path])
+            assert _error(exc)["message"].endswith(f"local folder not found: {gone!r}")
+            with pytest.raises(ToolError) as exc:
+                await upload_photos(
+                    client, local_paths=[gone], allowed_roots=[tmp_path], folder_path="/"
+                )
+            assert _error(exc)["message"].endswith(f"not a local file: {gone!r}")
 
     @respx.mock
     async def test_a_proxy_page_is_not_saved(self, tmp_path: Path) -> None:

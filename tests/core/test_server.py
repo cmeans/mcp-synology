@@ -315,7 +315,8 @@ class TestInstructionsPerModule:
         text = _instructions(**modules)
         local = text.index("LOCAL MACHINE:")
         # Directly before LOCAL PATHS, with nothing (e.g. PERMISSIONS) between them.
-        assert "local filesystem.\n\nLOCAL PATHS:" in text
+        assert "local filesystem.\nA local path a reply shows in quotes" in text
+        assert "the one character it names.\n\nLOCAL PATHS:" in text[local:]
         assert "This MCP server runs on the user's Linux machine." in text
         assert f"Home directory: {Path.home()}" in text
         assert "{" not in text[local:]  # template variables filled in
@@ -2134,7 +2135,9 @@ class TestInstructionComments:
 # +113 over the budget by #692 (#685, the maintainer's Q2): PATH FORMAT says a path a reply
 # shows in quotes is quoted to show its exact characters, so pass what's inside, and that an
 # escape in one stands for the one character it names.
-PAYLOAD_BUDGET_CHARS = 61_513
+# +178 by #691 (pre-QA r2): LOCAL MACHINE says a local path a reply shows in quotes is quoted to
+# show its exact characters, as PATH FORMAT says of NAS paths (sent without File Station too).
+PAYLOAD_BUDGET_CHARS = 61_691
 
 
 class TestPayloadBudget:

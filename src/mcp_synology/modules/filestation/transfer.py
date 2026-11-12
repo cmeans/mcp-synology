@@ -84,7 +84,7 @@ def _expand_home(operation: str, param: str, value: str) -> Path:
     except RuntimeError as e:
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"{operation} refused: {value!r} can't be expanded: {e}",
+            f"{operation} refused: {shown_local(value)} can't be expanded: {e}",
             retryable=False,
             param=param,
             value=value,
@@ -141,7 +141,7 @@ async def upload_file(
             local.name,
             "local_path",
             "Pass filename with a plain name for the file on the NAS.",
-            label=f"the local file's name ({local.name!r})",
+            label=f"the local file's name ({shown(local.name)})",
             value=local_path,
             parent=dest_folder,
             keep_suggestion=True,

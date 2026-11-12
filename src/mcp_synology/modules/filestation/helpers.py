@@ -10,7 +10,6 @@ import os
 import re
 import unicodedata
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, NoReturn
 
 import httpx
@@ -656,7 +655,9 @@ def shown(path: str) -> str:
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
-    (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458); an
+    (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458), but a
+    path on this machine, refused or not, goes through `shown_local` (#691: repr doubles each
+    Windows backslash); an
     error or list that names a path the server checked or got
     from DSM uses ``shown`` (plain unless something would be invisible or the path holds
     ``", "``), and so does a reply
@@ -698,17 +699,25 @@ def shown(path: str) -> str:
 
 
 def shown_local(path: str | os.PathLike[str]) -> str:
-    """A path on this machine, for a message (#691): split as the OS splits it, each part
-    written as `shown` writes a NAS name (quoted only when a tab, padding or a character that
-    draws nothing would be invisible), joined with the OS's separator. Not `shown` or repr on
-    the whole path: `shown` reads only ``/`` as a separator, and repr doubles each Windows
-    backslash. A plain path reads as the OS writes it. Used for the caller's own local paths
-    too (a refusal of ``local_path`` or ``dest_folder``), where repr would double them."""
-    local = Path(path)
-    parts = local.parts[1:] if local.anchor else local.parts
-    if not parts:
-        return str(local)
-    return os.path.join(local.anchor, *(shown(part) for part in parts))
+    """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
+    OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
+    what `shown` would quote, padding, a tab, a character that draws nothing or ``", "``; then
+    the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
+    `_escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
+    FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
+    read like a quoted one (pre-QA r2 on #691). The text isn't normalized (``Path`` would drop
+    ``./`` and a trailing slash), so the caller's own path reads as they sent it."""
+    text = os.fspath(path)
+    if not text:
+        return "''"
+    seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
+    parts = [part for part in re.split(f"[{seps}]", text) if part]
+    quoted = [part for part in parts if shown(part) != part]
+    if not quoted:
+        return text
+    if all(shown(part) == plain_quoted(part) for part in quoted):
+        return plain_quoted(text)
+    return _escaped_repr(text)
 
 
 def shown_beside(path: str, marker: str) -> str:
