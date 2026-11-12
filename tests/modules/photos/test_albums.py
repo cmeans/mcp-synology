@@ -450,6 +450,7 @@ class TestShareLink:
         ]
         assert "(expired)" in out
         assert '"eve" (download)' in out and "group 101 (view)" in out
+        assert out.startswith('Album 4 "mcp-spec-album-renamed" is shared.'), out  # #700
 
     @respx.mock
     async def test_update_needs_a_shared_album(self) -> None:
