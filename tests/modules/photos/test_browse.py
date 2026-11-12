@@ -304,14 +304,14 @@ class TestListPhotosRouting:
             "SYNO.Foto.Browse.Concept",
             "get",
             2,
-            {"list": [{"id": 1, "name": "dog", "item_count": 0}]},
+            {"list": [{"id": 1, "name": "dog (pet)", "item_count": 0}]},
         )
         install(fake)
         client = make_client(CAPTURE_191)
         async with client:
             out = await list_photos(client, concept=1)
         assert fake.one(ITEM, "list").params["concept_id"] == 1
-        assert "concept dog" in out
+        assert 'concept "dog (pet)" (' in out, out
 
     @respx.mock
     async def test_concept_without_get_result_gives_no_total(self) -> None:

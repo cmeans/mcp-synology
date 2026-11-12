@@ -830,6 +830,12 @@ class TestDsmErrors:
         assert "160" in _error(exc)["message"]
 
 
+def test_album_line_quotes_a_name_holding_its_separator() -> None:
+    """#709: the line joins with " · ", so a name holding it is quoted."""
+    line = album_line({"id": 9, "name": "a \u00b7 b", "type": "normal", "item_count": 1})
+    assert line.startswith('Album 9: "a \u00b7 b" \u00b7 normal \u00b7 1 item(s)'), line
+
+
 def test_album_line_separates_thousands() -> None:
     line = album_line({"id": 9, "name": "Trip", "type": "normal", "item_count": 12_345})
     assert "· 12,345 item(s) ·" in line

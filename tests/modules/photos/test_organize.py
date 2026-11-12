@@ -1193,3 +1193,17 @@ async def test_photo_request_missing_folder_names_the_path_dsm_was_asked_for() -
     err = _error(exc)
     assert "no folder '/Up' in the personal space." in err["message"], err
     assert err["value"] == "Up", err
+
+
+@respx.mock
+async def test_added_tags_quote_a_tag_holding_the_lists_separator() -> None:
+    """#709: `Added tags A, B` joins with ", ", so a tag holding it is quoted."""
+    tags = captured("tag-list")
+    tags["list"].append({"id": 77, "name": "sun, sea"})
+    fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(TAG, "list", 1, tags)
+    fake.on(ITEM, "add_tag", 1, {"error_list": []})
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await tag_photos(client, action="add", ids=[12], tags=["2024", "sun, sea"])
+    assert out.startswith('Added tags 2024, "sun, sea" to 1 item(s)'), out

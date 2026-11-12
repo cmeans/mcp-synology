@@ -454,15 +454,16 @@ class TestNames:
 
     @respx.mock
     async def test_ambiguous_name_lists_ids(self) -> None:
-        people = {"list": [{"id": 1, "name": "Jo"}, {"id": 2, "name": "jo"}]}
+        people = {"list": [{"id": 1, "name": "Jo, A"}, {"id": 2, "name": "jo, a"}]}
         install(FakePhotos().on("SYNO.Foto.Browse.Person", "list", 1, people))
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").person(Ref("person_name", name="JO"))
+                await Photos(client, "personal", "Op").person(Ref("person_name", name="JO, A"))
         err = _error(exc)
         assert (err["code"], err["param"]) == ("invalid_parameter", "person_name")
-        assert "1 Jo" in str(err["message"]) and "2 jo" in str(err["message"])
+        # A name holding the list's ", " is quoted, so the candidates can't run together.
+        assert ': 1 "Jo, A", 2 "jo, a".' in str(err["message"]), err
         assert err["suggestion"] == "Ask the user which one they mean, then pass its person_id."
 
     @respx.mock
@@ -562,16 +563,16 @@ class TestOneRef:
 
     @respx.mock
     async def test_tag_ids_ambiguous_casefold_refused_with_candidates(self) -> None:
-        tags = {"list": [{"id": 3, "name": "Beach"}, {"id": 7, "name": "beach"}]}
+        tags = {"list": [{"id": 3, "name": "Beach, sun"}, {"id": 7, "name": "beach, sun"}]}
         install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags))
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").tag_ids(["BEACH"])
+                await Photos(client, "personal", "Op").tag_ids(["BEACH, SUN"])
         err = _error(exc)
         assert err["code"] == "invalid_parameter"
         assert err["param"] == "tag"
-        assert "3 Beach" in str(err["message"]) and "7 beach" in str(err["message"])
+        assert ': 3 "Beach, sun", 7 "beach, sun".' in str(err["message"]), err
 
 
 class TestPlaceNode:
@@ -590,7 +591,7 @@ class TestPlaceNode:
     async def test_place_missing_from_the_filter_tree(self) -> None:
         from mcp_synology.modules.photos.helpers import Photos
 
-        place = {"id": 1, "name": "Nowhere", "country_id": 77, "first_level": "Nowhere"}
+        place = {"id": 1, "name": "No (where)", "country_id": 77, "first_level": "Nowhere"}
         fake = FakePhotos().on("SYNO.Foto.Browse.Geocoding", "list", 1, {"list": [place]})
         fake.on("SYNO.Foto.Search.Filter", "list", 2, {"geocoding": []})
         install(fake)
@@ -600,7 +601,7 @@ class TestPlaceNode:
                 await Photos(client, "personal", "Op").place_node(1, param="condition")
         assert _error(exc)["code"] == "invalid_parameter"
         assert "can't be used in a smart album condition" in str(_error(exc)["message"])
-        assert "place 1 Nowhere can" in str(_error(exc)["message"])  # quoted (#700)
+        assert 'place 1 "No (where)" can' in str(_error(exc)["message"])  # quoted (#700)
 
     def test_missing_note_empty(self) -> None:
         from mcp_synology.modules.photos.helpers import Photos
