@@ -105,6 +105,36 @@ class TestListPhotosRouting:
         assert 'Photos: tag "MCP-SPEC-TAG" (personal space; 2024-01-01 to 2024-12-31' in out
 
     @respx.mock
+    async def test_the_title_quotes_names_holding_its_separator(self) -> None:
+        """#695: the title joins the folder, person and tag with ", ", so each is quoted when
+        it holds ", " (a tag's quotes JSON-escaped), and none can read as another."""
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/a, person X (3)", "parent": 3}}
+        )
+        person = captured("person-get", PEOPLE)
+        person["list"][0]["name"] = 'Ann, tag "y"'
+        fake.on("SYNO.Foto.Browse.Person", "get", 1, person)
+        tags = captured("tag-list")
+        tags["list"][0]["name"] = 'x", person Bob'
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags)
+        fake.on(ITEM, "list_with_filter", 2, {"list": []})
+        fake.on(ITEM, "count_with_filter", 2, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(
+                client,
+                folder_path="/a, person X (3)",
+                person_id=12,
+                tag='x", person Bob',
+            )
+        head = out.splitlines()[0]
+        assert head.startswith(
+            'Photos in \'/a, person X (3)\', person "Ann, tag \\"y\\"" (12), '
+            'tag "x\\", person Bob" ('
+        ), head
+
+    @respx.mock
     async def test_person_sends_policy(self) -> None:
         fake = _folders(FakePhotos())
         fake.on("SYNO.Foto.Browse.Person", "get", 1, captured("person-get", PEOPLE))
@@ -123,7 +153,18 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, tag="nope")
-        assert "no item has the tag 'nope'" in out
+        assert 'no item has the tag "nope"' in out  # as the title writes it (pre-QA r2 on #695)
+
+    @respx.mock
+    async def test_unknown_tag_in_a_folder_keeps_photos_in(self) -> None:
+        """Pre-QA r5 on #695: the unknown-tag branch's folder flag was unpinned."""
+        fake = _folders(FakePhotos())
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_path="/mcp-spec-capture", tag="nope")
+        assert out.startswith('Photos in /mcp-spec-capture, tag "nope" ('), out
 
     @respx.mock
     async def test_place_uses_geocoding_id(self) -> None:
@@ -150,6 +191,18 @@ class TestListPhotosRouting:
         assert 'search "2024"' in out and "beach-sunset_1.jpg" in out
 
     @respx.mock
+    async def test_a_keyword_holding_a_quote_is_escaped_in_the_title(self) -> None:
+        """Pre-QA r3 on #695: the keyword's quoting had no test."""
+        fake = _folders(FakePhotos())
+        fake.on("SYNO.Foto.Search.Search", "list_item", 1, {"list": []})
+        fake.on("SYNO.Foto.Search.Search", "count_item", 1, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, keyword='a" (3)')
+        assert out.startswith('Photos: search "a\\" (3)" ('), out
+
+    @respx.mock
     async def test_album_total_from_album(self) -> None:
         fake = _folders(FakePhotos())
         fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
@@ -160,6 +213,64 @@ class TestListPhotosRouting:
             out = await list_photos(client, album_id=4)
         assert fake.one(ITEM, "list").params["album_id"] == 4
         assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
+
+    @respx.mock
+    async def test_an_unnamed_person_isnt_quoted_as_a_name(self) -> None:
+        """Pre-QA r2 on #695: "(unnamed)" is the server's placeholder, not a name to pass back."""
+        person = captured("person-get", PEOPLE)
+        person["list"][0]["name"] = ""
+        fake = FakePhotos().on("SYNO.Foto.Browse.Person", "get", 1, person)
+        fake.on(ITEM, "list_with_filter", 2, {"list": []})
+        fake.on(ITEM, "count_with_filter", 2, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, person_id=12)
+        assert out.startswith("Photos: person (unnamed) (12) ("), out
+
+    @respx.mock
+    async def test_a_folder_ending_in_a_quote_is_quoted(self) -> None:
+        """#701 after #698: shown() quotes a path that starts or ends with a quote, so the title's
+        folder `/Trips'` can't read as a quoted `/Trips`, and the title still reads "Photos in"."""
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/Trips'", "parent": 3}}
+        )
+        fake.on(ITEM, "list", 2, captured("item-list-v2")).on(ITEM, "count", 1, {"count": 9})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_path="/Trips'")
+        assert out.startswith('Photos in "/Trips\'" (personal space'), out
+
+    @respx.mock
+    async def test_names_holding_the_titles_other_separators_are_quoted(self) -> None:
+        """#695 (pre-QA r1): an album's quote, and " (" in a person's or a folder's name, forged
+        the title's ID or its space-and-order group."""
+        album = captured("album-get")
+        album["list"][0]["name"] = 'Trip" (7)'
+        fake = _folders(FakePhotos()).on("SYNO.Foto.Browse.Album", "get", 1, album)
+        fake.on(ITEM, "list", 2, captured("item-list-album"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, album_id=4)
+        assert out.startswith('Photos: album "Trip\\" (7)" (4) ('), out
+
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/a (shared space)", "parent": 3}}
+        )
+        person = captured("person-get", PEOPLE)
+        person["list"][0]["name"] = "Ann (13)"
+        fake.on("SYNO.Foto.Browse.Person", "get", 1, person)
+        fake.on(ITEM, "list_with_filter", 2, {"list": []})
+        fake.on(ITEM, "count_with_filter", 2, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_path="/a (shared space)", person_id=12)
+        assert out.startswith(
+            "Photos in '/a (shared space)', person \"Ann (13)\" (12) (personal space"
+        ), out
 
     @respx.mock
     async def test_favorite_on_191_uses_v7(self) -> None:
@@ -187,7 +298,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, concept=1)
         assert fake.one(ITEM, "list").params["concept_id"] == 1
-        assert "concept dog" in out
+        assert 'concept "dog"' in out
 
     @respx.mock
     async def test_concept_without_get_result_gives_no_total(self) -> None:

@@ -1239,7 +1239,9 @@ Photos keeps its own library: the personal space (space=personal, the default) a
 Space (space=shared). Photos tools take the ids that list_photos and
 list_photo_collections return; for files outside Photos, File Station's tools take paths,
 when that module is enabled. Taken times are the photo's own local clock time (the
-camera's, or the NAS's for a file without EXIF): don't convert them."""
+camera's, or the NAS's for a file without EXIF): don't convert them. A name or folder a
+reply shows in quotes is quoted to show its exact characters: pass what's inside the quotes,
+each escape (\\", \\u200b) standing for the one character it names."""
 
 # Only when the Photos WRITE tools are registered (#318).
 _PHOTOS_WRITE_NOTICE = """

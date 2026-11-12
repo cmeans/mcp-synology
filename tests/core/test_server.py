@@ -2135,9 +2135,12 @@ class TestInstructionComments:
 # +113 over the budget by #692 (#685, the maintainer's Q2): PATH FORMAT says a path a reply
 # shows in quotes is quoted to show its exact characters, so pass what's inside, and that an
 # escape in one stands for the one character it names.
-# +178 by #691 (pre-QA r2): LOCAL MACHINE says a local path a reply shows in quotes is quoted to
-# show its exact characters, as PATH FORMAT says of NAS paths (sent without File Station too).
-PAYLOAD_BUDGET_CHARS = 61_691
+# +178 by #698 (#691, pre-QA r2): LOCAL MACHINE says a local path a reply shows in quotes is
+# quoted to show its exact characters, as PATH FORMAT says of NAS paths (sent without File
+# Station too).
+# +178 by #701 (#695, pre-QA r5): SYNOLOGY PHOTOS says a name or folder shown in quotes is
+# quoted to show its exact characters (PATH FORMAT says it only with File Station).
+PAYLOAD_BUDGET_CHARS = 61_869
 
 
 class TestPayloadBudget:
@@ -2368,6 +2371,9 @@ class TestPhotosNotice:
         # File Station's, and the section doesn't lean on file_task.
         flat = " ".join(section.split())
         assert "File Station's tools take paths, when that module is enabled" in flat
+        # #695 (pre-QA r5): quoted names read the same without File Station's PATH FORMAT.
+        assert "A name or folder a reply shows in quotes is quoted to show its exact" in flat
+        assert "pass what's inside the quotes" in flat
         assert "file_task" not in section
         assert (
             "Taken times are the photo's own local clock time (the camera's, or the NAS's for "
