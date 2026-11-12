@@ -180,6 +180,18 @@ class TestListPhotosRouting:
         assert 'search "2024"' in out and "beach-sunset_1.jpg" in out
 
     @respx.mock
+    async def test_a_keyword_holding_a_quote_is_escaped_in_the_title(self) -> None:
+        """Pre-QA r3 on #695: the keyword's quoting had no test."""
+        fake = _folders(FakePhotos())
+        fake.on("SYNO.Foto.Search.Search", "list_item", 1, {"list": []})
+        fake.on("SYNO.Foto.Search.Search", "count_item", 1, {"count": 0})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, keyword='a" (3)')
+        assert out.startswith('Photos: search "a\\" (3)" ('), out
+
+    @respx.mock
     async def test_album_total_from_album(self) -> None:
         fake = _folders(FakePhotos())
         fake.on("SYNO.Foto.Browse.Album", "get", 1, captured("album-get"))
@@ -205,6 +217,11 @@ class TestListPhotosRouting:
             ('x", y', '"x\\", y"'),
             ("café", '"café"'),
             ("\U000e0041", '"\\udb40\\udc41"'),  # a tag character, outside the BMP
+            # Where Unicode uses a joiner or selector it's kept, as shown() keeps it (r3).
+            ("\u2764\ufe0f", '"\u2764\ufe0f"'),
+            ("\U0001f468\u200d\U0001f469", '"\U0001f468\u200d\U0001f469"'),
+            ("rep\u200dort", '"rep\\u200dort"'),
+            ("\u0301Ann", '"\\u0301Ann"'),  # a leading mark would sit on the quote
         ]:
             assert json_quoted(name) == shown_as, name
             assert json.loads(json_quoted(name)) == name

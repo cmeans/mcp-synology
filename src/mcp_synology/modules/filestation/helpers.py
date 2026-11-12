@@ -701,10 +701,23 @@ def json_quoted(text: str) -> str:
     line's structure, and each character that draws nothing or a message would hide (a
     zero-width space, a no-break space, a private-use character) is written ``\\uXXXX``, as
     `_escaped_repr` writes one, so ``"Ann<ZWSP>"`` can't pass for ``"Ann"``. Still valid
-    JSON for the same text (one outside the BMP as its surrogate pair)."""
+    JSON for the same text (one outside the BMP as its surrogate pair).
+
+    By `shown`'s rule (#515): a name Unicode uses as written (an emoji ZWJ sequence, a
+    Persian ZWNJ, ``❤<VS16>``) stays as is; escapes come only when `invisible_problem` refuses
+    the name or it holds a character a message would hide, and then a leading combining mark
+    is escaped too, as it would sit on the opening quote (pre-QA r3 on #695). A name longer
+    than any NAS name is escaped unchecked, as `shown` does."""
+    plain = json.dumps(text, ensure_ascii=False)
+    long = len(text.encode("utf-8", "surrogatepass")) > NAME_BYTES
+    if not long and invisible_problem(text) is None and not any(map(_hides, text)):
+        return plain
     out = []
-    for c in json.dumps(text, ensure_ascii=False):
-        if c not in '"\\' and (_IGNORABLE.match(c) or c == _BRAILLE_BLANK or _hides(c)):
+    for n, c in enumerate(plain):
+        lead_mark = n == 1 and bool(_MARK.match(c))
+        if c not in '"\\' and (
+            lead_mark or _IGNORABLE.match(c) or c == _BRAILLE_BLANK or _hides(c)
+        ):
             o = ord(c)
             if o > 0xFFFF:
                 o -= 0x10000
