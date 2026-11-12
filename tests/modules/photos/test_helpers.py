@@ -714,3 +714,13 @@ def test_quotes_note_compares_both_sides_in_nfc() -> None:
     assert quotes_note(nfd, "album name", before=nfc) == []
     assert quotes_note(nfd, "album name", before=[None, "x", nfc]) == []
     assert quotes_note('"CAF\u00c9"', "album name", before=nfc) != []
+
+
+def test_quotes_note_takes_any_iterable_of_earlier_names() -> None:
+    """QA r4 on #709: a generator or dict view of names counts as several, a str as one."""
+    name = '"Jo"'
+    assert quotes_note(name, "x", before=(n for n in ["a", name])) == []
+    assert quotes_note(name, "x", before={1: "a", 2: name}.values()) == []
+    assert quotes_note(name, "x", before=name) == []
+    assert quotes_note(name, "x", before="a") != []
+    assert quotes_note(name, "x", before=None) != []

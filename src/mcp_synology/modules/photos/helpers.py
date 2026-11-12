@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
@@ -111,7 +112,11 @@ def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
 
 
 def quotes_note(
-    name: object, what: str, fix: str = "rename it without the quote marks", *, before: object = ()
+    name: object,
+    what: str,
+    fix: str = "rename it without the quote marks",
+    *,
+    before: object | Iterable[object] = (),
 ) -> list[str]:
     """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
     quotes are now part of the name (QA r1 on #709). Empty otherwise, and when ``name`` is
@@ -121,7 +126,12 @@ def quotes_note(
     stored, and a client may normalize it on the way back (QA r3)."""
     if not in_reply_quotes(name):
         return []
-    earlier = before if isinstance(before, (list, tuple, set, frozenset)) else (before,)
+    # One name (text, or None), or any other iterable of names (QA r4 on #709).
+    earlier = (
+        (before,)
+        if before is None or isinstance(before, str) or not isinstance(before, Iterable)
+        else before
+    )
     nfc = unicodedata.normalize("NFC", str(name))
     if any(b is not None and unicodedata.normalize("NFC", str(b)) == nfc for b in earlier):
         return []
@@ -439,6 +449,8 @@ class Photos:
         """
         if ref is None:
             ref = Ref("folder_path", name="/")
+        # The path DSM is asked for, set for a path, not for an ID.
+        path: str | None = None
         if ref.id is not None:
             if ref.id < 0:
                 # No folder has a negative ID; nothing to ask DSM (#609).
@@ -453,14 +465,13 @@ class Photos:
         else:
             path = check_folder_path(ref.name or "", ref.param)
             params = {"id": 0} if path == "/" else {"name": path}
-            # The path DSM was asked for, not the caller's text: beside "starting with /"
-            # advice, `'Up'` read as if the "/" were missing (QA r3 on #709).
-            checked = path
         try:
             data = await self.call("Browse.Folder", "get", params, version=2)
         except SynologyError as e:
             if e.code == 642:
-                what = ref.id if ref.id is not None else repr(checked)
+                # The path DSM was asked for, not the caller's text: beside "starting with /"
+                # advice, `'Up'` read as if the "/" were missing (QA r3 on #709).
+                what = ref.id if ref.id is not None else repr(path)
                 advice = missing_advice or "list_photo_collections type=folder lists them."
                 given = (ref.name or "").strip()
                 if ref.id is None and len(given) >= 3 and given[0] == given[-1] in "'\"":
