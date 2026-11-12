@@ -267,7 +267,7 @@ async def _list(
         name = listed[0].get("name", "") if listed else ""
         return await _render(
             ph,
-            f"concept {json_quoted(str(name)) if name else concept}",
+            f"concept {quoted_name(name, str(concept))}",
             [],
             _order(*sort),
             items,
@@ -289,8 +289,8 @@ async def _list(
         f = await ph.folder(folder)
         folder_id = int(f["id"])
         keys["folder"] = [folder_id]
-        # Plain unless it holds what `shown` quotes or the title's other separator, " (": the
-        # title joins what was asked for with ", " and ends each with " (…)" (#695, #700).
+        # `shown_folder`: quoted when it holds what `shown` quotes (", " included: the title
+        # joins what was asked for with ", "), " (" (each ends with " (…)") or ": " (#695, #700).
         described.append(shown_folder(str(f.get("name", "")) or "/"))
     if person is not None:
         p = await ph.person(person)
@@ -302,13 +302,13 @@ async def _list(
         described.append(f"person {quoted_name(p.get('name'))} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        described.append(f"tag {json_quoted(tag)}")
+        described.append(f"tag {quoted_name(tag)}")
         if tag_id is None:
             heading = _heading(
                 ph, described, filters_text, _order(*sort), in_folder=folder is not None
             )
             return (
-                f"{heading}\nNo items: no item has the tag {json_quoted(tag)} (a tag exists only "
+                f"{heading}\nNo items: no item has the tag {quoted_name(tag)} (a tag exists only "
                 "while some item has it)."
             )
         keys["general_tag"] = [tag_id]

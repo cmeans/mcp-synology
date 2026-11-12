@@ -60,6 +60,19 @@ class TestListPhotosRouting:
         assert "9 item(s) total; showing 1–" in out
 
     @respx.mock
+    async def test_the_title_quotes_a_folder_ending_in_a_colon(self) -> None:
+        """Pre-QA r3 on #709: the title's folder goes through `shown_folder`."""
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/Trips:", "parent": 3}}
+        )
+        fake.on(ITEM, "list", 2, captured("item-list-v2")).on(ITEM, "count", 1, {"count": 9})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_id=10, limit=2)
+        assert out.startswith("Photos in '/Trips:' (personal space; newest first)"), out
+
+    @respx.mock
     async def test_no_source_uses_list_with_filter(self) -> None:
         """Item.list ignores sort_by outside a folder; list_with_filter honors it."""
         fake = _folders(FakePhotos())
