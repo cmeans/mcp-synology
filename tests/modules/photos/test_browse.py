@@ -769,3 +769,31 @@ def test_collection_limit_refusal_separates_thousands() -> None:
     with pytest.raises(ToolError) as exc:
         _check_paging("List photo collections", 0, 5_000, 1_000)
     assert json.loads(str(exc.value))["error"]["message"].endswith("limit must be 1–1,000.")
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: an album or tag passed back in a reply's quotes and not found."""
+
+    HINT = "If the name came from a reply in quotes, pass it without them."
+
+    @respx.mock
+    async def test_an_album_name_in_quotes_hints(self) -> None:
+        install(FakePhotos().on("SYNO.Foto.Browse.Album", "list", 2, captured("album-list")))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await list_photos(client, album_name='"Trip 2024"')
+            with pytest.raises(ToolError) as plain:
+                await list_photos(client, album_name="Trip 2024")
+        assert _error(exc)["suggestion"].endswith(f"lists your albums. {self.HINT}"), _error(exc)
+        assert self.HINT not in _error(plain)["suggestion"]
+
+    @respx.mock
+    async def test_a_tag_in_quotes_with_no_items_hints(self) -> None:
+        install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list")))
+        client = make_client()
+        async with client:
+            out = await list_photos(client, tag='"2024"')
+            plain = await list_photos(client, tag="nope")
+        assert out.endswith(f"while some item has it). {self.HINT}"), out
+        assert self.HINT not in plain, plain

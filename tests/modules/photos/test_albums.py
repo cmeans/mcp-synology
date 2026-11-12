@@ -904,3 +904,66 @@ class TestCraftedNames:
         async with client:
             out = await delete_photo_albums(client, album_ids=[4])
         assert f"Deleted 1 album(s): 4 {self.SHOWN}; their photos stay" in out, out
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: an album name in a reply's quotes, passed back, is set with the quotes
+    (noted), and an album or condition tag looked up that way and not found gets a hint."""
+
+    HINT = "If the name came from a reply in quotes, pass it without them."
+    NOTE = (
+        'Note: the album name "\\"Trip\\"" starts and ends with a quote mark, which is now '
+        "part of it. If it came from a reply in quotes, rename it without them."
+    )
+
+    @respx.mock
+    async def test_create_rename_and_copy_note_a_name_in_quotes(self) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
+        fake.on(NORMAL, "create", 1, captured("album-create"))
+        fake.on(ALBUM, "get", 1, _album())
+        fake.on(ALBUM, "set_name", 1, {})
+        fake.on(NORMAL, "copy", 1, captured("album-copy"))
+        install(fake)
+        client = make_client()
+        async with client:
+            made = await photo_album(client, action="create", name='"Trip"')
+            renamed = await photo_album(client, action="rename", album_id=4, name='"Trip"')
+            copied = await photo_album(client, action="copy", album_id=4, name='"Trip"')
+            plain = await photo_album(client, action="rename", album_id=4, name="Trip")
+        for out in (made, renamed, copied):
+            assert self.NOTE in out.splitlines(), out
+        assert "Note:" not in plain, plain
+
+    @respx.mock
+    async def test_create_smart_notes_a_name_in_quotes(self) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on(COND, "peek_item_count", 2, {"count": 1})
+        fake.on(COND, "create", 2, captured("condalbum-create"))
+        fake.on(ALBUM, "get", 1, _album(id=7, type="condition", name='"Trip"'))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(
+                client, action="create_smart", name='"Trip"', condition={"type": "video"}
+            )
+        assert self.NOTE in out.splitlines(), out
+
+    @respx.mock
+    async def test_an_unknown_condition_tag_in_quotes_hints(self) -> None:
+        fake = FakePhotos().on(ALBUM, "get", 1, _album(type="condition"))
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_album(
+                    client, action="set_condition", album_id=4, condition={"tags": ['"2024"']}
+                )
+            with pytest.raises(ToolError) as plain:
+                await photo_album(
+                    client, action="set_condition", album_id=4, condition={"tags": ["no-such"]}
+                )
+        assert _error(exc)["suggestion"] == self.HINT, _error(exc)
+        assert _error(plain).get("suggestion") != self.HINT

@@ -12,12 +12,14 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
 from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.photos.helpers import (
+    QUOTES_HINT,
     Photos,
     Ref,
     check_folder_path,
     check_space,
     encode,
     id_list,
+    in_reply_quotes,
     is_indexing,
     one_ref,
     page_footer,
@@ -26,9 +28,11 @@ from mcp_synology.modules.photos.helpers import (
     photo_time,
     prefix,
     quoted_name,
+    quotes_note,
     refs,
     shown_folder,
     taken,
+    with_quotes_hint,
 )
 from tests.modules.photos.dsm import CAPTURE_191, PEOPLE, FakePhotos, captured, install, make_client
 
@@ -652,3 +656,24 @@ class TestQuotedNamesAndFolders:
         assert shown_folder("/pad \t (x)") == shown("/pad \t (x)")  # escapes kept
         assert shown_folder(None) == "(unnamed)"  # a reply with no name (QA r1)
         assert shown_folder("") == ""
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: only a name wholly in double quotes, as `quoted_name` writes one."""
+
+    def test_in_reply_quotes(self) -> None:
+        assert in_reply_quotes('"beach"')
+        assert in_reply_quotes('""')
+        for name in ('"', "beach", "'beach'", '"beach', 'beach"', 'a "b" c', None, 0):
+            assert not in_reply_quotes(name), name
+
+    def test_hint_and_note(self) -> None:
+        assert with_quotes_hint("Try X.", '"a"') == f"Try X. {QUOTES_HINT}"
+        assert with_quotes_hint(None, '"a"') == QUOTES_HINT
+        assert with_quotes_hint("Try X.", "a") == "Try X."
+        assert with_quotes_hint(None, "a") is None
+        assert quotes_note("a", "tag") == []
+        assert quotes_note('"a"', "tag", "fix it") == [
+            'Note: the tag "\\"a\\"" starts and ends with a quote mark, which is now part '
+            "of it. If it came from a reply in quotes, fix it."
+        ]

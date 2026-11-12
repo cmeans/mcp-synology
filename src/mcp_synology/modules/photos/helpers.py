@@ -88,6 +88,35 @@ def shown_folder(path: object, *also: str) -> str:
     return plain_quoted(text) if out == text and marked else out
 
 
+# Replies show names in "…" (`quoted_name`), so a model may pass one back with them. Advice
+# only, as File Station's for a quoted path (#692): a name that really has quotes still works.
+QUOTES_HINT = "If the name came from a reply in quotes, pass it without them."
+
+
+def in_reply_quotes(name: object) -> bool:
+    """Whether ``name`` starts and ends with ``"``, as `quoted_name` writes one (QA r1 on #709)."""
+    text = "" if name is None else str(name)
+    return len(text) >= 2 and text[0] == text[-1] == '"'
+
+
+def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
+    """``suggestion``, with `QUOTES_HINT` added when ``name`` is in a reply's quotes."""
+    if not in_reply_quotes(name):
+        return suggestion
+    return f"{suggestion} {QUOTES_HINT}" if suggestion else QUOTES_HINT
+
+
+def quotes_note(name: object, what: str, fix: str = "rename it without them") -> list[str]:
+    """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
+    quotes are now part of the name (QA r1 on #709). Empty otherwise."""
+    if not in_reply_quotes(name):
+        return []
+    return [
+        f"Note: the {what} {quoted_name(name)} starts and ends with a quote mark, which is "
+        f"now part of it. If it came from a reply in quotes, {fix}."
+    ]
+
+
 def check_space(operation: str, space: str) -> Space:
     """``space`` as a ``Space``, or an invalid_parameter error."""
     for known in SPACES:
@@ -493,7 +522,7 @@ class Photos:
                 f"no {kind} named {name!r}.",
                 param=ref.param,
                 value=name,
-                suggestion=hint,
+                suggestion=with_quotes_hint(hint, name),
             )
         listed = ", ".join(f"{m['id']} {quoted_name(m.get('name'))}" for m in matches[:10])
         invalid(

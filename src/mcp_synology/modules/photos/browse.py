@@ -18,10 +18,12 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import json_quoted
 from mcp_synology.modules.photos.helpers import (
+    QUOTES_HINT,
     V7,
     Photos,
     Ref,
     check_space,
+    in_reply_quotes,
     invalid,
     one_ref,
     page_footer,
@@ -307,9 +309,10 @@ async def _list(
             heading = _heading(
                 ph, described, filters_text, _order(*sort), in_folder=folder is not None
             )
+            hint = f" {QUOTES_HINT}" if in_reply_quotes(tag) else ""
             return (
                 f"{heading}\nNo items: no item has the tag {quoted_name(tag)} (a tag exists only "
-                "while some item has it)."
+                f"while some item has it).{hint}"
             )
         keys["general_tag"] = [tag_id]
         keys["general_tag_policy"] = "or"

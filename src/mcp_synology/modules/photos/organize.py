@@ -18,6 +18,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
+    QUOTES_HINT,
     V7,
     Photos,
     Ref,
@@ -26,11 +27,13 @@ from mcp_synology.modules.photos.helpers import (
     check_ids,
     check_space,
     in_batches,
+    in_reply_quotes,
     invalid,
     not_found,
     one_ref,
     parse_expires,
     quoted_name,
+    quotes_note,
     refs,
     rejected_text,
     shown_folder,
@@ -153,9 +156,11 @@ async def tag_photos(
         if found:
             # Resolved now, never cached: 1.9.1 renumbers tags on re-index (spec).
             resolved = await ph.tag_ids(names, param="tags")
+            created: list[str] = []
             if action == "add":
                 for tag, tag_id in resolved.items():
                     if tag_id is None:
+                        created.append(tag)
                         # Idempotent by name: returns the existing tag's ID (verified).
                         made = await ph.call("Browse.GeneralTag", "create", {"name": tag})
                         resolved[tag] = int(made["tag"]["id"])
@@ -179,7 +184,15 @@ async def tag_photos(
                 lines.append(f"{verb} {shown} {where} {len(found):,} item(s) ({space_label(sp)}).")
             if unknown:
                 gone = ", ".join(quoted_name(t) for t in unknown)
-                lines.append(f"  No item has the tag(s) {gone}, so there was nothing to remove.")
+                hint = f" {QUOTES_HINT}" if any(in_reply_quotes(t) for t in unknown) else ""
+                lines.append(
+                    f"  No item has the tag(s) {gone}, so there was nothing to remove.{hint}"
+                )
+            for tag in created:
+                lines += [
+                    f"  {n}"
+                    for n in quotes_note(tag, "new tag", "remove it and add the tag without them")
+                ]
             if rejected:
                 lines.append(
                     f"  Rejected by DSM: {rejected_text(rejected)} "
@@ -397,7 +410,8 @@ async def edit_person(
         else:
             # photo_id is an item of this person; DSM picks that item's face (verified).
             await ph.call("Browse.Person", "set_cover", {"id": pid, "photo_id": item_id})
-        return person_line(await _person_now(ph, pid))
+        note = quotes_note(name, "person's name") if action == "rename" else []
+        return "\n".join([person_line(await _person_now(ph, pid)), *note])
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -455,10 +469,11 @@ async def merge_people(
         now = await _person_now(ph, keep_id)
         items = now.get("item_count")
         count = f"{int(items):,}" if items is not None else "?"
-        return (
+        merged_line = (
             f"Merged {len(merged):,} people into person {keep_id} "
             f"{quoted_name(now.get('name'))} (now {count} items)."
         )
+        return "\n".join([merged_line, *quotes_note(name, "person's name")])
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -466,6 +481,12 @@ async def merge_people(
 # -- photo_request ------------------------------------------------------------------
 
 _REQUEST_ACTIONS = ("create", "list", "update", "delete")
+
+
+def _subject_note(subject: str | None) -> list[str]:
+    return quotes_note(subject, "subject", "update the request's subject without them")
+
+
 _LIBRARY = {"personal": "personal_space", "shared": "shared_space"}
 
 
@@ -607,13 +628,14 @@ async def photo_request(
             made = await ph.call(
                 "PhotoRequest", "create", {"passphrase": "", **fields}, personal=True
             )
-            return _request_block(made)
+            return "\n".join([_request_block(made), *_subject_note(subject)])
         if not fields:
             invalid(op, "nothing to change.", param="action", value=action)
         await ph.call("PhotoRequest", "update", {"passphrase": request, **fields}, personal=True)
         now = {str(e.get("passphrase")): e for e in await ph.walk("PhotoRequest", personal=True)}
         # The fallback shows this call's own text: escaped as DSM's would be (#604).
         shown = {k: escape_controls(v) if isinstance(v, str) else v for k, v in fields.items()}
-        return _request_block(now.get(str(request), {**existing[str(request)], **shown}))
+        block = _request_block(now.get(str(request), {**existing[str(request)], **shown}))
+        return "\n".join([block, *_subject_note(subject)])
     except SynologyError as e:
         synology_error_response(op, e)
