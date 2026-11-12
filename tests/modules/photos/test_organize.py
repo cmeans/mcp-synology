@@ -1207,3 +1207,20 @@ async def test_added_tags_quote_a_tag_holding_the_lists_separator() -> None:
     async with client:
         out = await tag_photos(client, action="add", ids=[12], tags=["2024", "sun, sea"])
     assert out.startswith('Added tags 2024, "sun, sea" to 1 item(s)'), out
+
+
+@respx.mock
+async def test_merge_quotes_a_kept_name_of_digits() -> None:
+    """Pre-QA r9 on #709: `person 12 2024 (now …)` read as two IDs."""
+    kept = captured("person-get", PEOPLE)
+    kept["list"][0]["name"] = "2024"
+    fake = FakePhotos().on(PERSON, "list", 1, captured("person-list", PEOPLE))
+    fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
+    fake.on(PERSON, "get", 1, kept)
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await merge_people(
+            client, target_name="person 1", merge_names=["Person 2", "Person 3"]
+        )
+    assert out == 'Merged 2 people into person 12 "2024" (now 70 items).', out

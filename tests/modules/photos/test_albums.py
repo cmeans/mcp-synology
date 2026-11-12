@@ -981,3 +981,11 @@ async def test_deleted_albums_quote_a_name_of_digits() -> None:
     async with client:
         out = await delete_photo_albums(client, album_ids=[9, 12])
     assert out.startswith('Deleted 2 album(s): 9 "12", 12 "2024 trip"; their photos'), out
+
+
+def test_share_block_quotes_an_album_named_with_digits() -> None:
+    """Pre-QA r9 on #709: `Album 4 12 is shared.` read as two IDs."""
+    from mcp_synology.modules.photos.albums import _share_block
+
+    line = _share_block({"id": 4, "name": "12", "shared": True}).splitlines()[0]
+    assert line == 'Album 4 "12" is shared.', line

@@ -721,3 +721,39 @@ class TestFolderPassedBackInQuotes:
             with pytest.raises(ToolError) as exc:
                 await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
         assert self.HINT not in str(_error(exc)["suggestion"]), _error(exc)
+
+
+class TestNamesBesideAnId:
+    """Pre-QA r9 on #709: a name of digits right after an ID is quoted, or it reads as one."""
+
+    @respx.mock
+    async def test_person_candidates(self) -> None:
+        people = {"list": [{"id": 1, "name": "12"}, {"id": 2, "name": "12"}]}
+        install(FakePhotos().on("SYNO.Foto.Browse.Person", "list", 1, people))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").person(Ref("person_name", name="12"))
+        assert ': 1 "12", 2 "12".' in str(_error(exc)["message"]), _error(exc)
+
+    @respx.mock
+    async def test_tag_candidates(self) -> None:
+        tags = {"list": [{"id": 3, "name": "2024Ab"}, {"id": 7, "name": "2024aB"}]}
+        install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").tag_ids(["2024AB"])
+        assert ': 3 "2024Ab", 7 "2024aB".' in str(_error(exc)["message"]), _error(exc)
+
+    @respx.mock
+    async def test_place(self) -> None:
+        place = {"id": 1, "name": "5th Ave", "country_id": 77, "first_level": "Nowhere"}
+        fake = FakePhotos().on("SYNO.Foto.Browse.Geocoding", "list", 1, {"list": [place]})
+        fake.on("SYNO.Foto.Search.Filter", "list", 2, {"geocoding": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").place_node(1, param="condition")
+        assert 'place 1 "5th Ave" can' in str(_error(exc)["message"]), _error(exc)
