@@ -616,11 +616,6 @@ async def bounded_summary(
     return await make(False)
 
 
-def unstop(message: str) -> str:
-    """``message`` without its final period, and only that one: a path can end in dots."""
-    return message[:-1] if message.endswith(".") else message
-
-
 # Advice that already says to check with list_files (a start with no answer, a path not
 # found when the delete ran), not advice that only mentions it (408's "Use list_files or
 # search_files to find …").

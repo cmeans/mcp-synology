@@ -1089,6 +1089,41 @@ async def test_a_restore_whose_original_folder_is_refused_is_refused_up_front(
     assert dsm.starts() == []
 
 
+async def test_two_refused_original_folders_are_listed_one_a_line(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+) -> None:
+    """#693 (pre-QA r3: unpinned): two refused folders, one a line."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    dsm = FakeDsm({src: PathScript() for src in tool.sources})
+    dsm.unclear["/s/o1"] = 407
+    dsm.unclear["/s/o2"] = 407
+    dsm.mount(respx_mock)
+    with pytest.raises(ToolError) as refused:
+        await tool.call(mock_client, TaskRecords())
+    assert json.loads(str(refused.value))["error"]["message"] == (
+        "Restore files refused: no permission to use the original folders:\n  /s/o1\n  /s/o2\n"
+        "Nothing was restored."
+    )
+
+
+async def test_two_recreated_folders_are_listed_one_a_line(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#693 (pre-QA r3: unpinned)."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    FakeDsm({src: PathScript() for src in tool.sources}).mount(respx_mock)
+
+    async def recreated(client: Any, destinations: Any) -> tuple[list[str], list[str]]:
+        return ["/s/o1", "/s/o2"], []
+
+    monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "\nRe-created to restore into (they were no longer there):\n  /s/o1\n  /s/o2" in text
+
+
 async def test_a_restore_whose_later_folder_is_gone_says_what_was_restored(
     mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
 ) -> None:

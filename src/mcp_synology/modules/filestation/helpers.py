@@ -650,7 +650,7 @@ def shown(path: str) -> str:
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
     ``", "`` and nothing else to show is quoted without escapes, unless it holds a
-    backslash (`_plain_quoted`, #685, below).
+    backslash (`plain_quoted`, #685, below).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
@@ -691,19 +691,19 @@ def shown(path: str) -> str:
         # Quoted only, with no escapes: nothing else needs showing, so what's inside the
         # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
         # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
-        return _plain_quoted(path)
+        return plain_quoted(path)
     return path
 
 
 def shown_beside(path: str, marker: str) -> str:
-    """``path`` as `shown` writes it, quoted (`_plain_quoted`) when it holds ``marker``, the text
+    """``path`` as `shown` writes it, quoted (`plain_quoted`) when it holds ``marker``, the text
     a line puts right after or between paths (`" and "`, `" (to "`), so a name holding it can't
     read as that line's structure (pre-QA r1 on #693)."""
     text = shown(path)
-    return _plain_quoted(path) if marker in path and text == path else text
+    return plain_quoted(path) if marker in path and text == path else text
 
 
-def _plain_quoted(path: str) -> str:
+def plain_quoted(path: str) -> str:
     """``path`` in quotes that hold it exactly: single quotes, or double when it holds a
     single one; with both, or with a backslash, `_escaped_repr`'s form. In any quoted path a
     backslash is then always an escape, as the server instructions say: a plain-quoted

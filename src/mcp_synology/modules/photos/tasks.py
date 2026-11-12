@@ -38,7 +38,7 @@ from mcp_synology.core.formatting import (
     path_list,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import _plain_quoted, describe_transport_error
+from mcp_synology.modules.filestation.helpers import describe_transport_error, plain_quoted
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Space,
@@ -430,7 +430,7 @@ async def delete_photo_folders(
             one = (
                 described[0]
                 if ", " not in path
-                else described[0].replace(path, _plain_quoted(path), 1)
+                else described[0].replace(path, plain_quoted(path), 1)
             )
             return "\n".join(await _run_delete(ph, [], list(resolved), timeout, one))
         # Named by their count, and listed last one a line (#693), so a folder named "a, b"

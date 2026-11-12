@@ -4545,7 +4545,7 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
     assert "Already copied: /s/a." in result
     assert (
         "Not started: /s/c. First: List /s/dst to see what's there; a folder there may be only "
-        "partly copied. Then run it." in result
+        "partly copied. Then run the one not started." in result
     )
     assert records.get(Handle("copy", "T_b")) is not None
     assert not [call for call in calls if call.get("method") == "stop"]

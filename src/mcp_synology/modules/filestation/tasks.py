@@ -792,7 +792,10 @@ def handoff_reply(
         them = "it" if len(not_started) == 1 else "them"
         advice = f"Run {them} once the task of {shown(path)} finishes."
         if lost and dest:
-            advice = then(f"First: {_where_to_look(gerund, dest, [path])}", f"Then run {them}.")
+            # Named: after the list of the lost task's own paths, "run it" read as that task
+            # (pre-QA r3 on #693).
+            ones = "the one not started" if len(not_started) == 1 else "the ones not started"
+            advice = then(f"First: {_where_to_look(gerund, dest, [path])}", f"Then run {ones}.")
         elif lost:
             advice = f"Check {shown(path)} first by listing it, then run {them}."
         # The advice on its own line after a list (#693), so it can't read as part of an item.
@@ -1138,7 +1141,7 @@ async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> Dis
             )
             if len(task.paths) > 1:
                 # Its paths one a line under it (#693).
-                line = path_list(line, [shown(p) for p in task.paths], indent="    ")
+                line = path_list(f"{line}, its items", [shown(p) for p in task.paths], "    ")
             lines[str(task.handle)] = line
     except Exception as e:
         # Malformed task data included: discovery must never fail a tool call.

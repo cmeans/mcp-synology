@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ErrorCode
@@ -41,6 +43,7 @@ from mcp_synology.modules.filestation.paths import (
     resolve_bin_items,
     resolve_paths,
 )
+from tests.conftest import BASE_URL
 from tests.modules.filestation.formatter import with_progress_so_far as _with_progress_so_far
 from tests.modules.filestation.test_register import _fake_mcp_ctx, _make_ctx
 from tests.path_words import PATHLIKE_WORDS
@@ -1332,6 +1335,71 @@ class TestOnePathPerLine:
             "Get file info failed: /s/a: doesn't exist (DSM error 408)."
         )
         del error_response  # imported to keep the names the refusals use in one place
+
+    @respx.mock
+    async def test_get_file_info_and_delete_refusals_list_two(self, mock_client: Any) -> None:
+        """Pre-QA r3: the two-path form of these refusals was unpinned (mutated, no failure)."""
+        from mcp_synology.modules.filestation.metadata import get_file_info
+        from mcp_synology.modules.filestation.operations import delete_files
+
+        codes = {"/a/x": 408, "/a/y": 407}
+
+        def getinfo(request: Any) -> Any:
+            asked = [p for p in codes if p in request.url.params.get("path", "")]
+            files = [{"code": codes[p], "path": p} for p in asked]
+            return httpx.Response(200, json={"success": True, "data": {"files": files}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=getinfo)
+        two = "\n  /a/x: doesn't exist (DSM error 408)\n  /a/y: no permission (DSM error 407)"
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(mock_client, paths=["/a/x", "/a/y"])
+        assert _error(exc)["message"] == "Get file info failed:" + two
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/a/x", "/a/y"])  # type: ignore[list-item]
+        assert _error(exc)["message"] == "Delete files refused:" + two + "\nNothing was deleted."
+
+    def test_finished_task_errors_list_two(self) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_result
+        from mcp_synology.modules.filestation.tasks import Handle, _generic_final
+
+        errors = [{"path": "/s/a", "code": 900}, {"path": "/s/b", "code": 900}]
+        with pytest.raises(ToolError) as exc:
+            _delete_result({"finished": True, "errors": errors}, "/s", recursive=True)
+        assert _error(exc)["message"] == (
+            "Delete files failed:\n  /s/a (DSM error 900)\n  /s/b (DSM error 900)"
+        )
+        text = _generic_final(Handle("copy", "T1"), {"finished": True, "errors": errors})
+        lines = text.splitlines()
+        assert lines[1] == "DSM reported errors:", text
+        assert lines[2].startswith("  /s/a ("), text
+        assert lines[3].startswith("  /s/b ("), text
+        assert not lines[4].startswith(" "), text  # the partial note on its own line
+
+    def test_a_copys_errors_list_two_then_the_partial_note(self) -> None:
+        from mcp_synology.modules.filestation.operations import _copy_move_result
+
+        errors = [{"path": "/s/a/x", "code": 1004}, {"path": "/s/a/y", "code": 1004}]
+        with pytest.raises(ToolError) as exc:
+            _copy_move_result({"finished": True, "errors": errors}, "/s/a", "Copy", dest="/s/d")
+        lines = _error(exc)["message"].splitlines()
+        assert lines[0] == "Copy files failed:", lines
+        assert [line[:9] for line in lines[1:3]] == ["  /s/a/x ", "  /s/a/y "], lines
+        assert lines[3].startswith("Part of it may already be in /s/d"), lines
+
+    async def test_moved_sources_list_two(self, mock_client: Any) -> None:
+        from mcp_synology.modules.filestation.operations import _copy_move_summary
+
+        text = await _copy_move_summary(
+            mock_client,
+            ["/s/a", "/s/b"],
+            "/s/d",
+            True,
+            0,
+            [],
+            probe=False,
+            only_named_sources_removed=True,
+        )
+        assert "Moved sources removed from /s/:\n  a\n  b" in text, text
 
     def test_no_path_list_is_joined_inline(self) -> None:
         """The guard: a ", ", "; " or " and " join in File Station (and Photos' tasks) is one
