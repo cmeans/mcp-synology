@@ -148,6 +148,9 @@ class TestOriginals:
         assert _folder_shown("/dl\t (x)") == "'/dl\\t (x)'"
         assert _row_name("a.jpg:") == "'a.jpg:'"
         assert _row_name("b).jpg") == "b).jpg"  # ")" only matters inside "(as …)"
+        assert _row_name("a (b.jpg", "(", ")") == "'a (b.jpg'"
+        assert _row_name("not downloaded") == "'not downloaded'"  # pre-QA r3
+        assert _row_name("not downloaded.jpg") == "'not downloaded.jpg'"
 
     @respx.mock
     async def test_every_row_and_the_folder_quote_a_separator(self, tmp_path: Path) -> None:
@@ -162,10 +165,10 @@ class TestOriginals:
         third.update(id=16)
         items["list"].append(third)
         for item, name in zip(
-            items["list"], ("ab: gone.jpg", "bc: gone\t.jpg", "cd.jpg:"), strict=True
+            items["list"], ("ab: gone.jpg", "bc: gone.jpg", "cd.jpg:"), strict=True
         ):
             item["filename"] = name
-        (dest / "bc: gone\t.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
+        (dest / "bc: gone.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
 
         def timeout(_params: dict[str, Any]) -> httpx.Response:
             raise httpx.ReadTimeout("timed out")
@@ -180,7 +183,7 @@ class TestOriginals:
             )
         assert out.startswith(f"Downloaded 1 of 3 item(s) to '{dest}' (original, "), out
         assert "\n  12  'ab: gone.jpg'  3 B" in out, out
-        assert "\n  15  'bc: gone\\t.jpg': already there: " in out, out
+        assert "\n  15  'bc: gone.jpg': already there: " in out, out
         assert "\n  16  'cd.jpg:': not downloaded: couldn't reach DSM" in out, out
 
     @respx.mock

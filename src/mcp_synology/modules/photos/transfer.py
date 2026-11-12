@@ -47,17 +47,21 @@ logger = logging.getLogger(__name__)
 _SIZES = ("original", "xl", "m", "sm")
 _MAX_DOWNLOAD = 50
 _TIMEOUT = 300.0
+_NOT_DOWNLOADED = "not downloaded"
 
 
 def _row_name(name: str, *also: str) -> str:
     """A name in a transfer row, as `shown` writes it, and quoted when it holds the row's own
     separators (``": "`` before a status, two spaces between columns), ends in ``":"`` (which
-    the two spaces after it would make ``": "``) or holds ``also`` (``")"`` for the name
-    inside a renamed upload's ``(as …)``), so a name such as ``cat.jpg: not downloaded``
-    can't forge its row's status (#699)."""
+    the two spaces after it would make ``": "``), starts with ``not downloaded`` (the status a
+    not-found item's row puts where a name goes) or holds ``also`` (``"("`` and ``")"`` for
+    the name inside a renamed upload's ``(as …)``), so a name such as
+    ``cat.jpg: not downloaded`` can't forge its row's status (#699)."""
     text = shown(name)
-    # A name ending in ":" makes ": " with the two spaces after it (pre-QA r2).
-    if text == name and (name.endswith(":") or any(sep in name for sep in (": ", "  ", *also))):
+    # A name ending in ":" makes ": " with the two spaces after it (pre-QA r2); one starting
+    # "not downloaded" reads as a not-found row's status (pre-QA r3).
+    forged = name.endswith(":") or name.startswith(_NOT_DOWNLOADED)
+    if text == name and (forged or any(sep in name for sep in (": ", "  ", *also))):
         return plain_quoted(name)
     return text
 
@@ -200,7 +204,7 @@ async def download_photos(
             why = "not found"
             if sp == "shared":
                 why += ", or no permission for its Shared Space folder"
-            lines.append(f"  {item_id}  not downloaded: {why}")
+            lines.append(f"  {item_id}  {_NOT_DOWNLOADED}: {why}")
             continue
         name = _dest_name(item, size, used)
         try:
@@ -625,7 +629,7 @@ async def upload_photos(
             data = await ph.call("Browse.Item", "get", {"id": renamed, "additional": []}, version=2)
             names = {int(i["id"]): str(i.get("filename", "")) for i in data.get("list", [])}
             rows = [
-                (name, state, f"{note} (as {_row_name(names[int(note.split()[1])], ')')})")
+                (name, state, f"{note} (as {_row_name(names[int(note.split()[1])], '(', ')')})")
                 if state == "renamed" and int(note.split()[1]) in names
                 else (name, state, note)
                 for name, state, note in rows
