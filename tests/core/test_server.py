@@ -2298,6 +2298,17 @@ class TestLocalPathsNotice:
         assert str((tmp_path / "media").resolve()) in section
         assert "allowed_local_paths" in section
 
+    def test_two_folders_are_one_a_line_and_shown(self, tmp_path: Path) -> None:
+        """#697: the folders were joined with ", ", so `a, b` read as two and `c ` hid its
+        space; each is now written as replies write a local path, one a line."""
+        a, c = tmp_path / "a, b", tmp_path / "c "
+        text = self._instructions({"allowed_local_paths": [str(a), str(c)]})
+        section = text.split("LOCAL PATHS:\n", 1)[1]
+        assert section.startswith(
+            "upload_file and download_file only use local paths inside these folders (or "
+            f"below them):\n  '{a.resolve()}'\n  {str(c.resolve())!r}\n"
+        ), section
+
     def test_lists_the_shared_folders(self, tmp_path: Path) -> None:
         """#257: the top-level list alone decides the folders (no Downloads default)."""
         config = make_test_config(allowed_local_paths=[str(tmp_path / "shared")])

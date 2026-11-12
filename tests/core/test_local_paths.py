@@ -291,3 +291,63 @@ class TestSharedPaths:
         with pytest.raises(ValueError) as own:
             allowed_local_roots(["/a\x00b"], module="downloadstation")
         assert "downloadstation setting allowed_local_paths" in str(own.value)
+
+
+class TestLocalPathsQuoted:
+    """#697: a local path in a refusal, a config error, a tool description or the instructions
+    is written as replies write one (`shown_local`): quoted when a part holds a tab, padding,
+    `, ` or a character that draws nothing, so it can't hide or read as two paths."""
+
+    @staticmethod
+    def _refusal(value: str, roots: list[Path]) -> dict[str, Any]:
+        import json
+
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.core.local_paths import refuse_outside_roots
+
+        with pytest.raises(ToolError) as exc:
+            refuse_outside_roots("Op", "local_path", value, Path(value), roots, module="x")
+        text = str(exc.value)
+        return json.loads(text[text.index("{") :])["error"]  # type: ignore[no-any-return]
+
+    def test_a_refused_path_and_one_folder_are_shown(self, tmp_path: Path) -> None:
+        root = (tmp_path / "ok, dl").resolve()
+        value = str(tmp_path / "out" / "a\tb.txt")
+        err = self._refusal(value, [root])
+        assert err["message"] == (
+            f"Op refused: {value!r} is outside the folders this server may use on this "
+            f"machine: '{root}'."
+        ), err
+        assert err["value"] == value  # the caller's text, as sent
+
+    def test_two_folders_are_one_a_line(self, tmp_path: Path) -> None:
+        roots = [(tmp_path / "a").resolve(), (tmp_path / "b ").resolve()]
+        err = self._refusal(str(tmp_path / "c.txt"), roots)
+        assert err["message"].endswith(f"on this machine:\n  {roots[0]}\n  {str(roots[1])!r}"), err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    def test_the_path_a_link_resolves_to_is_shown(self, tmp_path: Path) -> None:
+        root = tmp_path / "dl"
+        root.mkdir()
+        outside = tmp_path / "x, y"
+        outside.mkdir()
+        (root / "link").symlink_to(outside)
+        err = self._refusal(str(root / "link" / "f.txt"), [root.resolve()])
+        assert f"(resolves to '{outside.resolve() / 'f.txt'}')" in err["message"], err
+
+    def test_an_unresolvable_path_is_shown_escaped(self, tmp_path: Path) -> None:
+        err = self._refusal(str(tmp_path / "a\x00b"), [tmp_path.resolve()])
+        assert "\\x00" in err["message"] and "\x00" not in err["message"], err
+
+    def test_the_description_quotes_each_folder(self) -> None:
+        from mcp_synology.core.local_paths import roots_for_description
+
+        text = roots_for_description([Path("/home/u/a, b"), Path("/home/u/c ")])
+        assert text == "one of the allowed local folders ('/home/u/a, b', '/home/u/c ')"
+
+    def test_a_config_entry_is_shown(self) -> None:
+        from mcp_synology.core.local_paths import check_local_path_entries
+
+        with pytest.raises(ValueError, match="start with ~\\): 'a, b'$"):
+            check_local_path_entries("allowed_local_paths", ["a, b"])

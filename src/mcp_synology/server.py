@@ -37,8 +37,9 @@ from mcp_synology.core.config import (
     format_config_errors,
     load_config,
 )
+from mcp_synology.core.display import shown_local
 from mcp_synology.core.errors import ErrorCode, SynologyError, detached_copy
-from mcp_synology.core.formatting import error_response, forges, synology_error_response
+from mcp_synology.core.formatting import error_response, forges, path_list, synology_error_response
 from mcp_synology.core.local_paths import has_control_character
 from mcp_synology.core.redaction import MASK, redact_secrets, redact_urls
 from mcp_synology.modules import PermissionTier, RegisterContext, filter_tools_by_permission
@@ -1175,8 +1176,9 @@ def _local_paths_notice(
     from mcp_synology.modules.filestation import FileStationSettings
     from mcp_synology.modules.photos import PhotosSettings
 
-    def folders(roots: list[Path]) -> str:
-        return ", ".join(str(r) for r in roots)
+    def folders(heading: str, roots: list[Path]) -> str:
+        # As replies write a local path (#697), one a line when there are two or more (#693).
+        return path_list(heading, [shown_local(r) for r in roots])
 
     def only_use(tools: tuple[str, ...], allowed: set[str]) -> str:
         # Name only the registered tools: no upload tool at permission: read (#318).
@@ -1196,8 +1198,11 @@ def _local_paths_notice(
                 module="filestation",
             )
             lines.append(
-                f"{only_use(('upload_file', 'download_file'), allowed)} local paths inside "
-                f"these folders (or below them): {folders(roots)}."
+                folders(
+                    f"{only_use(('upload_file', 'download_file'), allowed)} local paths inside "
+                    "these folders (or below them)",
+                    roots,
+                )
             )
         elif mod_name == "downloadstation" and "create_download" in allowed:
             ds = given if isinstance(given, DownloadStationSettings) else DownloadStationSettings()
@@ -1207,8 +1212,11 @@ def _local_paths_notice(
                 module="downloadstation",
             )
             lines.append(
-                "create_download's torrent_file_path only reads .torrent and .nzb files "
-                f"inside these folders (or below them): {folders(roots)}."
+                folders(
+                    "create_download's torrent_file_path only reads .torrent and .nzb files "
+                    "inside these folders (or below them)",
+                    roots,
+                )
             )
         elif mod_name == "photos" and {"upload_photos", "download_photos"} & set(allowed):
             ph = given if isinstance(given, PhotosSettings) else PhotosSettings()
@@ -1218,8 +1226,11 @@ def _local_paths_notice(
                 module="photos",
             )
             lines.append(
-                f"{only_use(('upload_photos', 'download_photos'), allowed)} local paths inside "
-                f"these folders (or below them): {folders(roots)}."
+                folders(
+                    f"{only_use(('upload_photos', 'download_photos'), allowed)} local paths "
+                    "inside these folders (or below them)",
+                    roots,
+                )
             )
     if not lines:
         return ""

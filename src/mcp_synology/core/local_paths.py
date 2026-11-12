@@ -27,8 +27,9 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
+from mcp_synology.core.display import shown_local
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import error_response, path_list
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -84,10 +85,13 @@ def _resolve(path: str | Path) -> Path:
     try:
         return Path(path).expanduser().resolve(strict=False)
     except UnicodeEncodeError as e:  # a ValueError, whose text is Python's codec message
-        msg = f"{str(path)!r} can't be resolved: this system's locale can't encode the path"
+        msg = (
+            f"{shown_local(str(path))} can't be resolved: this system's locale can't encode "
+            "the path"
+        )
         raise ValueError(msg) from e
     except (OSError, ValueError, RuntimeError) as e:
-        msg = f"{str(path)!r} can't be resolved: {e}"
+        msg = f"{shown_local(str(path))} can't be resolved: {e}"
         raise ValueError(msg) from e
 
 
@@ -112,7 +116,7 @@ def expand_setting(setting: str, entry: str) -> Path:
     try:
         return Path(entry).expanduser()
     except RuntimeError as e:
-        msg = f"{setting}: {entry!r} can't be expanded: {e}"
+        msg = f"{setting}: {shown_local(entry)} can't be expanded: {e}"
         raise ValueError(msg) from e
 
 
@@ -150,7 +154,7 @@ def check_resolvable(setting: str, entry: str) -> Path:
     if has_control_character(str(resolved)):
         msg = (
             f"{setting} resolves to a path with a control character, line break or lone surrogate: "
-            f"{str(resolved)!r}"
+            f"{shown_local(resolved)}"
         )
         raise ValueError(msg)
     return path
@@ -164,7 +168,7 @@ def check_local_path_entries(setting: str, value: list[str] | None) -> list[str]
     """
     for entry in value or []:
         if not check_resolvable(setting, entry).is_absolute():
-            msg = f"{setting} entries must be absolute (or start with ~): {entry!r}"
+            msg = f"{setting} entries must be absolute (or start with ~): {shown_local(entry)}"
             raise ValueError(msg)
     return value
 
@@ -210,7 +214,9 @@ def roots_for_description(roots: list[Path]) -> str:
     desktop app, in the 0.10.0rc5 and rc6 live tests), so a parameter that takes a local
     path names the folders itself instead of pointing to the instructions' LOCAL PATHS.
     """
-    return "one of the allowed local folders (" + ", ".join(str(r) for r in roots) + ")"
+    # Each folder as replies write a local path (#697): a description can't put one a line,
+    # so the quoting alone keeps a folder named `a, b` from reading as two.
+    return "one of the allowed local folders (" + ", ".join(shown_local(r) for r in roots) + ")"
 
 
 def outside_allowed_roots(path: str | Path, roots: list[Path]) -> Path | None:
@@ -243,11 +249,16 @@ def refuse_outside_roots(
     if roots is None:
         return
 
-    def refuse(shown: str) -> NoReturn:
+    def refuse(what: str) -> NoReturn:
+        # The caller's path, the one it resolves to and the allowed folders as replies write a
+        # local path (`shown_local`, #697), the folders one a line when there are two or more.
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            f"{operation} refused: {shown} is outside the folders this server may use on "
-            f"this machine: {', '.join(str(r) for r in roots)}.",
+            path_list(
+                f"{operation} refused: {what} is outside the folders this server may use on "
+                "this machine",
+                [shown_local(r) for r in roots],
+            ),
             retryable=False,
             param=param,
             value=value,
@@ -263,7 +274,7 @@ def refuse_outside_roots(
         try:
             Path(path).expanduser()
         except RuntimeError:
-            refuse(value)
+            refuse(shown_local(value))
     try:
         refused = outside_allowed_roots(path, roots)
     except ValueError as e:
@@ -280,4 +291,9 @@ def refuse_outside_roots(
         return
     # Explain the resolved path only for a link inside an allowed folder that leads out;
     # for anything else it would reveal what exists outside (QA R1 on #186).
-    refuse(f"{value} (resolves to {refused})" if lexically_inside(path, roots) else value)
+    shown_value = shown_local(value)
+    refuse(
+        f"{shown_value} (resolves to {shown_local(refused)})"
+        if lexically_inside(path, roots)
+        else shown_value
+    )
