@@ -676,17 +676,8 @@ def shown(path: str) -> str:
     still joined by ``", "``; every other list of paths is one a line (#693,
     `formatting.path_list`). A line that puts other text between or after paths (" and ",
     " (to ") quotes a path holding it with `shown_beside`."""
-    for part in path.split("/"):
-        if not part:
-            continue
-        # A part longer than any NAS name is quoted unchecked: `invisible_problem`'s
-        # repeated-mark search grows with the cube of a long run of different marks (the
-        # stdlib NFD it once used was quadratic: QA round 3 on #515), and new names are
-        # capped at 255 bytes before it runs.
-        if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
-            return _escaped_repr(path)
-        if part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part)):
-            return _escaped_repr(path)
+    if any(_needs_escapes(part) for part in path.split("/") if part):
+        return _escaped_repr(path)
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
@@ -698,6 +689,17 @@ def shown(path: str) -> str:
     return path
 
 
+def _needs_escapes(part: str) -> bool:
+    """Whether a path's ``part`` holds what `shown` writes with escapes: padding, a character
+    that doesn't print or that `invisible_problem` refuses. A part longer than any NAS name
+    counts unchecked: `invisible_problem`'s repeated-mark search grows with the cube of a long
+    run of different marks (the stdlib NFD it once used was quadratic: QA round 3 on #515),
+    and new names are capped at 255 bytes before it runs."""
+    if len(part.encode("utf-8", "surrogatepass")) > NAME_BYTES:
+        return True
+    return part != part.strip() or invisible_problem(part) is not None or any(map(_hides, part))
+
+
 def shown_local(path: str | os.PathLike[str]) -> str:
     """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
     OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
@@ -705,19 +707,17 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
     `_escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
     FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
-    read like a quoted one (pre-QA r2 on #691). The text isn't normalized (``Path`` would drop
-    ``./`` and a trailing slash), so the caller's own path reads as they sent it."""
+    read like a quoted one (pre-QA r2 on #691). A path that starts or ends with a quote is
+    quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't normalized
+    (``Path`` would drop ``./`` and a trailing slash), so the caller's own path reads as they
+    sent it."""
     text = os.fspath(path)
-    if not text:
-        return "''"
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
-    parts = [part for part in re.split(f"[{seps}]", text) if part]
-    quoted = [part for part in parts if shown(part) != part]
-    if not quoted:
-        return text
-    if all(shown(part) == plain_quoted(part) for part in quoted):
+    if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
+        return _escaped_repr(text)
+    if not text or ", " in text or text.startswith(("'", '"')) or text.endswith(("'", '"')):
         return plain_quoted(text)
-    return _escaped_repr(text)
+    return text
 
 
 def shown_beside(path: str, marker: str) -> str:

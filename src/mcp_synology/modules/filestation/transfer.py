@@ -503,7 +503,7 @@ async def download_file(
                 "Use the filename parameter to specify a compatible name."
             ),
         )
-    # The local file's name quoted as the NAS name is (#688, #691).
+    # The local path by shown()'s rule for a NAS path (#691).
     written = shown_local(dest_file)
     if is_folder:
         result = format_status(

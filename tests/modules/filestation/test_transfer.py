@@ -756,7 +756,7 @@ class TestDownloadFile:
         self, mock_client: DsmClient, tmp_path: Path
     ) -> None:
         """#688 (pre-QA r2): the NAS name, the local file's name and the replaced line quote a
-        tab alike; the local folder stays as the OS writes it."""
+        tab alike; the local path is quoted whole, by shown()'s rule (#691)."""
         name = "a\tb.txt"
         (tmp_path / name).write_text("old")
         file_info = {"path": f"/video/{name}", "name": name, "isdir": False}
@@ -1904,6 +1904,28 @@ class TestLocalPathsShown:
         # A part that is itself quoted can't pass for a quoted part (pre-QA r2): it's plain.
         assert shown_local("/h/'a '/f") == "/h/'a '/f"
         assert shown_local("/h/a /f") == repr("/h/a /f")
+        # A path that starts or ends with a quote is quoted, so it can't pass for a quoted
+        # path (pre-QA r3).
+        assert shown_local("'/home/x/a.txt'") == "\"'/home/x/a.txt'\""
+
+    @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/h/ pad/\u2764\ufe0f",  # padding and an allowed VS16 in another part (pre-QA r3)
+            "/h/a, b/\u2764\ufe0f",
+            "/h/rep\u200bort.pdf",
+            "/h/" + "x" * 300,
+            "/h/a\\b, c",
+            "/h/plain.txt",
+        ],
+    )
+    def test_shown_local_matches_shown_on_posix(self, path: str) -> None:
+        """Pre-QA r3: one rule for both, through `_needs_escapes`; a quoted part's reason
+        decides between `plain_quoted` and escapes, not its output."""
+        from mcp_synology.modules.filestation.helpers import shown, shown_local
+
+        assert shown_local(path) == shown(path)
 
     async def test_a_refused_argument_is_quoted_as_given(self, mock_client: DsmClient) -> None:
         # shown_local, not repr: repr doubles each Windows backslash (pre-QA r1).
