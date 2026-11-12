@@ -1330,3 +1330,41 @@ async def test_photo_request_missing_folder_names_the_path_dsm_was_asked_for() -
     err = _error(exc)
     assert "no folder '/Up' in the personal space." in err["message"], err
     assert err["value"] == "Up", err
+
+
+class TestTagNoteGuards:
+    """QA r6 on #709: the tag quotes note appears only on an add that tagged something."""
+
+    def _fake(self, error_list: list[int] | None = None) -> FakePhotos:
+        tags = captured("tag-list")
+        tags["list"].append({"id": 77, "name": '"quoted"'})
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(TAG, "list", 1, tags)
+        fake.on(ITEM, "add_tag", 1, {"error_list": error_list or []})
+        fake.on(ITEM, "remove_tag", 1, {"error_list": []})
+        return fake
+
+    @respx.mock
+    async def test_remove_of_an_existing_quoted_tag_has_no_note(self) -> None:
+        install(self._fake())
+        client = make_client()
+        async with client:
+            out = await tag_photos(client, action="remove", ids=[12], tags=['"quoted"'])
+        assert out.startswith('Removed tags "\\"quoted\\""'), out
+        assert "Note: the tag" not in out, out
+
+    @respx.mock
+    async def test_a_plain_add_has_no_note(self) -> None:
+        install(self._fake())
+        client = make_client()
+        async with client:
+            out = await tag_photos(client, action="add", ids=[12], tags=["2024"])
+        assert "Note: the tag" not in out, out
+
+    @respx.mock
+    async def test_no_note_when_dsm_rejected_every_item(self) -> None:
+        install(self._fake(error_list=[12]))
+        client = make_client()
+        async with client:
+            out = await tag_photos(client, action="add", ids=[12], tags=['"quoted"'])
+        assert "Rejected by DSM: 12" in out, out
+        assert "Note: the tag" not in out, out

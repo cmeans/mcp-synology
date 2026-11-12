@@ -187,8 +187,10 @@ async def tag_photos(
                 lines.append(
                     f"  No item has the tag(s) {gone}, so there was nothing to remove.{hint}"
                 )
-            # One note for every tag added that's in a reply's quotes, new or not (pre-QA r8).
-            if action == "add" and tag_ids:
+            # One note for every tag added that's in a reply's quotes, new or not (pre-QA r8);
+            # none when DSM rejected every item, since then no item has the tag (QA r6).
+            all_rejected = {str(i) for i in found} <= {str(r) for r in rejected}
+            if action == "add" and not all_rejected:
                 lines += [f"  {n}" for n in added_tags_quotes_note(names)]
             if rejected:
                 lines.append(

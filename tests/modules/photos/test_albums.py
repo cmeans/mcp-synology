@@ -1039,3 +1039,24 @@ class TestNamesPassedBackInQuotes:
             out = await photo_album(client, action="create", name='"Trip"')
         assert self.NOTE in out.splitlines(), out
         assert "another album already has this name" in out, out
+
+    @respx.mock
+    async def test_create_smart_with_a_quoted_name_another_album_has_gets_the_note(
+        self,
+    ) -> None:
+        """QA r6 on #709: create_smart, like create, keeps the note beside a duplicate."""
+        existing = captured("album-list")
+        existing["list"][0]["name"] = '"Trip"'
+        fake = FakePhotos().on(ALBUM, "list", 2, existing)
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on(COND, "peek_item_count", 2, {"count": 1})
+        fake.on(COND, "create", 2, captured("condalbum-create"))
+        fake.on(ALBUM, "get", 1, _album(id=7, type="condition", name='"Trip"'))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(
+                client, action="create_smart", name='"Trip"', condition={"type": "video"}
+            )
+        assert self.NOTE in out.splitlines(), out
+        assert "another album already has this name" in out, out
