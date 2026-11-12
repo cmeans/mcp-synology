@@ -22,7 +22,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import shown_local
+from mcp_synology.modules.filestation.helpers import shown, shown_local
 from mcp_synology.modules.photos.helpers import (
     SETUP_CODES,
     Photos,
@@ -148,7 +148,7 @@ async def download_photos(
     if not local_dir.is_dir():
         error_response(
             ErrorCode.NOT_FOUND,
-            f"{op} failed: local folder not found: {dest_folder!r}",
+            f"{op} failed: local folder not found: {shown_local(dest_folder)}",
             retryable=False,
             param="dest_folder",
             value=dest_folder,
@@ -184,7 +184,8 @@ async def download_photos(
             # DSM didn't answer (a dropped connection or a timeout): the rest would most
             # likely wait out the same timeout, so stop and say which weren't tried.
             lines.append(
-                f"  {item_id}  {name}: not downloaded: couldn't reach DSM ({type(e).__name__})"
+                f"  {item_id}  {shown(name)}: not downloaded: couldn't reach DSM "
+                f"({type(e).__name__})"
             )
             rest = unique[n + 1 :]
             if rest:
@@ -194,13 +195,14 @@ async def download_photos(
         retry = retry or retryable
         if result.startswith(_ALREADY_THERE):
             kept += 1
-            lines.append(f"  {item_id}  {name}: {result}")
+            lines.append(f"  {item_id}  {shown(name)}: {result}")
         elif result.startswith("not downloaded"):
-            lines.append(f"  {item_id}  {name}: {result}")
+            lines.append(f"  {item_id}  {shown(name)}: {result}")
         else:
             done += 1
             replaced += result.endswith((f"({_REPLACED})", f"({_REPLACED_LINK})"))
-            lines.append(f"  {item_id}  {name}  {result}")
+            # A local name built from the NAS's: padding or a tab shows (pre-QA r1 on #691).
+            lines.append(f"  {item_id}  {shown(name)}  {result}")
     if len(unique) > 1 and retry:
         # A name depends on every item in the call, so retrying only the ones that failed
         # can give one of them another item's file name and, with overwrite=true, replace
@@ -458,7 +460,7 @@ async def upload_photos(
         if not path.is_file():
             error_response(
                 ErrorCode.NOT_FOUND,
-                f"{op} failed: not a local file: {value!r}",
+                f"{op} failed: not a local file: {shown_local(value)}",
                 retryable=False,
                 param="local_paths",
                 value=value,
@@ -604,6 +606,8 @@ async def upload_photos(
         except (SynologyError, httpx.TransportError) as e:
             # The uploads are done; only the "(as …)" names are missing.
             logger.debug("Couldn't read the renamed items' names: %s", type(e).__name__)
+    # Each local file's name as `shown` writes one, so padding or a tab shows (#691).
+    rows = [(shown(name), state, note) for name, state, note in rows]
     width = max(len(r[0]) for r in rows)
     # A skipped duplicate is already there, not uploaded: count it apart.
     head = f"Uploaded {len(uploaded) - skipped:,} of {len(files):,} file(s)"

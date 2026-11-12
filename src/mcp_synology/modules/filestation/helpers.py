@@ -698,15 +698,17 @@ def shown(path: str) -> str:
 
 
 def shown_local(path: str | os.PathLike[str]) -> str:
-    """A path on this machine, for a message (#691): its folder as the OS writes it, and its
-    last part quoted as `shown` quotes a NAS name, so a tab, padding or a character that draws
-    nothing in the name is visible. Not `shown` on the whole path: it reads only ``/`` as a
-    separator, and repr would double each Windows backslash. The rule #690 set for
-    download_file's reply; a refusal of the caller's own argument quotes it with ``!r``."""
+    """A path on this machine, for a message (#691): split as the OS splits it, each part
+    written as `shown` writes a NAS name (quoted only when a tab, padding or a character that
+    draws nothing would be invisible), joined with the OS's separator. Not `shown` or repr on
+    the whole path: `shown` reads only ``/`` as a separator, and repr doubles each Windows
+    backslash. A plain path reads as the OS writes it. Used for the caller's own local paths
+    too (a refusal of ``local_path`` or ``dest_folder``), where repr would double them."""
     local = Path(path)
-    if not local.name:
+    parts = local.parts[1:] if local.anchor else local.parts
+    if not parts:
         return str(local)
-    return os.path.join(str(local.parent), shown(local.name))
+    return os.path.join(local.anchor, *(shown(part) for part in parts))
 
 
 def shown_beside(path: str, marker: str) -> str:

@@ -1894,15 +1894,44 @@ class TestLocalPathsShown:
         assert shown_local(tmp_path / self.TAB) == os.path.join(str(tmp_path), repr(self.TAB))
         assert shown_local(tmp_path / " pad") == os.path.join(str(tmp_path), repr(" pad"))
         assert shown_local(Path("/")) == "/"
+        # Each part that needs it, not only the last (pre-QA r1).
+        assert shown_local("/home/ x/f.txt") == "/home/' x'/f.txt"
+        assert shown_local("rel/a\tb") == os.path.join("rel", repr("a\tb"))
 
     async def test_a_refused_argument_is_quoted_as_given(self, mock_client: DsmClient) -> None:
+        # shown_local, not repr: repr doubles each Windows backslash (pre-QA r1).
         given = "/nonexistent/a\tb.txt"
         with pytest.raises(ToolError) as exc:
             await upload_file(mock_client, local_path=given, dest_folder="/video/up")
-        assert repr(given) in json.loads(str(exc.value))["error"]["message"]
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(": /nonexistent/" + repr("a\tb.txt")), message
         with pytest.raises(ToolError) as exc:
             await download_file(mock_client, path="/video/m.mkv", dest_folder=given)
-        assert repr(given) in json.loads(str(exc.value))["error"]["message"]
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(": /nonexistent/" + repr("a\tb.txt")), message
+
+    @respx.mock
+    async def test_a_failed_read_names_the_file_once(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        """Pre-QA r1: the OS error's text carries its own copy of the path."""
+        local = tmp_path / self.TAB
+        local.write_text("x")
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": []}}
+        )
+        error = PermissionError(13, "Permission denied", str(local))
+        with (
+            patch.object(mock_client, "upload", side_effect=error),
+            pytest.raises(ToolError) as exc,
+        ):
+            await upload_file(mock_client, local_path=str(local), dest_folder="/video/up")
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(
+            f"Failed to read local file {os.path.join(str(tmp_path), repr(self.TAB))}: "
+            "Permission denied"
+        ), message
+        assert message.count(str(tmp_path)) == 1, message
 
     @respx.mock
     async def test_a_local_file_already_there_is_shown(
@@ -1962,15 +1991,16 @@ class TestLocalPathsShown:
         root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
         local = {"local_path", "local_dir", "dest_file", "dest_folder", "local", "value"}
         allowed = {
-            ("photos", "_dest_name", "path.suffix"),  # a file name being built
-            ("photos", "_dest_name", "path.stem"),
             ("photos", "upload_photos", "value"),  # the not-tried list, to be sent again
+            ("photos", "upload_photos", "name"),  # rows already shown() above
         }
         found = set()
         for module in ("filestation", "photos"):
             tree = ast.parse((root / module / "transfer.py").read_text())
             for func in ast.walk(tree):
                 if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                if func.name == "_dest_name":  # builds a file name, not a message
                     continue
                 for node in ast.walk(func):
                     if not isinstance(node, ast.JoinedStr):
@@ -1979,7 +2009,15 @@ class TestLocalPathsShown:
                         if not isinstance(part, ast.FormattedValue) or part.conversion == ord("r"):
                             continue
                         value = part.value
-                        base = value.value if isinstance(value, ast.Attribute) else value
-                        if isinstance(base, ast.Name) and base.id in {*local, "path"}:
+                        if (
+                            isinstance(value, ast.Call)
+                            and isinstance(value.func, ast.Name)
+                            and value.func.id in {"shown_local", "shown"}
+                        ):
+                            continue
+                        # A local path's name anywhere in the expression: bare, an attribute,
+                        # or wrapped in a call (str(local_dir), local_dir.as_posix()).
+                        names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+                        if names & {*local, "path", "name"}:
                             found.add((module, func.name, ast.unparse(value)))
         assert found <= allowed, sorted(found - allowed)

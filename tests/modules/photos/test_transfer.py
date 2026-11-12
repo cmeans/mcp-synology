@@ -65,6 +65,27 @@ class TestOriginals:
         assert "999  not downloaded: not found" in out
 
     @respx.mock
+    async def test_local_names_and_folder_are_shown(self, tmp_path: Path) -> None:
+        """#691 (pre-QA r1): the folder and each item's local name, built from the NAS's, show
+        a tab or padding; they were written raw."""
+        data = _items("ready", "ready")
+        data["list"][0]["filename"] = " pad.jpg"
+        data["list"][1]["filename"] = "a\tb.jpg"
+        fake = FakePhotos().on(ITEM, "get", 2, data)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), binary(b"two!"))
+        install(fake)
+        folder = tmp_path / "d\tx"
+        folder.mkdir()
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15], dest_folder=str(folder), allowed_roots=[tmp_path]
+            )
+        assert out.startswith(f"Downloaded 2 of 2 item(s) to {tmp_path}/'d\\tx' "), out
+        assert "  12  ' pad.jpg'  " in out, out
+        assert "  15  'a\\tb.jpg'  " in out, out
+
+    @respx.mock
     async def test_a_proxy_page_is_not_saved(self, tmp_path: Path) -> None:
         """A login page in front of the NAS isn't saved as the photo (#292)."""
         (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
@@ -744,6 +765,25 @@ class TestUpload:
             )
         assert out.splitlines()[0] == "Uploaded 1 of 2 file(s) to / (personal space)"
         assert "b.jpg  failed   couldn't read the file (No such file or directory)" in out
+
+    @respx.mock
+    async def test_a_padded_local_name_is_shown_in_its_row(self, tmp_path: Path) -> None:
+        """#691 (pre-QA r1): the rows wrote each local file's name raw."""
+        (tmp_path / " pad.jpg").write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "new", "id": 42}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / " pad.jpg")],
+                allowed_roots=[tmp_path],
+                folder_path="/",
+            )
+        assert "\n  ' pad.jpg'  " in out, out
 
     @respx.mock
     async def test_album_and_names_unanswered(

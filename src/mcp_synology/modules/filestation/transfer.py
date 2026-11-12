@@ -118,7 +118,7 @@ async def upload_file(
     if not local.is_file():
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Upload failed: Local file not found: {local_path!r}",
+            f"Upload failed: Local file not found: {shown_local(local_path)}",
             retryable=False,
             param="local_path",
             value=local_path,
@@ -264,7 +264,7 @@ async def download_file(
     if not local_dir.is_dir():
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Download failed: Local directory not found: {dest_folder!r}",
+            f"Download failed: Local directory not found: {shown_local(dest_folder)}",
             retryable=False,
             param="dest_folder",
             value=dest_folder,
