@@ -410,7 +410,11 @@ async def edit_person(
         else:
             # photo_id is an item of this person; DSM picks that item's face (verified).
             await ph.call("Browse.Person", "set_cover", {"id": pid, "photo_id": item_id})
-        note = quotes_note(name, "person's name") if action == "rename" else []
+        note = (
+            quotes_note(name, "person's name", before=target.get("name"))
+            if action == "rename"
+            else []
+        )
         return "\n".join([person_line(await _person_now(ph, pid)), *note])
     except SynologyError as e:
         synology_error_response(op, e)
@@ -473,7 +477,9 @@ async def merge_people(
             f"Merged {len(merged):,} people into person {keep_id} "
             f"{quoted_name(now.get('name'))} (now {count} items)."
         )
-        return "\n".join([merged_line, *quotes_note(name, "person's name")])
+        return "\n".join(
+            [merged_line, *quotes_note(name, "person's name", before=keep.get("name"))]
+        )
     except SynologyError as e:
         synology_error_response(op, e)
 
@@ -483,8 +489,10 @@ async def merge_people(
 _REQUEST_ACTIONS = ("create", "list", "update", "delete")
 
 
-def _subject_note(subject: str | None) -> list[str]:
-    return quotes_note(subject, "subject", "update the request's subject without them")
+def _subject_note(subject: str | None, before: object = None) -> list[str]:
+    return quotes_note(
+        subject, "subject", "update the request's subject without them", before=before
+    )
 
 
 _LIBRARY = {"personal": "personal_space", "shared": "shared_space"}
@@ -612,9 +620,11 @@ async def photo_request(
         if folder_path is not None:
             # A path only: DSM takes a request's folder by path (`12` is `/12`).
             path = check_folder_path(folder_path, "folder_path", advice=_REQUEST_FOLDER_ADVICE)
-            # Checked here, so a typo isn't a request into a folder that doesn't exist.
+            # Checked here, so a typo isn't a request into a folder that doesn't exist. The
+            # caller's own text goes in, so a path passed back in a reply's quotes gets the
+            # hint (QA r2 on #709); `folder` checks it the same way.
             await Photos(client, sp, op).folder(
-                Ref("folder_path", name=path), missing_advice=_REQUEST_MISSING_ADVICE
+                Ref("folder_path", name=folder_path), missing_advice=_REQUEST_MISSING_ADVICE
             )
             fields["library"] = _LIBRARY[sp]
             fields["folder_home_path"] = path
@@ -636,6 +646,7 @@ async def photo_request(
         # The fallback shows this call's own text: escaped as DSM's would be (#604).
         shown = {k: escape_controls(v) if isinstance(v, str) else v for k, v in fields.items()}
         block = _request_block(now.get(str(request), {**existing[str(request)], **shown}))
-        return "\n".join([block, *_subject_note(subject)])
+        before = existing[str(request)].get("subject")
+        return "\n".join([block, *_subject_note(subject, before)])
     except SynologyError as e:
         synology_error_response(op, e)

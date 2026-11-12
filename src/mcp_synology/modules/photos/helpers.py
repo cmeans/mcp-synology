@@ -96,9 +96,10 @@ PATH_QUOTES_HINT = "If the path came from a reply in quotes, pass it without the
 
 
 def in_reply_quotes(name: object) -> bool:
-    """Whether ``name`` starts and ends with ``"``, as `quoted_name` writes one (QA r1 on #709)."""
+    """Whether ``name`` starts and ends with ``"`` around something, as `quoted_name` writes
+    one (QA r1 on #709; an empty name is ``(unnamed)``, never ``""``, QA r2)."""
     text = "" if name is None else str(name)
-    return len(text) >= 2 and text[0] == text[-1] == '"'
+    return len(text) >= 3 and text[0] == text[-1] == '"'
 
 
 def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
@@ -108,10 +109,14 @@ def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
     return f"{suggestion} {QUOTES_HINT}" if suggestion else QUOTES_HINT
 
 
-def quotes_note(name: object, what: str, fix: str = "rename it without them") -> list[str]:
+def quotes_note(
+    name: object, what: str, fix: str = "rename it without them", *, before: object = None
+) -> list[str]:
     """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
-    quotes are now part of the name (QA r1 on #709). Empty otherwise."""
-    if not in_reply_quotes(name):
+    quotes are now part of the name (QA r1 on #709). Empty otherwise, and when ``name`` is
+    what it was ``before`` the call: a name that really has quotes, passed back as it is,
+    isn't one taken from a reply's quotes (QA r2)."""
+    if not in_reply_quotes(name) or (before is not None and str(before) == str(name)):
         return []
     return [
         f"Note: the {what} {quoted_name(name)} starts and ends with a quote mark, which is "

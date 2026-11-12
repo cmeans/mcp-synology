@@ -1230,3 +1230,49 @@ def test_a_request_with_no_folder_shows_the_placeholder() -> None:
     assert _request_block({}).splitlines()[0] == (
         "Photo request (no subject) → (unnamed) (personal space)"
     )
+
+
+class TestQuotesRound2:
+    """QA r2 on #709: the hint where photo_request adds "/", and no note on a name that
+    already had the quotes."""
+
+    PATH_HINT = "If the path came from a reply in quotes, pass it without them."
+
+    @respx.mock
+    async def test_photo_request_folder_in_quotes_hints(self) -> None:
+        fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+        fake.error("SYNO.Foto.Browse.Folder", "get", 2, 642)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_request(
+                    client, action="create", subject="s", folder_path="'/Up (shared)'"
+                )
+            with pytest.raises(ToolError) as plain:
+                await photo_request(client, action="create", subject="s", folder_path="/Up")
+        assert _error(exc)["suggestion"].endswith(self.PATH_HINT), _error(exc)
+        assert self.PATH_HINT not in _error(plain)["suggestion"], _error(plain)
+        assert not fake.of(REQ, "create")
+
+    @respx.mock
+    async def test_no_note_when_the_name_already_had_the_quotes(self) -> None:
+        kept = captured("person-get", PEOPLE)
+        kept["list"][0]["name"] = '"Jo"'
+        people = captured("person-list", PEOPLE)
+        fake = FakePhotos().on(PERSON, "get", 1, kept)
+        fake.on(PERSON, "set", 1, {}).on(PERSON, "list", 1, people)
+        fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
+        listed = captured("request-list")
+        listed["list"][0]["subject"] = '"S"'
+        fake.on(REQ, "list", 1, listed, listed).on(REQ, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            renamed = await edit_person(client, action="rename", person_id=12, name='"Jo"')
+            merged = await merge_people(client, target_id=12, merge_names=["Person 2"], name='"Jo"')
+            updated = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", subject='"S"'
+            )
+        for out in (renamed, merged, updated):
+            assert "Note: the" not in out, out

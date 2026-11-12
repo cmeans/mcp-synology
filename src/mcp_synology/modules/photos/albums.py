@@ -223,7 +223,7 @@ async def _photo_album(
     if action == "rename":
         await ph.call("Browse.Album", "set_name", {"id": album_id, "name": name}, personal=True)
         lines.append(f"Renamed album {album_id} to {quoted_name(name)}.")
-        lines += quotes_note(name, "album name")
+        lines += quotes_note(name, "album name", before=target.get("name"))
     elif action in ("add", "remove"):
         found, missing = await ph.items(ids)
         if found:
@@ -675,7 +675,9 @@ async def delete_photo_albums(
                 matches = [a for a in existing if str(a.get("name", "")).casefold() == name]
             if not matches:
                 missing.append(f"ID {ref.id}" if ref.id is not None else f"named {ref.name!r}")
-                quoted_missing = quoted_missing or (ref.id is None and in_reply_quotes(ref.name))
+                quoted_missing = quoted_missing or (
+                    ref.id is None and in_reply_quotes((ref.name or "").strip())
+                )
             elif len(matches) > 1:
                 listed = ", ".join(str(m["id"]) for m in matches)
                 invalid(

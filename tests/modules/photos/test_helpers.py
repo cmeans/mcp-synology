@@ -663,8 +663,8 @@ class TestNamesPassedBackInQuotes:
 
     def test_in_reply_quotes(self) -> None:
         assert in_reply_quotes('"beach"')
-        assert in_reply_quotes('""')
-        for name in ('"', "beach", "'beach'", '"beach', 'beach"', 'a "b" c', None, 0):
+        assert in_reply_quotes('"a"')
+        for name in ('""', '"', "beach", "'beach'", '"beach', 'beach"', 'a "b" c', None, 0):
             assert not in_reply_quotes(name), name
 
     def test_hint_and_note(self) -> None:

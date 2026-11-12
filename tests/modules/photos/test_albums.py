@@ -992,3 +992,20 @@ class TestNamesPassedBackInQuotes:
         assert plain.splitlines()[-1] == "  Not found: named 'nope'", plain
         assert _error(exc)["suggestion"] == self.HINT, _error(exc)
         assert "suggestion" not in _error(bare), _error(bare)
+
+    @respx.mock
+    async def test_qa_r2_padding_unchanged_name_and_bare_quotes(self) -> None:
+        """QA r2 on #709: a padded quoted name gets the hint as the stripped lookup does; an
+        album renamed to the quoted name it already has gets no note; `""` is no reply's
+        quoting (an empty name is `(unnamed)`)."""
+        fake = FakePhotos().on(ALBUM, "list", 2, captured("album-list"))
+        fake.on(ALBUM, "get", 1, _album(name='"Trip"')).on(ALBUM, "set_name", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            padded = await delete_photo_albums(client, album_names=[' "mcp-spec-album" '])
+            same = await photo_album(client, action="rename", album_id=4, name='"Trip"')
+            bare = await photo_album(client, action="rename", album_id=4, name='""')
+        assert padded.splitlines()[-1].endswith(f"({self.HINT})"), padded
+        assert "Note:" not in same, same
+        assert "Note:" not in bare, bare
