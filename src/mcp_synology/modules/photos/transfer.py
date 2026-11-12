@@ -49,14 +49,24 @@ _MAX_DOWNLOAD = 50
 _TIMEOUT = 300.0
 
 
-def _row_name(name: str) -> str:
+def _row_name(name: str, *also: str) -> str:
     """A name in a transfer row, as `shown` writes it, and quoted when it holds the row's own
-    separators (``": "`` before a status, two spaces between columns), so a name such as
+    separators (``": "`` before a status, two spaces between columns) or ``also`` (``")"``
+    for the name inside a renamed upload's ``(as …)``), so a name such as
     ``cat.jpg: not downloaded`` can't forge its row's status (#699)."""
     text = shown(name)
-    if text == name and (": " in name or "  " in name):
+    if text == name and any(sep in name for sep in (": ", "  ", *also)):
         return plain_quoted(name)
     return text
+
+
+def _folder_shown(folder: Path) -> str:
+    """``download_photos``' local folder as `shown_local` writes it, and quoted when it holds
+    ``" ("``, which the heading puts after it: a folder named ``dl (shared space)`` would
+    read as the heading's own space (pre-QA r1 on #699)."""
+    raw = os.fspath(folder)
+    text = shown_local(raw)
+    return plain_quoted(raw) if " (" in raw and text == raw else text
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -233,7 +243,7 @@ async def download_photos(
     there = f", {kept:,} already there" if kept else ""
     there += f", {replaced:,} replaced a file that was there" if replaced else ""
     head = (
-        f"Downloaded {done:,} of {len(unique):,} item(s) to {shown_local(local_dir)} "
+        f"Downloaded {done:,} of {len(unique):,} item(s) to {_folder_shown(local_dir)} "
         f"({what}, {space_label(sp)}{there})"
     )
     # Only a call that wrote or kept a file has one for a client to open (#640).
@@ -613,7 +623,7 @@ async def upload_photos(
             data = await ph.call("Browse.Item", "get", {"id": renamed, "additional": []}, version=2)
             names = {int(i["id"]): str(i.get("filename", "")) for i in data.get("list", [])}
             rows = [
-                (name, state, f"{note} (as {_row_name(names[int(note.split()[1])])})")
+                (name, state, f"{note} (as {_row_name(names[int(note.split()[1])], ')')})")
                 if state == "renamed" and int(note.split()[1]) in names
                 else (name, state, note)
                 for name, state, note in rows

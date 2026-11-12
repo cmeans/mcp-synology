@@ -140,6 +140,40 @@ class TestOriginals:
         assert "12  'x.jpg: not downloaded: gone': not downloaded: another file" in out, out
 
     @respx.mock
+    async def test_every_row_and_the_folder_quote_a_separator(self, tmp_path: Path) -> None:
+        """#699 (pre-QA r1): the downloaded, already-there and couldn't-reach-DSM rows quote a
+        name holding ": " (a one-letter one would read as a Windows drive and get the
+        item-<id> fallback), and the heading quotes a local folder holding " (", which would
+        read as the heading's own space."""
+        dest = tmp_path / "dl (shared space)"
+        dest.mkdir()
+        items = _items("ready", "ready")
+        third = json.loads(json.dumps(items["list"][1]))
+        third.update(id=16)
+        items["list"].append(third)
+        for item, name in zip(
+            items["list"], ("ab: gone.jpg", "bc: gone.jpg", "cd: done.jpg"), strict=True
+        ):
+            item["filename"] = name
+        (dest / "bc: gone.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
+
+        def timeout(_params: dict[str, Any]) -> httpx.Response:
+            raise httpx.ReadTimeout("timed out")
+
+        fake = FakePhotos().on(ITEM, "get", 2, items)
+        fake.on("SYNO.Foto.Download", "download", 1, binary(b"one"), timeout)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await download_photos(
+                client, ids=[12, 15, 16], dest_folder=str(dest), allowed_roots=[tmp_path]
+            )
+        assert out.startswith(f"Downloaded 1 of 3 item(s) to '{dest}' (original, "), out
+        assert "\n  12  'ab: gone.jpg'  3 B" in out, out
+        assert "\n  15  'bc: gone.jpg': already there: " in out, out
+        assert "\n  16  'cd: done.jpg': not downloaded: couldn't reach DSM" in out, out
+
+    @respx.mock
     async def test_existing_file_kept_without_overwrite(self, tmp_path: Path) -> None:
         (tmp_path / "forest-trail.jpg").write_bytes(b"mine")
         install(FakePhotos().on(ITEM, "get", 2, {"list": _items("ready")["list"][:1]}))
@@ -841,6 +875,35 @@ class TestUpload:
         assert lines[0] == "Uploaded 2 of 2 file(s) to '/x (shared space)' (personal space)", out
         assert "\n  'a: failed.jpg'  " in out, out
         assert "\n  'b  new.jpg'  " in out, out
+
+    @respx.mock
+    async def test_a_renamed_name_is_quoted_inside_its_parentheses(self, tmp_path: Path) -> None:
+        """#699 (pre-QA r1): the name DSM gave a renamed upload is quoted when it holds the
+        row's separators or the ")" that closes its "(as …)"."""
+        for name in ("a.jpg", "b.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        fake = FakePhotos().on("SYNO.Foto.Browse.Folder", "get", 2, captured("folder-get-root"))
+        fake.on(
+            ITEM,
+            "get",
+            2,
+            {"list": [{"id": 47, "filename": "a_1.jpg  failed"}, {"id": 48, "filename": "b).jpg"}]},
+        )
+        answers = iter([47, 48])
+        fake.multipart = lambda _r: httpx.Response(
+            200, json={"success": True, "data": {"action": "rename", "id": next(answers)}}
+        )
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await upload_photos(
+                client,
+                local_paths=[str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")],
+                allowed_roots=[tmp_path],
+                folder_path="/",
+            )
+        assert "renamed  id 47 (as 'a_1.jpg  failed')" in out, out
+        assert "renamed  id 48 (as 'b).jpg')" in out, out
 
     @respx.mock
     async def test_album_and_names_unanswered(

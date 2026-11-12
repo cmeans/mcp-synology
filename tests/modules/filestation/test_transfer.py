@@ -2088,7 +2088,8 @@ class TestLocalPathsShown:
                             else ""
                         )
                         raw = part.conversion != -1
-                        if call == "shown_local" and not raw:
+                        # _folder_shown calls shown_local (pre-QA r1 on #699).
+                        if call in ("shown_local", "_folder_shown") and not raw:
                             continue
                         named = call in ("shown", "_row_name")  # _row_name calls shown (#699)
                         if named and not raw and value.args and a_name(value.args[0]):
