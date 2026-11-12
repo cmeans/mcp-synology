@@ -190,7 +190,8 @@ async def _photo_album(
             created = data["album"]
             lines.append(f"Created smart album {quoted_name(name)} (id {created['id']}).")
             lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
-        lines += quotes_note(name, "album name")
+        # A name another album already has, quotes and all, is a real name (pre-QA r7).
+        lines += quotes_note(name, "album name", before=[a.get("name") for a in same])
         if same:
             others = ", ".join(str(a["id"]) for a in same)
             lines.append(
@@ -380,7 +381,7 @@ async def _condition(ph: Photos, given: dict[str, Any]) -> dict[str, Any]:
                 "item has it).",
                 param="condition",
                 value=unknown_tags,
-                suggestion=next((QUOTES_HINT for t in unknown_tags if in_reply_quotes(t)), None),
+                suggestion=QUOTES_HINT if any(in_reply_quotes(t) for t in unknown_tags) else None,
             )
         cond["general_tag"] = [i for i in ids.values() if i is not None]
         cond["general_tag_policy"] = policy("tags")

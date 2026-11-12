@@ -1024,3 +1024,19 @@ class TestNamesPassedBackInQuotes:
             renamed = await photo_album(client, action="rename", album_id=4, name='"Café"')
         assert "Note:" not in copied, copied
         assert "Note:" not in renamed, renamed
+
+    @respx.mock
+    async def test_create_with_a_quoted_name_another_album_has_gets_no_quotes_note(self) -> None:
+        """Pre-QA r7 on #709: an album already named `"Trip"` shows the quotes are real."""
+        existing = captured("album-list")
+        existing["list"][0]["name"] = '"Trip"'
+        fake = FakePhotos().on(ALBUM, "list", 2, existing)
+        fake.on(NORMAL, "create", 1, captured("album-create")).on(ALBUM, "get", 1, _album())
+        install(fake)
+        client = make_client()
+        async with client:
+            same = await photo_album(client, action="create", name='"Trip"')
+            other_case = await photo_album(client, action="create", name='"TRIP"')
+        assert self.NOTE not in same.splitlines(), same
+        assert "another album already has this name" in same, same
+        assert "Note: the album name" in other_case, other_case  # case kept

@@ -97,11 +97,13 @@ QUOTES_HINT = "If the name came from a reply in quotes, pass it without them."
 PATH_QUOTES_HINT = "If the path came from a reply in quotes, pass it without them."
 
 
-def in_reply_quotes(name: object) -> bool:
-    """Whether ``name`` starts and ends with ``"`` around something, as `quoted_name` writes
-    one (QA r1 on #709; an empty name is ``(unnamed)``, never ``""``, QA r2)."""
+def in_reply_quotes(name: object, marks: str = '"') -> bool:
+    """Whether ``name`` starts and ends with one of ``marks`` around something: ``"`` as
+    `quoted_name` writes a name (QA r1 on #709; an empty name is ``(unnamed)``, never
+    ``""``, QA r2), ``'`` or ``"`` as `shown_folder` writes a folder (the root is ``/``,
+    never ``''``). The one rule for both, so they can't drift apart (pre-QA r7)."""
     text = "" if name is None else str(name)
-    return len(text) >= 3 and text[0] == text[-1] == '"'
+    return len(text) >= 3 and text[0] == text[-1] and text[0] in marks
 
 
 def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
@@ -116,7 +118,7 @@ def quotes_note(
     what: str,
     fix: str = "rename it without the quote marks",
     *,
-    before: object | Iterable[object] = (),
+    before: str | None | Iterable[str | None] = (),
 ) -> list[str]:
     """A note line for a reply that just set ``name``, when it's in a reply's quotes: the
     quotes are now part of the name (QA r1 on #709). Empty otherwise, and when ``name`` is
@@ -138,6 +140,24 @@ def quotes_note(
     return [
         f"Note: the {what} {quoted_name(name)} starts and ends with a quote mark, which is "
         f"now part of it. If it came from a reply in quotes, {fix}."
+    ]
+
+
+def new_tags_quotes_note(tags: Iterable[str]) -> list[str]:
+    """`quotes_note` for the tags a call created: one note naming every new tag in a reply's
+    quotes, so a quoted list passed back doesn't add a line per tag (pre-QA r5 on #709).
+    Kept beside `quotes_note` so their wording changes together (pre-QA r7)."""
+    quoted = [t for t in tags if in_reply_quotes(t)]
+    if len(quoted) == 1:
+        return quotes_note(
+            quoted[0], "new tag", "remove the tag and add it again without the quote marks"
+        )
+    if not quoted:
+        return []
+    return [
+        f"Note: the new tags {', '.join(quoted_name(t) for t in quoted)} start and end with a "
+        "quote mark, which is now part of them. If they came from a reply in quotes, remove "
+        "the tags and add them again without the quote marks."
     ]
 
 
@@ -474,7 +494,7 @@ class Photos:
                 what = ref.id if ref.id is not None else repr(path)
                 advice = missing_advice or "list_photo_collections type=folder lists them."
                 given = (ref.name or "").strip()
-                if ref.id is None and len(given) >= 3 and given[0] == given[-1] in "'\"":
+                if ref.id is None and in_reply_quotes(given, "'\""):
                     advice = f"{advice} {PATH_QUOTES_HINT}"
                 not_found(
                     self.operation,

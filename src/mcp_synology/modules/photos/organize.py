@@ -29,6 +29,7 @@ from mcp_synology.modules.photos.helpers import (
     in_batches,
     in_reply_quotes,
     invalid,
+    new_tags_quotes_note,
     not_found,
     one_ref,
     parse_expires,
@@ -190,22 +191,7 @@ async def tag_photos(
                 )
             # One note for all the new tags in a reply's quotes, so a quoted list passed back
             # doesn't add a line per tag (pre-QA r5 on #709).
-            quoted_new = [t for t in created if in_reply_quotes(t)]
-            if len(quoted_new) == 1:
-                lines += [
-                    f"  {n}"
-                    for n in quotes_note(
-                        quoted_new[0],
-                        "new tag",
-                        "remove the tag and add it again without the quote marks",
-                    )
-                ]
-            elif quoted_new:
-                lines.append(
-                    f"  Note: the new tags {', '.join(quoted_name(t) for t in quoted_new)} start "
-                    "and end with a quote mark, which is now part of them. If they came from a "
-                    "reply in quotes, remove the tags and add them again without the quote marks."
-                )
+            lines += [f"  {n}" for n in new_tags_quotes_note(created)]
             if rejected:
                 lines.append(
                     f"  Rejected by DSM: {rejected_text(rejected)} "
@@ -502,7 +488,7 @@ async def merge_people(
 _REQUEST_ACTIONS = ("create", "list", "update", "delete")
 
 
-def _subject_note(subject: str | None, before: object = None) -> list[str]:
+def _subject_note(subject: str | None, before: str | None = None) -> list[str]:
     return quotes_note(
         subject, "subject", "update the request's subject without the quote marks", before=before
     )
