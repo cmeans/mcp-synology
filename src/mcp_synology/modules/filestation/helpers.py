@@ -715,9 +715,9 @@ def json_quoted(text: str) -> str:
     out = []
     for n, c in enumerate(plain):
         lead_mark = n == 1 and bool(_MARK.match(c))
-        if c not in '"\\' and (
-            lead_mark or _IGNORABLE.match(c) or c == _BRAILLE_BLANK or _hides(c)
-        ):
+        # What `_escaped_repr` escapes, and the annotation characters, which repr escapes for
+        # it (pre-QA r4 on #695: they were left raw).
+        if lead_mark or _IGNORABLE.match(c) or c == _BRAILLE_BLANK or _hides(c) or c in _ANNOTATION:
             o = ord(c)
             if o > 0xFFFF:
                 o -= 0x10000

@@ -243,7 +243,7 @@ async def _list(
         items = data.get("list", [])
         total = int((await ph.call("Search.Search", "count_item", {"keyword": keyword}))["count"])
         return await _render(
-            ph, f"search {_named(keyword)}", [], "search order", items, total, offset
+            ph, f"search {json_quoted(keyword)}", [], "search order", items, total, offset
         )
 
     if album is not None:
@@ -251,7 +251,7 @@ async def _list(
         params = {"album_id": int(found["id"]), **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int(found.get("item_count", 0))
-        source = f"album {_named(str(found.get('name', '')))} ({found['id']})"
+        source = f"album {json_quoted(str(found.get('name', '')))} ({found['id']})"
         return await _render(ph, source, [], _order(*sort), items, total, offset)
 
     if concept is not None:
@@ -265,7 +265,7 @@ async def _list(
         name = listed[0].get("name", "") if listed else ""
         return await _render(
             ph,
-            f"concept {_named(str(name)) if name else concept}",
+            f"concept {json_quoted(str(name)) if name else concept}",
             [],
             _order(*sort),
             items,
@@ -297,16 +297,18 @@ async def _list(
         keys["person_policy"] = "or"
         # The placeholder is the server's text, not a name: unquoted, so it can't pass for a
         # person named "(unnamed)" (pre-QA r2 on #695).
-        named = _named(str(p["name"])) if p.get("name") else "(unnamed)"
+        named = json_quoted(str(p["name"])) if p.get("name") else "(unnamed)"
         described.append(f"person {named} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        described.append(f"tag {_named(tag)}")
+        described.append(f"tag {json_quoted(tag)}")
         if tag_id is None:
-            heading = _heading(ph, described, filters_text, _order(*sort))
+            heading = _heading(
+                ph, described, filters_text, _order(*sort), in_folder=folder is not None
+            )
             return (
-                f"{heading}\nNo items: no item has the tag {_named(tag)} (a tag exists only while "
-                "some item has it)."
+                f"{heading}\nNo items: no item has the tag {json_quoted(tag)} (a tag exists only "
+                "while some item has it)."
             )
         keys["general_tag"] = [tag_id]
         keys["general_tag_policy"] = "or"
@@ -316,7 +318,9 @@ async def _list(
         params = {"folder_id": folder_id, **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int((await ph.call("Browse.Item", "count", {"folder_id": folder_id}))["count"])
-        return await _render(ph, None, described, _order(*sort), items, total, offset)
+        return await _render(
+            ph, None, described, _order(*sort), items, total, offset, in_folder=True
+        )
 
     # Everything else: list_with_filter, which (unlike Item.list outside a folder view)
     # honors sort_by. With no keys at all it lists the whole space.
@@ -340,21 +344,28 @@ async def _list(
     )
     counted = await ph.call("Browse.Item", "count_with_filter", keys, version=version)
     total = int(counted.get("count", 0))
-    return await _render(ph, None, described, _order(*sort), items, total, offset, filters_text)
+    return await _render(
+        ph,
+        None,
+        described,
+        _order(*sort),
+        items,
+        total,
+        offset,
+        filters_text,
+        in_folder=folder is not None,
+    )
 
 
-def _named(name: str) -> str:
-    """A name in the title, by `json_quoted` (#695): neither a quote nor the title's own
-    separators (``, ``, `` (``) inside it can read as the title's structure, and a character
-    that draws nothing is written ``\\uXXXX``."""
-    return json_quoted(name)
-
-
-def _heading(ph: Photos, described: list[str], filters: list[str], order: str) -> str:
-    """``Photos in /Trips/2024 (personal space; newest first)``, as the spec shows."""
+def _heading(
+    ph: Photos, described: list[str], filters: list[str], order: str, *, in_folder: bool = False
+) -> str:
+    """``Photos in /Trips/2024 (personal space; newest first)``, as the spec shows.
+    ``in_folder``: ``described`` starts with a folder (pre-QA r4 on #695: read from a flag,
+    not the text, which a quoted folder starts with a quote)."""
     if not described:
         lead = "All photos and videos"
-    elif described[0].lstrip("'\"").startswith("/"):  # a folder, quoted or not (#695)
+    elif in_folder:
         lead = f"Photos in {', '.join(described)}"
     else:
         lead = f"Photos: {', '.join(described)}"
@@ -371,8 +382,12 @@ async def _render(
     total: int | None,
     offset: int,
     filters: list[str] | None = None,
+    *,
+    in_folder: bool = False,
 ) -> str:
-    heading = _heading(ph, [source] if source else described, filters or [], order)
+    heading = _heading(
+        ph, [source] if source else described, filters or [], order, in_folder=in_folder
+    )
     rows = await _rows(ph, items)
     if not rows:
         return f"{heading}\nNo items to display.\n\n{page_footer(total, offset, 0)}"

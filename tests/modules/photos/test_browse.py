@@ -203,29 +203,6 @@ class TestListPhotosRouting:
         assert fake.one(ITEM, "list").params["album_id"] == 4
         assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
 
-    def test_json_quoted_shows_what_draws_nothing(self) -> None:
-        """Pre-QA r2 on #695: json.dumps left a zero-width space raw, so "Ann<ZWSP>" read as
-        "Ann". Escaped, it's still JSON for the same name."""
-        import json
-
-        from mcp_synology.modules.filestation.helpers import json_quoted
-
-        for name, shown_as in [
-            ("Ann", '"Ann"'),
-            ("Ann\u200b", '"Ann\\u200b"'),
-            ("a\u00a0b", '"a\\u00a0b"'),
-            ('x", y', '"x\\", y"'),
-            ("café", '"café"'),
-            ("\U000e0041", '"\\udb40\\udc41"'),  # a tag character, outside the BMP
-            # Where Unicode uses a joiner or selector it's kept, as shown() keeps it (r3).
-            ("\u2764\ufe0f", '"\u2764\ufe0f"'),
-            ("\U0001f468\u200d\U0001f469", '"\U0001f468\u200d\U0001f469"'),
-            ("rep\u200dort", '"rep\\u200dort"'),
-            ("\u0301Ann", '"\\u0301Ann"'),  # a leading mark would sit on the quote
-        ]:
-            assert json_quoted(name) == shown_as, name
-            assert json.loads(json_quoted(name)) == name
-
     @respx.mock
     async def test_an_unnamed_person_isnt_quoted_as_a_name(self) -> None:
         """Pre-QA r2 on #695: "(unnamed)" is the server's placeholder, not a name to pass back."""

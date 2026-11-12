@@ -1495,3 +1495,64 @@ class TestUnreadablePathsError:
         assert code == ErrorCode.NOT_FOUND
         assert (ESCAPED_NAME_ADVICE in suggestion) is escaped, suggestion
         assert suggestion.startswith(self.FIND), suggestion
+
+
+@pytest.mark.parametrize(
+    ("name", "quoted"),
+    [
+        ("Ann", '"Ann"'),
+        ("Ann\u200b", '"Ann\\u200b"'),
+        ("a\u00a0b", '"a\\u00a0b"'),
+        ('x", y', '"x\\", y"'),
+        ("caf\u00e9", '"caf\u00e9"'),
+        ("\U000e0041", '"\\udb40\\udc41"'),  # a tag character, outside the BMP
+        # Where Unicode uses a joiner or selector it's kept, as shown() keeps it (pre-QA r3).
+        ("\u2764\ufe0f", '"\u2764\ufe0f"'),
+        ("\U0001f468\u200d\U0001f469", '"\U0001f468\u200d\U0001f469"'),
+        ("rep\u200dort", '"rep\\u200dort"'),
+        ("\u0301Ann", '"\\u0301Ann"'),  # a leading mark would sit on the quote
+        # The annotation characters, which repr escapes for shown() (pre-QA r4).
+        ("Ann\ufff9", '"Ann\\ufff9"'),
+        ("Ann\U00013430", '"Ann\\ud80d\\udc30"'),
+        ("x" * 300, '"' + "x" * 300 + '"'),  # longer than any NAS name: nothing to escape
+    ],
+)
+def test_json_quoted(name: str, quoted: str) -> None:
+    """#695: a name set in a line of other text, as JSON, with what draws nothing escaped."""
+    from mcp_synology.modules.filestation.helpers import json_quoted
+
+    assert json_quoted(name) == quoted
+    assert json.loads(json_quoted(name)) == name
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Ann",
+        "Ann\u200b",
+        "a\u00a0b",
+        "\u2764\ufe0f",
+        "rep\u200dort",
+        "Ann\ufff9",
+        "Ann\U00013430",
+        "\U0001f468\u200d\U0001f469",
+        "x\u3164y",
+        "t\ttab",
+        "a, b",
+    ],
+)
+def test_json_quoted_escapes_exactly_when_shown_does(name: str) -> None:
+    """Pre-QA r4 on #695: json_quoted's rule drifted from shown()'s (the annotation characters).
+    It escapes a name exactly when shown() writes it with escapes."""
+    import re
+
+    from mcp_synology.modules.filestation.helpers import json_quoted, shown
+
+    def escaped(text: str) -> bool:
+        return re.search(r"\\[xuUt]", text) is not None
+
+    assert escaped(json_quoted(name)) == escaped(shown(name)), (
+        name,
+        json_quoted(name),
+        shown(name),
+    )
