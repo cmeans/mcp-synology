@@ -6,9 +6,11 @@ import contextlib
 import fnmatch
 import json
 import logging
+import os
 import re
 import unicodedata
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, NoReturn
 
 import httpx
@@ -693,6 +695,18 @@ def shown(path: str) -> str:
         # #692: repr doubled a backslash, `C:\new` read as `C:\\new`).
         return plain_quoted(path)
     return path
+
+
+def shown_local(path: str | os.PathLike[str]) -> str:
+    """A path on this machine, for a message (#691): its folder as the OS writes it, and its
+    last part quoted as `shown` quotes a NAS name, so a tab, padding or a character that draws
+    nothing in the name is visible. Not `shown` on the whole path: it reads only ``/`` as a
+    separator, and repr would double each Windows backslash. The rule #690 set for
+    download_file's reply; a refusal of the caller's own argument quotes it with ``!r``."""
+    local = Path(path)
+    if not local.name:
+        return str(local)
+    return os.path.join(str(local.parent), shown(local.name))
 
 
 def shown_beside(path: str, marker: str) -> str:

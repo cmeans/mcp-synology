@@ -22,6 +22,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
+from mcp_synology.modules.filestation.helpers import shown_local
 from mcp_synology.modules.photos.helpers import (
     SETUP_CODES,
     Photos,
@@ -147,7 +148,7 @@ async def download_photos(
     if not local_dir.is_dir():
         error_response(
             ErrorCode.NOT_FOUND,
-            f"{op} failed: local folder not found: {dest_folder}",
+            f"{op} failed: local folder not found: {dest_folder!r}",
             retryable=False,
             param="dest_folder",
             value=dest_folder,
@@ -215,7 +216,7 @@ async def download_photos(
     there = f", {kept:,} already there" if kept else ""
     there += f", {replaced:,} replaced a file that was there" if replaced else ""
     head = (
-        f"Downloaded {done:,} of {len(unique):,} item(s) to {local_dir} "
+        f"Downloaded {done:,} of {len(unique):,} item(s) to {shown_local(local_dir)} "
         f"({what}, {space_label(sp)}{there})"
     )
     # Only a call that wrote or kept a file has one for a client to open (#640).
@@ -457,7 +458,7 @@ async def upload_photos(
         if not path.is_file():
             error_response(
                 ErrorCode.NOT_FOUND,
-                f"{op} failed: not a local file: {value}",
+                f"{op} failed: not a local file: {value!r}",
                 retryable=False,
                 param="local_paths",
                 value=value,

@@ -1878,3 +1878,108 @@ class TestLocalPathConfinementErrors:
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "invalid_parameter"
         assert error["param"] == "dest_folder"
+
+
+class TestLocalPathsShown:
+    """#691: a local path in a reply or error names its last part as `shown` names a NAS
+    one (`shown_local`), so a tab or padding in a local name is visible; a refusal of the
+    caller's own argument quotes it with ``!r``."""
+
+    TAB = "a\tb.mkv"
+
+    def test_shown_local(self, tmp_path: Path) -> None:
+        from mcp_synology.modules.filestation.helpers import shown_local
+
+        assert shown_local(tmp_path / "plain.txt") == str(tmp_path / "plain.txt")
+        assert shown_local(tmp_path / self.TAB) == os.path.join(str(tmp_path), repr(self.TAB))
+        assert shown_local(tmp_path / " pad") == os.path.join(str(tmp_path), repr(" pad"))
+        assert shown_local(Path("/")) == "/"
+
+    async def test_a_refused_argument_is_quoted_as_given(self, mock_client: DsmClient) -> None:
+        given = "/nonexistent/a\tb.txt"
+        with pytest.raises(ToolError) as exc:
+            await upload_file(mock_client, local_path=given, dest_folder="/video/up")
+        assert repr(given) in json.loads(str(exc.value))["error"]["message"]
+        with pytest.raises(ToolError) as exc:
+            await download_file(mock_client, path="/video/m.mkv", dest_folder=given)
+        assert repr(given) in json.loads(str(exc.value))["error"]["message"]
+
+    @respx.mock
+    async def test_a_local_file_already_there_is_shown(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"path": "/video/m.mkv", "isdir": False}]}}
+        )
+        (tmp_path / self.TAB).write_text("existing")
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                mock_client, path="/video/m.mkv", dest_folder=str(tmp_path), filename=self.TAB
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert message.endswith(os.path.join(str(tmp_path), repr(self.TAB))), message
+
+    @respx.mock
+    async def test_a_local_folder_in_the_way_is_shown(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": [{"path": "/video/m.mkv", "isdir": False}]}}
+        )
+        (tmp_path / self.TAB).mkdir()
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                mock_client, path="/video/m.mkv", dest_folder=str(tmp_path), filename=self.TAB
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert f"{os.path.join(str(tmp_path), repr(self.TAB))} is a folder" in message, message
+
+    @respx.mock
+    async def test_a_failed_write_names_the_file_shown(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": True, "data": {"files": []}}
+        )
+        for code, start in [(errno.ENOSPC, "No space left"), (errno.EACCES, "Failed to write")]:
+            with (
+                patch.object(mock_client, "download", side_effect=OSError(code, "nope")),
+                pytest.raises(ToolError) as exc,
+            ):
+                await download_file(
+                    mock_client, path="/video/m.mkv", dest_folder=str(tmp_path), filename=self.TAB
+                )
+            message = json.loads(str(exc.value))["error"]["message"]
+            assert start in message, message
+            assert f"{os.path.join(str(tmp_path), repr(self.TAB))}: nope" in message, message
+
+    def test_every_local_path_in_a_message_is_shown(self) -> None:
+        """The guard: in the two transfer modules, a local path's variable in an f-string goes
+        through `shown_local` or ``!r``, except where listed (not a message, or the caller's
+        own paths listed to be sent again as they were)."""
+        import ast
+
+        root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
+        local = {"local_path", "local_dir", "dest_file", "dest_folder", "local", "value"}
+        allowed = {
+            ("photos", "_dest_name", "path.suffix"),  # a file name being built
+            ("photos", "_dest_name", "path.stem"),
+            ("photos", "upload_photos", "value"),  # the not-tried list, to be sent again
+        }
+        found = set()
+        for module in ("filestation", "photos"):
+            tree = ast.parse((root / module / "transfer.py").read_text())
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for node in ast.walk(func):
+                    if not isinstance(node, ast.JoinedStr):
+                        continue
+                    for part in node.values:
+                        if not isinstance(part, ast.FormattedValue) or part.conversion == ord("r"):
+                            continue
+                        value = part.value
+                        base = value.value if isinstance(value, ast.Attribute) else value
+                        if isinstance(base, ast.Name) and base.id in {*local, "path"}:
+                            found.add((module, func.name, ast.unparse(value)))
+        assert found <= allowed, sorted(found - allowed)

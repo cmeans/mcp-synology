@@ -34,6 +34,7 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     paths_isdir,
     shown,
+    shown_local,
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 
@@ -117,7 +118,7 @@ async def upload_file(
     if not local.is_file():
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Upload failed: Local file not found: {local_path}",
+            f"Upload failed: Local file not found: {local_path!r}",
             retryable=False,
             param="local_path",
             value=local_path,
@@ -195,7 +196,7 @@ async def upload_file(
     except OSError as e:
         error_response(
             ErrorCode.FILESYSTEM_ERROR,
-            f"Upload failed: Failed to read local file '{local_path}': {e}",
+            f"Upload failed: Failed to read local file {shown_local(local)}: {e.strerror or e}",
             retryable=False,
             param="local_path",
             value=local_path,
@@ -263,7 +264,7 @@ async def download_file(
     if not local_dir.is_dir():
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Download failed: Local directory not found: {dest_folder}",
+            f"Download failed: Local directory not found: {dest_folder!r}",
             retryable=False,
             param="dest_folder",
             value=dest_folder,
@@ -294,7 +295,7 @@ async def download_file(
         error_response(
             ErrorCode.INVALID_PARAMETER,
             f"Download failed: Can't save as {effective_name!r}: it would land outside "
-            f"{local_dir}.",
+            f"{shown_local(local_dir)}.",
             retryable=False,
             param="filename" if filename else "path",
             value=filename if filename else path,
@@ -389,7 +390,8 @@ async def download_file(
         # Neither mode can replace a folder; refuse before downloading (QA R1 on #178).
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"Download failed: {dest_file} is a folder, so the file can't be saved there.",
+            f"Download failed: {shown_local(dest_file)} is a folder, so the file can't be saved "
+            "there.",
             retryable=False,
             param="filename" if filename else "path",
             value=filename if filename else path,
@@ -400,7 +402,7 @@ async def download_file(
     if os.path.lexists(dest_file) and not overwrite:
         error_response(
             ErrorCode.ALREADY_EXISTS,
-            f"Download failed: Local file already exists: {dest_file}",
+            f"Download failed: Local file already exists: {shown_local(dest_file)}",
             retryable=False,
             param="filename",
             value=dest_file.name,
@@ -421,7 +423,7 @@ async def download_file(
                 ErrorCode.DISK_FULL,
                 f"Download failed: Insufficient local disk space: "
                 f"file is {format_size(nas_file_size)} "
-                f"but only {format_size(free_space)} free on {local_dir}.",
+                f"but only {format_size(free_space)} free on {shown_local(local_dir)}.",
                 retryable=False,
                 suggestion="Free space on the local disk or choose a different destination.",
             )
@@ -440,7 +442,7 @@ async def download_file(
         # The local file appeared while the download streamed; overwrite=False holds.
         error_response(
             ErrorCode.ALREADY_EXISTS,
-            f"Download failed: Local file already exists: {dest_file} (it was created "
+            f"Download failed: Local file already exists: {shown_local(dest_file)} (it was created "
             "while the download was in progress)",
             retryable=False,
             param="filename",
@@ -483,7 +485,7 @@ async def download_file(
         if e.errno == errno.ENOSPC:
             error_response(
                 ErrorCode.DISK_FULL,
-                f"Download failed: No space left on local disk writing {dest_file}: "
+                f"Download failed: No space left on local disk writing {shown_local(dest_file)}: "
                 f"{e.strerror or e}",
                 retryable=False,
                 suggestion="Free space on the local disk or choose a different destination.",
@@ -491,7 +493,8 @@ async def download_file(
         # Name the file the caller asked for: str(e) can carry the internal temp path.
         error_response(
             ErrorCode.FILESYSTEM_ERROR,
-            f"Download failed: Failed to write local file {dest_file}: {e.strerror or e}",
+            f"Download failed: Failed to write local file {shown_local(dest_file)}: "
+            f"{e.strerror or e}",
             retryable=False,
             param="dest_folder",
             value=dest_folder,
@@ -500,9 +503,8 @@ async def download_file(
                 "Use the filename parameter to specify a compatible name."
             ),
         )
-    # The local file's name quoted as the NAS name is (#688); its folder as the OS writes it
-    # (shown() reads '/' as the only separator, and repr doubles a Windows backslash).
-    written = os.path.join(str(dest_file.parent), shown(dest_file.name))
+    # The local file's name quoted as the NAS name is (#688, #691).
+    written = shown_local(dest_file)
     if is_folder:
         result = format_status(
             f"Downloaded the folder {shown(nas_path)} as a ZIP archive of it "
