@@ -1892,6 +1892,30 @@ class TestMoreShownSites:
         assert "/video/f.txt is a file, not a folder" in error["message"]
         assert "start" not in [m for m, _ in client.calls]
 
+    async def test_search_a_path_under_a_file_names_the_file(self) -> None:
+        """#517 (pre-QA r1): getinfo answers 401 for a path under a file; the nearest parent is
+        the file, so the path can't exist, and the reply names the file."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _UnderFile(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    path = kwargs["params"]["path"]
+                    if path == "/video/f.txt":
+                        return {"files": [{"path": path, "isdir": False}]}
+                    return {"files": [{"path": path, "code": 401}]}
+                return await super().request(api, method, **kwargs)
+
+        client = _UnderFile(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path="/video/f.txt/x/y", pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            "Search files failed: /video/f.txt/x/y doesn't exist on the NAS: /video/f.txt is a file."
+        )
+        assert "start" not in [m for m, _ in client.calls]
+
     async def test_search_starts_when_the_check_cant_tell(self) -> None:
         """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
         from mcp_synology.modules.filestation.search import search_files
