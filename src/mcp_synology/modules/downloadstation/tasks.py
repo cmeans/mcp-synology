@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
+from mcp_synology.core.display import shown
 from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -39,7 +40,6 @@ from mcp_synology.modules.downloadstation.helpers import (
     task_error_detail,
     task_size_unknown,
 )
-from mcp_synology.modules.filestation.helpers import shown
 
 logger = logging.getLogger(__name__)
 

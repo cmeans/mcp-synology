@@ -23,6 +23,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core import display
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation import MODULE_INFO, register
@@ -308,9 +309,8 @@ class TestRefuseBadName:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The advice says to report a real name the cap refuses (maintainer, #515)."""
-        from mcp_synology.modules.filestation import helpers
 
-        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        monkeypatch.setattr(display, "SELECTOR_LIMIT", 1)
         with pytest.raises(ToolError) as exc:
             refuse_bad_name("Rename", "\u8f9b\U000e0100\u845b\U000e0101", "new_name", "x")
         assert "github.com/cmeans/mcp-synology/issues" in _error(exc)["suggestion"]
@@ -318,9 +318,8 @@ class TestRefuseBadName:
     async def test_a_created_parent_over_the_cap_gets_the_cap_advice(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from mcp_synology.modules.filestation import helpers
 
-        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        monkeypatch.setattr(display, "SELECTOR_LIMIT", 1)
         with pytest.raises(ToolError) as exc:
             await resolve_paths(
                 _FakeClient(),
@@ -378,9 +377,8 @@ class TestRefuseBadName:
     ) -> None:
         """create_folder's last part has a label but can be retyped: it gets the specific
         advice, not the plain-name one (QA round 4 on #515)."""
-        from mcp_synology.modules.filestation import helpers
 
-        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        monkeypatch.setattr(display, "SELECTOR_LIMIT", 1)
         with pytest.raises(ToolError) as exc:
             await resolve_paths(
                 _FakeClient(),
@@ -1182,7 +1180,7 @@ class TestPathListsQuoteACommaName:
     COMMA = "/s/a, photos/family"
 
     def test_shown(self) -> None:
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
 
         assert shown(self.COMMA) == repr(self.COMMA)
         assert shown("/s/a,b") == "/s/a,b"  # no space after the comma: not a list separator
@@ -1190,7 +1188,7 @@ class TestPathListsQuoteACommaName:
     def test_a_comma_alone_is_quoted_without_escapes(self) -> None:
         """Pre-QA r2 on #692: what's inside the quotes is the path exactly, as the instructions
         tell a model; repr doubled a backslash."""
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
 
         # A backslash keeps repr's escapes, so every backslash in a quoted path is an escape:
         # plain, `C:\temp` would read as C:<TAB>emp (pre-QA r3).
@@ -1482,7 +1480,7 @@ class TestOnePathPerLine:
         assert found <= allowed, sorted(found - allowed)
 
     def test_check_clause_quotes_a_name_holding_and(self) -> None:
-        from mcp_synology.modules.filestation.helpers import shown_beside
+        from mcp_synology.core.display import shown_beside
 
         assert shown_beside("/s/a and photos", " and ") == "'/s/a and photos'"
         assert shown_beside("/s/a", " and ") == "/s/a"
@@ -1564,7 +1562,7 @@ class TestPaddedPathsAreShownQuoted:
 
     async def test_copy_summary_and_skipped_list(self) -> None:
         """#519: the copied names and the skipped list, both quoted when padded."""
-        from mcp_synology.modules.filestation.helpers import _escaped_repr
+        from mcp_synology.core.display import _escaped_repr
         from mcp_synology.modules.filestation.operations import _copy_move_summary
 
         name = PADDED.rsplit("/", 1)[-1]

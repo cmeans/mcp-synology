@@ -25,6 +25,15 @@ from typing import TYPE_CHECKING, Literal, NamedTuple, NoReturn
 
 import regex
 
+from mcp_synology.core.display import (
+    NAME_BYTES,
+    _escaped_repr,
+    draws_nothing,
+    invisible_problem,
+    is_invisible_problem,
+    is_selector_problem,
+    shown,
+)
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import (
     ESCAPED_NAME_ADVICE,
@@ -36,17 +45,10 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation import helpers
 from mcp_synology.modules.filestation.helpers import (
-    NAME_BYTES,
-    _escaped_repr,
     _is_dot,
-    draws_nothing,
-    invisible_problem,
-    is_invisible_problem,
-    is_selector_problem,
     name_key,
     normalize_path,
     path_exists,
-    shown,
     strip_padding,
 )
 

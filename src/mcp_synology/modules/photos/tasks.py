@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import anyio
 import httpx
 
+from mcp_synology.core.display import plain_quoted
 from mcp_synology.core.errors import (
     DsmHttpError,
     DsmReplyError,
@@ -38,7 +39,7 @@ from mcp_synology.core.formatting import (
     path_list,
     synology_error_response,
 )
-from mcp_synology.modules.filestation.helpers import describe_transport_error, plain_quoted
+from mcp_synology.modules.filestation.helpers import describe_transport_error
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Space,

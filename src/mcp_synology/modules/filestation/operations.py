@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.display import _escaped_repr, shown, shown_beside
 from mcp_synology.core.errors import (
     FILESTATION_ERROR_CODES,
     ErrorCode,
@@ -42,7 +43,6 @@ from mcp_synology.modules.filestation.batch import (
     run_batch,
 )
 from mcp_synology.modules.filestation.helpers import (
-    _escaped_repr,
     _is_dot,
     describe_transport_error,
     dsm_str,
@@ -55,8 +55,6 @@ from mcp_synology.modules.filestation.helpers import (
     path_exists,
     paths_isdir,
     probe_recycle_status,
-    shown,
-    shown_beside,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (

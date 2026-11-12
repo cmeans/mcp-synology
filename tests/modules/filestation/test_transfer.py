@@ -16,6 +16,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core import display
 from mcp_synology.core.formatting import DOWNLOADED_CONTENTS_ARE_DATA, ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation.transfer import (
     download_file,
@@ -122,10 +123,9 @@ class TestUploadFile:
     ) -> None:
         """A local file name can't be retyped from here: the advice stays 'pass filename',
         not 'retype' or 'write fewer variants' (pre-QA and QA round 4 on #515)."""
-        from mcp_synology.modules.filestation import helpers
 
         skip_unless_the_locale_can_encode(name)
-        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 1)
+        monkeypatch.setattr(display, "SELECTOR_LIMIT", 1)
         local_file = tmp_path / name
         local_file.write_text("x")
         with pytest.raises(ToolError) as exc:
@@ -1889,7 +1889,7 @@ class TestLocalPathsShown:
     TAB = "a\tb.mkv"
 
     def test_shown_local(self, tmp_path: Path) -> None:
-        from mcp_synology.modules.filestation.helpers import shown_local
+        from mcp_synology.core.display import shown_local
 
         assert shown_local(tmp_path / "plain.txt") == str(tmp_path / "plain.txt")
         assert shown_local(tmp_path / self.TAB) == repr(str(tmp_path / self.TAB))
@@ -1911,7 +1911,7 @@ class TestLocalPathsShown:
     def test_a_name_starting_or_ending_with_a_quote_is_quoted(self) -> None:
         """Pre-QA r4: shown() wrote ``'a.jpg'`` raw, which reads as a quoted ``a.jpg``; NAS and
         local names alike (upload's and rename's replies, Photos' rows)."""
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
 
         assert shown("'a.jpg'") == "\"'a.jpg'\""
         assert shown('say "hi"') == "'say \"hi\"'"
@@ -1937,7 +1937,7 @@ class TestLocalPathsShown:
     def test_shown_local_matches_shown_on_posix(self, path: str) -> None:
         """Pre-QA r3: one rule for both, through `_needs_escapes`; a quoted part's reason
         decides between `plain_quoted` and escapes, not its output."""
-        from mcp_synology.modules.filestation.helpers import shown, shown_local
+        from mcp_synology.core.display import shown, shown_local
 
         assert shown_local(path) == shown(path)
 

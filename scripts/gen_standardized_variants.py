@@ -4,7 +4,7 @@
 A new name may hold VS1-VS7 (U+FE00-FE06) only in a sequence StandardizedVariants.txt
 registers, and VS15/VS16 (U+FE0E/FE0F) only after an emoji emoji-variation-sequences.txt
 registers; anywhere else the selector draws nothing and hides a value. This script turns
-those two files into `src/mcp_synology/modules/filestation/standardized_variants.py`.
+those two files into `src/mcp_synology/core/standardized_variants.py`.
 
 Usage, with X.Y.Z the Unicode version of the `regex` floor's data (not `latest`, which can
 be newer than the property data the checks use). `regex` doesn't report it: its release
@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = REPO_ROOT / "src/mcp_synology/modules/filestation/standardized_variants.py"
+OUTPUT = REPO_ROOT / "src/mcp_synology/core/standardized_variants.py"
 _LINE = re.compile(r"\s*([0-9A-F]{4,6})\s+([0-9A-F]{4,6})\s*;")
 
 

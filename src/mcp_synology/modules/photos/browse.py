@@ -6,6 +6,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+from mcp_synology.core.display import json_quoted, shown_beside
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
     cut_escaped,
@@ -16,7 +17,6 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
-from mcp_synology.modules.filestation.helpers import json_quoted, shown_beside
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
