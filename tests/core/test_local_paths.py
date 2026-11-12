@@ -336,6 +336,29 @@ class TestLocalPathsQuoted:
         err = self._refusal(str(root / "link" / "f.txt"), [root.resolve()])
         assert f"(resolves to '{outside.resolve() / 'f.txt'}')" in err["message"], err
 
+    def test_an_unknown_user_is_refused_shown(self, tmp_path: Path) -> None:
+        """The refusal that hides which local users exist writes the path shown too."""
+        import json
+
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.core.local_paths import refuse_outside_roots
+
+        value = "~no-such-user-697/a\tb.txt"
+        with pytest.raises(ToolError) as exc:
+            refuse_outside_roots(
+                "Op",
+                "local_path",
+                value,
+                Path(value),
+                [tmp_path.resolve()],
+                module="x",
+                hide_unknown_users=True,
+            )
+        text = str(exc.value)
+        message = json.loads(text[text.index("{") :])["error"]["message"]
+        assert message.startswith(f"Op refused: {value!r} is outside"), message
+
     def test_an_unresolvable_path_is_shown_escaped(self, tmp_path: Path) -> None:
         err = self._refusal(str(tmp_path / "a\x00b"), [tmp_path.resolve()])
         assert "\\x00" in err["message"] and "\x00" not in err["message"], err
