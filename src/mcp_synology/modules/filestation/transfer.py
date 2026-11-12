@@ -280,7 +280,7 @@ async def download_file(
         param, value = ("filename", filename) if filename else ("path", path)
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"Download failed: Can't save as {shown(effective_name)}: {problem}.",
+            f"Download failed: Can't save as {effective_name!r}: {problem}.",
             retryable=False,
             param=param,
             value=value,
@@ -294,7 +294,7 @@ async def download_file(
         # Backstop for any name shape the rules above miss: never write outside dest_folder.
         error_response(
             ErrorCode.INVALID_PARAMETER,
-            f"Download failed: Can't save as {shown(effective_name)}: it would land outside "
+            f"Download failed: Can't save as {effective_name!r}: it would land outside "
             f"{shown_local(local_dir)}.",
             retryable=False,
             param="filename" if filename else "path",
@@ -378,7 +378,7 @@ async def download_file(
             # The folder's name fits; with ".zip" it's past the local limit.
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Download failed: Can't save as {shown(effective_name)}: the name is too long "
+                f"Download failed: Can't save as {effective_name!r}: the name is too long "
                 "for a local file.",
                 retryable=False,
                 param="filename",

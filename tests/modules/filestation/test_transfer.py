@@ -2029,8 +2029,8 @@ class TestLocalPathsShown:
         joined to text by ``+`` or ``%``, or passed to ``.format()``) goes
         through `shown_local` (never ``!r``, which doubles Windows backslashes, nor `shown` on a
         whole local path, which reads only ``/`` as a separator). `shown` is for a file's own
-        name (``name``, ``effective_name``, ``x.name``). Listed: the not-tried list, sent back
-        as given; `_dest_name`, which builds a file name, isn't a message."""
+        name (``name``, ``effective_name``, ``x.name``), and ``!r`` for the caller's own
+        ``filename`` refused as given. `_dest_name`, which builds a file name, is skipped."""
         import ast
 
         root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
@@ -2091,6 +2091,11 @@ class TestLocalPathsShown:
                         if call == "shown_local" and not raw:
                             continue
                         if call == "shown" and not raw and value.args and a_name(value.args[0]):
+                            continue
+                        # The caller's own file name, refused as given ("Can't save as '..'"),
+                        # is quoted with !r as every refusal of an argument is (pre-QA r6).
+                        refused_name = isinstance(value, ast.Name) and value.id == "effective_name"
+                        if refused_name and part.conversion == ord("r"):
                             continue
                         # A local path's name anywhere in the expression: bare, an attribute,
                         # wrapped in a call (str(local_dir), local_dir.as_posix()), or !r.
