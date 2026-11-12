@@ -1089,8 +1089,33 @@ async def folder_kind(client: DsmClient, path: str) -> str | None:
     for entry in data.get("files", []):
         if entry.get("code") == 408:
             return "missing"
+        if entry.get("code") == 401:
+            # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm
+            # 7.4.1): a file among its parents means it can't exist.
+            return await _missing_under_a_file(client, path, version)
         if isinstance(entry.get("isdir"), bool):
             return "folder" if entry["isdir"] else "file"
+    return None
+
+
+async def _missing_under_a_file(client: DsmClient, path: str, version: int) -> str | None:
+    """``"missing"`` when the nearest of ``path``'s parents that DSM reports is a file; None
+    when it's a folder, or none can be read (#517)."""
+    parts = path.rstrip("/").split("/")
+    for end in range(len(parts) - 1, 1, -1):  # nearest parent first, down to the share
+        parent = "/".join(parts[:end])
+        try:
+            data = await client.request(
+                "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
+            )
+        except (SynologyError, httpx.HTTPError) as e:
+            logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
+            return None
+        for entry in data.get("files", []):
+            if isinstance(entry.get("isdir"), bool):
+                return None if entry["isdir"] else "missing"
+            if entry.get("code") not in (401, None):
+                return None
     return None
 
 

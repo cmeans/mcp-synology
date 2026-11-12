@@ -140,4 +140,15 @@ class TestVdsmFolderChecks:
         with pytest.raises(ToolError) as exc:
             await list_files(client, path=f"{dated_folder}/f0.txt/child")
         error = self._error(exc)
-        assert error["code"] in ("not_found", "invalid_parameter"), error
+        # getinfo answers 401 for it too; its parent is a file, so it can't exist.
+        assert (error["code"], error["retryable"]) == ("not_found", False), error
+
+    async def test_search_a_path_under_a_file(self, client: Any, dated_folder: str) -> None:
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.modules.filestation.search import search_files
+
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=f"{dated_folder}/f0.txt/child", pattern="x")
+        error = self._error(exc)
+        assert (error["code"], error["retryable"]) == ("not_found", False), error

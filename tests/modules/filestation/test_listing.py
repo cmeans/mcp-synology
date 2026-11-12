@@ -738,6 +738,32 @@ class TestListFiles:
                 "List files failed: /video/a.jpg/child doesn't exist on the NAS."
             )
 
+    @pytest.mark.parametrize(
+        ("parent", "code"), [("file", "not_found"), ("folder", "filestation_error")]
+    )
+    @respx.mock
+    async def test_list_files_401_as_dsm_answers_it(
+        self, mock_client: DsmClient, parent: str, code: str
+    ) -> None:
+        """#517, as vdsm 7.4.1 answers: getinfo of `…/a.jpg/child` is a 401 entry too, and
+        its parent shows as a file, so the path can't exist. A folder parent keeps DSM's
+        error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            if params["path"].endswith("/child"):
+                entry: dict[str, Any] = {"code": 401, "path": params["path"]}
+            else:
+                entry = {"isdir": parent == "folder", "path": params["path"]}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/child")
+        assert json.loads(str(exc_info.value))["error"]["code"] == code
+
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
         """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""
