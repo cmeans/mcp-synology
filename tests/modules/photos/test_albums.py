@@ -843,7 +843,7 @@ def test_album_line_separates_thousands() -> None:
 
 class TestCraftedNames:
     """#700: an album name in plain quotes could close its quotes early (`Trip" (7)` read
-    as album 7); each name is now JSON-quoted, its `"` written `\\"`."""
+    as album 7); a name holding a `"` (or a separator) is now JSON-quoted, its `"` written `\\"`."""
 
     NAME = 'Trip" (7)'
     SHOWN = '"Trip\\" (7)"'
@@ -970,3 +970,14 @@ class TestNamesPassedBackInQuotes:
         async with client:
             padded = await delete_photo_albums(client, album_names=[' "mcp-spec-album" '])
         assert padded.splitlines()[-1].endswith(f"({self.HINT})"), padded
+
+
+@respx.mock
+async def test_deleted_albums_quote_a_name_of_digits() -> None:
+    """Pre-QA r9 on #709: `9 12, 12 2024 trip` read as four IDs (the #614 confusion)."""
+    albums = {"list": [{"id": 9, "name": "12"}, {"id": 12, "name": "2024 trip"}]}
+    install(FakePhotos().on(ALBUM, "list", 2, albums).on(ALBUM, "delete", 1, {}))
+    client = make_client()
+    async with client:
+        out = await delete_photo_albums(client, album_ids=[9, 12])
+    assert out.startswith('Deleted 2 album(s): 9 "12", 12 "2024 trip"; their photos'), out

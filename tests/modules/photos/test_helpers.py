@@ -657,6 +657,13 @@ class TestQuotedNamesAndFolders:
         assert quoted_name("") == "(unnamed)"
         assert quoted_name(None, "(no subject)") == "(no subject)"
         assert quoted_name(0) == "0"  # not text, but a name, not missing (QA r1)
+        assert quoted_name("'a") == '"\'a"'  # starts with a quote
+        assert quoted_name("a'") == '"a\'"'  # ends with one
+        assert quoted_name("12") == "12"
+        assert quoted_name("12", beside_id=True) == '"12"'  # `9 12` would read as two IDs
+        assert quoted_name("2024 trip", beside_id=True) == '"2024 trip"'
+        assert quoted_name("trip 2024", beside_id=True) == "trip 2024"
+        assert quoted_name("\u0661", beside_id=True) == "\u0661"  # ASCII digits only
 
     def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
         assert shown_folder("/Trips/2024") == "/Trips/2024"

@@ -808,3 +808,15 @@ async def test_an_empty_tag_is_shown_as_the_callers_text() -> None:
     async with client:
         out = await list_photos(client, tag="")
     assert 'no item has the tag "" (' in out and "(unnamed)" not in out, out
+
+
+@respx.mock
+async def test_a_concept_with_no_name_is_its_placeholder_and_id() -> None:
+    """Pre-QA r9 on #709: a nameless concept 7 read the same as a concept named `7`."""
+    fake = FakePhotos().on(ITEM, "list", 7, {"list": []})
+    fake.on("SYNO.Foto.Browse.Concept", "get", 2, {"list": [{"id": 7, "name": ""}]})
+    install(fake)
+    client = make_client(CAPTURE_191)
+    async with client:
+        out = await list_photos(client, concept=7)
+    assert out.startswith("Photos: concept (unnamed) (7) ("), out

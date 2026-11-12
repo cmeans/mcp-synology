@@ -271,7 +271,7 @@ async def _list(
         name = listed[0].get("name", "") if listed else ""
         return await _render(
             ph,
-            f"concept {quoted_name(name, str(concept))}",
+            f"concept {quoted_name(name)} ({concept})",
             [],
             _order(*sort),
             items,

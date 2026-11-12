@@ -87,7 +87,7 @@ def _shared(album: dict[str, Any]) -> str:
 
 
 def album_line(album: dict[str, Any]) -> str:
-    """``Album 9: "Trip 2024" · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
+    """``Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
     return (
         f"Album {album['id']}: {quoted_name(album.get('name'))} · {album.get('type', 'normal')} · "
         f"{int(album.get('item_count') or 0):,} item(s) · {_span(album)} · {_shared(album)}"
@@ -629,7 +629,7 @@ def _share_block(album: dict[str, Any]) -> str:
             member.get("name"), f"{member.get('type', 'member')} {member.get('id', '')}"
         )
         members.append(f"{label} ({entry.get('role', '?')})")
-    head = f"Album {album['id']} {quoted_name(album.get('name'))} is " + (
+    head = f"Album {album['id']} {quoted_name(album.get('name'), beside_id=True)} is " + (
         "shared." if album.get("shared") else "not shared."
     )
     return "\n".join(
@@ -691,7 +691,7 @@ async def delete_photo_albums(
             await ph.call("Browse.Album", "delete", {"id": list(found)}, personal=True)
         lines = []
         if found:
-            named = ", ".join(f"{i} {quoted_name(n)}" for i, n in found.items())
+            named = ", ".join(f"{i} {quoted_name(n, beside_id=True)}" for i, n in found.items())
             lines.append(
                 f"Deleted {len(found):,} album(s): {named}; their photos stay where they are."
             )

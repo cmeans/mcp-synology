@@ -346,7 +346,7 @@ _PERSON_ACTIONS = ("rename", "hide", "unhide", "set_cover")
 
 
 def person_line(person: dict[str, Any]) -> str:
-    """``Person 12: "Jo" (70 items, visible, cover: item 26).``"""
+    """``Person 12: Jo (70 items, visible, cover: item 26).``"""
     cover = ""
     key = str(((person.get("additional") or {}).get("thumbnail") or {}).get("cache_key", ""))
     if key.split("_")[0].isdigit():
@@ -462,7 +462,7 @@ async def merge_people(
         count = f"{int(items):,}" if items is not None else "?"
         return (
             f"Merged {len(merged):,} people into person {keep_id} "
-            f"{quoted_name(now.get('name'))} (now {count} items)."
+            f"{quoted_name(now.get('name'), beside_id=True)} (now {count} items)."
         )
     except SynologyError as e:
         synology_error_response(op, e)

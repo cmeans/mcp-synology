@@ -68,7 +68,9 @@ def space_label(space: Space) -> str:
 _NAME_MARKS = (", ", "; ", " (", ": ", " · ", " → ")
 
 
-def quoted_name(name: object, unnamed: str = "(unnamed)", *also: str) -> str:
+def quoted_name(
+    name: object, unnamed: str = "(unnamed)", *also: str, beside_id: bool = False
+) -> str:
     """An album's, person's, tag's, place's or request's name in a line of a reply: as is,
     or JSON-quoted (`json_quoted`, #695) only when it's needed (maintainer, 2026-11-12, on
     #709), as `shown_folder` does for a folder. Needed when the name holds what its line
@@ -77,7 +79,9 @@ def quoted_name(name: object, unnamed: str = "(unnamed)", *also: str) -> str:
     ``(`` (it would read as quoted, or as the server's placeholder), or ends with ``:`` or a
     quote. ``unnamed`` (the server's placeholder, unquoted) when it has none. A name that
     isn't text (``0``) is shown as text. A name made of words is shown as it is: wording
-    isn't a boundary (CLAUDE.md)."""
+    isn't a boundary (CLAUDE.md). ``beside_id``: the line writes the name right after an ID
+    (``9 Trip``, ``person 12 Jo``), so a name starting with a digit is quoted too, or
+    ``9 12`` would read as two IDs (the #614 confusion; pre-QA r9 on #709)."""
     text = "" if name is None else str(name)
     if not text:
         return unnamed
@@ -88,6 +92,7 @@ def quoted_name(name: object, unnamed: str = "(unnamed)", *also: str) -> str:
         or text.startswith(("'", "("))
         or text.endswith((":", "'"))
         or any(m in text for m in (*_NAME_MARKS, *also))
+        or (beside_id and text[:1].isascii() and text[:1].isdigit())
     )
     return quoted if needed else text
 
@@ -546,7 +551,9 @@ class Photos:
                 value=name,
                 suggestion=with_quotes_hint(hint, name),
             )
-        listed = ", ".join(f"{m['id']} {quoted_name(m.get('name'))}" for m in matches[:10])
+        listed = ", ".join(
+            f"{m['id']} {quoted_name(m.get('name'), beside_id=True)}" for m in matches[:10]
+        )
         invalid(
             self.operation,
             f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
@@ -620,7 +627,7 @@ class Photos:
         if node is None:
             invalid(
                 self.operation,
-                f"place {place_id} {quoted_name(place.get('name'))} can't be "
+                f"place {place_id} {quoted_name(place.get('name'), beside_id=True)} can't be "
                 "used in a smart album condition here.",
                 param=param,
                 value=place_id,
@@ -663,7 +670,9 @@ class Photos:
                 continue
             matches = folded.get(name.casefold(), [])
             if len(matches) > 1:
-                listed = ", ".join(f"{m['id']} {quoted_name(m.get('name'))}" for m in matches[:10])
+                listed = ", ".join(
+                    f"{m['id']} {quoted_name(m.get('name'), beside_id=True)}" for m in matches[:10]
+                )
                 invalid(
                     self.operation,
                     f"{len(matches):,} tags match {name!r} ignoring case: {listed}.",
