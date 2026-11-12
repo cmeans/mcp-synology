@@ -16,7 +16,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.core.formatting import DOWNLOADED_CONTENTS_ARE_DATA
 from mcp_synology.modules.photos.transfer import (
     _dest_name,
+    _folder_shown,
     _name_key,
+    _row_name,
     download_photos,
     upload_photos,
 )
@@ -139,6 +141,14 @@ class TestOriginals:
             )
         assert "12  'x.jpg: not downloaded: gone': not downloaded: another file" in out, out
 
+    def test_a_name_shown_with_escapes_keeps_them_when_quoted(self) -> None:
+        """#699 (pre-QA r2): a name or folder holding a separator and a tab is quoted by
+        `shown`'s rule, its tab escaped, not plain-quoted with the tab raw."""
+        assert _row_name("a: b\tc.jpg") == "'a: b\\tc.jpg'"
+        assert _folder_shown("/dl\t (x)") == "'/dl\\t (x)'"
+        assert _row_name("a.jpg:") == "'a.jpg:'"
+        assert _row_name("b).jpg") == "b).jpg"  # ")" only matters inside "(as …)"
+
     @respx.mock
     async def test_every_row_and_the_folder_quote_a_separator(self, tmp_path: Path) -> None:
         """#699 (pre-QA r1): the downloaded, already-there and couldn't-reach-DSM rows quote a
@@ -152,10 +162,10 @@ class TestOriginals:
         third.update(id=16)
         items["list"].append(third)
         for item, name in zip(
-            items["list"], ("ab: gone.jpg", "bc: gone.jpg", "cd: done.jpg"), strict=True
+            items["list"], ("ab: gone.jpg", "bc: gone\t.jpg", "cd.jpg:"), strict=True
         ):
             item["filename"] = name
-        (dest / "bc: gone.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
+        (dest / "bc: gone\t.jpg").write_bytes(b"x" * 49546)  # the capture's filesize
 
         def timeout(_params: dict[str, Any]) -> httpx.Response:
             raise httpx.ReadTimeout("timed out")
@@ -170,8 +180,8 @@ class TestOriginals:
             )
         assert out.startswith(f"Downloaded 1 of 3 item(s) to '{dest}' (original, "), out
         assert "\n  12  'ab: gone.jpg'  3 B" in out, out
-        assert "\n  15  'bc: gone.jpg': already there: " in out, out
-        assert "\n  16  'cd: done.jpg': not downloaded: couldn't reach DSM" in out, out
+        assert "\n  15  'bc: gone\\t.jpg': already there: " in out, out
+        assert "\n  16  'cd.jpg:': not downloaded: couldn't reach DSM" in out, out
 
     @respx.mock
     async def test_existing_file_kept_without_overwrite(self, tmp_path: Path) -> None:

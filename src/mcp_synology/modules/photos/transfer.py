@@ -51,16 +51,18 @@ _TIMEOUT = 300.0
 
 def _row_name(name: str, *also: str) -> str:
     """A name in a transfer row, as `shown` writes it, and quoted when it holds the row's own
-    separators (``": "`` before a status, two spaces between columns) or ``also`` (``")"``
-    for the name inside a renamed upload's ``(as …)``), so a name such as
-    ``cat.jpg: not downloaded`` can't forge its row's status (#699)."""
+    separators (``": "`` before a status, two spaces between columns), ends in ``":"`` (which
+    the two spaces after it would make ``": "``) or holds ``also`` (``")"`` for the name
+    inside a renamed upload's ``(as …)``), so a name such as ``cat.jpg: not downloaded``
+    can't forge its row's status (#699)."""
     text = shown(name)
-    if text == name and any(sep in name for sep in (": ", "  ", *also)):
+    # A name ending in ":" makes ": " with the two spaces after it (pre-QA r2).
+    if text == name and (name.endswith(":") or any(sep in name for sep in (": ", "  ", *also))):
         return plain_quoted(name)
     return text
 
 
-def _folder_shown(folder: Path) -> str:
+def _folder_shown(folder: str | os.PathLike[str]) -> str:
     """``download_photos``' local folder as `shown_local` writes it, and quoted when it holds
     ``" ("``, which the heading puts after it: a folder named ``dl (shared space)`` would
     read as the heading's own space (pre-QA r1 on #699)."""
