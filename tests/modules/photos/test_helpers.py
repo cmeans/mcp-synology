@@ -642,5 +642,9 @@ class TestQuotedNamesAndFolders:
         assert shown_folder("/Trips/2024") == "/Trips/2024"
         assert shown_folder("/Trips (Shared Space)") == "'/Trips (Shared Space)'"
         assert shown_folder("/a: b") == "'/a: b'"
+        assert shown_folder("/Trips:") == "'/Trips:'"  # ": (" with what follows (pre-QA r2)
+        assert shown_folder("/a:b") == "/a:b"
+        assert shown_folder("/a matching b") == "/a matching b"
+        assert shown_folder("/a matching b", " matching ") == "'/a matching b'"
         assert shown_folder("/a, b") == "'/a, b'"  # shown()'s own rule (#685)
         assert shown_folder("/pad \t (x)") == shown("/pad \t (x)")  # escapes kept

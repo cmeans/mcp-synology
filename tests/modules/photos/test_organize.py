@@ -775,6 +775,23 @@ class TestRequests:
         assert gone.startswith('Deleted photo request "x\\" (abc)" (ZxOc9Ep8q);'), gone
 
     @respx.mock
+    async def test_a_request_with_no_subject_shows_the_placeholder(self) -> None:
+        """Pre-QA r2 on #700: no subject is the server's placeholder, unquoted."""
+        listed = captured("request-list")
+        listed["list"][0]["subject"] = ""
+        fake = FakePhotos().on(REQ, "list", 1, listed, listed, listed)
+        fake.on(REQ, "update", 1, {}).on(REQ, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            block = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", max_file_mib=10
+            )
+            gone = await photo_request(client, action="delete", request="ZxOc9Ep8q")
+        assert block.startswith("Photo request (no subject) → /mcp-spec-capture"), block
+        assert gone.startswith("Deleted photo request (no subject) (ZxOc9Ep8q);"), gone
+
+    @respx.mock
     async def test_create(self) -> None:
         fake = FakePhotos().on(REQ, "list", 1, {"list": []})
         fake.on(FOLDER, "get", 2, captured("folder-get-by-name"))

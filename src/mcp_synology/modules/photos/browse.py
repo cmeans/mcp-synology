@@ -16,7 +16,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
-from mcp_synology.modules.filestation.helpers import json_quoted, shown_beside
+from mcp_synology.modules.filestation.helpers import json_quoted
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
@@ -290,8 +290,8 @@ async def _list(
         folder_id = int(f["id"])
         keys["folder"] = [folder_id]
         # Plain unless it holds what `shown` quotes or the title's other separator, " (": the
-        # title joins what was asked for with ", " and ends each with " (…)" (#695).
-        described.append(shown_beside(str(f.get("name", "")) or "/", " ("))
+        # title joins what was asked for with ", " and ends each with " (…)" (#695, #700).
+        described.append(shown_folder(str(f.get("name", "")) or "/"))
     if person is not None:
         p = await ph.person(person)
         # count_with_filter answers 120 without the policy (verified on both versions).

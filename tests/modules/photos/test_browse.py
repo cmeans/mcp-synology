@@ -475,6 +475,27 @@ class TestCollections:
         assert out.startswith('Folders in \'/a (x\' matching "2\\""'), out
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("name", "heading"),
+        [
+            ("x", "Folders in '/a matching b' matching \"x\""),
+            (None, "Folders in /a matching b"),
+        ],
+    )
+    async def test_folders_heading_quotes_matching_only_beside_a_filter(
+        self, name: str | None, heading: str
+    ) -> None:
+        """Pre-QA r2 on #700: " matching " follows the parent only when a filter is given."""
+        parent = {"folder": {"id": 10, "name": "/a matching b", "parent": 3}}
+        fake = FakePhotos().on(FOLDER, "get", 2, parent)
+        fake.on(FOLDER, "list", 2, captured("folder-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photo_collections(client, type="folder", parent_id=10, name=name)
+        assert out.splitlines()[0].startswith(heading), out
+
+    @respx.mock
     async def test_folders_shared_flag_on_191(self) -> None:
         """1.9.1's sharing_info has only sharing_link; the state is the top-level flag."""
         listed = captured("folder-list", CAPTURE_191)
