@@ -1854,10 +1854,57 @@ class TestMoreShownSites:
     async def test_search_lost_task(self) -> None:
         from mcp_synology.modules.filestation.search import search_files
 
-        client = _FakeClient(methods={"start": {"taskid": "T1"}, "list": {"finished": True}})
+        client = _FakeClient(
+            existing={PADDED}, methods={"start": {"taskid": "T1"}, "list": {"finished": True}}
+        )
         with pytest.raises(ToolError) as exc:
             await search_files(client, folder_path=PADDED, pattern="x")  # type: ignore[arg-type]
         assert f"lost the search task for {QUOTED}" in _error(exc)["message"]
+
+    async def test_search_a_missing_folder(self) -> None:
+        """#517: DSM answered 600 "access denied" or a lost task; it's not_found, naming the
+        path as given (padded, quoted), and nothing is started."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        client = _FakeClient(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path=PADDED, pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("not_found", False)
+        assert error["message"] == f"Search files failed: {QUOTED} doesn't exist on the NAS."
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_search_a_file(self) -> None:
+        """#517: DSM lost the task, and the reply said to retry; it's invalid_parameter."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _File(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    return {"files": [{"path": "/video/f.txt", "isdir": False}]}
+                return await super().request(api, method, **kwargs)
+
+        client = _File(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path="/video/f.txt", pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("invalid_parameter", False)
+        assert "/video/f.txt is a file, not a folder" in error["message"]
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_search_starts_when_the_check_cant_tell(self) -> None:
+        """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        client = _FakeClient(
+            codes={"/video/x": 407},
+            methods={
+                "start": {"taskid": "T1"},
+                "list": {"finished": True, "total": 0, "files": []},
+            },
+        )
+        await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        assert "start" in [m for m, _ in client.calls]
 
     async def test_upload_already_exists(self, tmp_path: Any) -> None:
         from mcp_synology.modules.filestation.transfer import upload_file

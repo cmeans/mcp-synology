@@ -711,6 +711,33 @@ class TestListFiles:
             assert error["code"] == "not_found"
             assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
 
+    @pytest.mark.parametrize(
+        ("getinfo", "code"),
+        [("missing", "not_found"), ("file", "invalid_parameter"), ("folder", "filestation_error")],
+    )
+    @respx.mock
+    async def test_list_files_401_under_a_file(
+        self, mock_client: DsmClient, getinfo: str, code: str
+    ) -> None:
+        """#517: DSM answers 401 "Unknown error" for a path under a file (`…/a.jpg/child`).
+        One getinfo names it missing or a file; a folder it shows keeps DSM's own error."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            entry = {"code": 408} if getinfo == "missing" else {"isdir": getinfo == "folder"}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/child")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == code, error
+        if getinfo == "missing":
+            assert error["message"] == (
+                "List files failed: /video/a.jpg/child doesn't exist on the NAS."
+            )
+
     @respx.mock
     async def test_list_files_407_is_permission_denied(self, mock_client: DsmClient) -> None:
         """rc5 live test: list_files /home got DSM 407, reported as "Unknown error (code 407)"."""

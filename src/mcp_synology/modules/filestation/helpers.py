@@ -1074,6 +1074,26 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
     return None
 
 
+async def folder_kind(client: DsmClient, path: str) -> str | None:
+    """One ``getinfo``: ``"folder"``, ``"file"`` or ``"missing"`` (DSM's 408 entry), or None
+    when the answer shows none of these (another code, such as 407, or no entry) or the
+    request fails: a caller then lets DSM's own answer stand (#517)."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    try:
+        data = await client.request(
+            "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+        )
+    except (SynologyError, httpx.HTTPError) as e:
+        logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
+        return None
+    for entry in data.get("files", []):
+        if entry.get("code") == 408:
+            return "missing"
+        if isinstance(entry.get("isdir"), bool):
+            return "folder" if entry["isdir"] else "file"
+    return None
+
+
 async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     """Return ``{path: isdir}`` for each path whose type ``getinfo`` reports.
 
