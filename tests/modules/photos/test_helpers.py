@@ -705,3 +705,12 @@ class TestFolderPassedBackInQuotes:
             with pytest.raises(ToolError) as exc:
                 await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
         assert self.HINT not in str(_error(exc)["suggestion"]), _error(exc)
+
+
+def test_quotes_note_compares_both_sides_in_nfc() -> None:
+    """QA r3 on #709: either side may be NFD; case still counts."""
+    nfc, nfd = '"Caf\u00e9"', '"Cafe\u0301"'
+    assert quotes_note(nfc, "album name", before=nfd) == []
+    assert quotes_note(nfd, "album name", before=nfc) == []
+    assert quotes_note(nfd, "album name", before=[None, "x", nfc]) == []
+    assert quotes_note('"CAF\u00c9"', "album name", before=nfc) != []
