@@ -544,11 +544,28 @@ class TestGetPhoto:
         assert "Item 12: forest-trail.jpg" in out
         assert "1600×1200 · photo" in out
         assert "Rating:       4" in out and "favorite" not in out
-        assert "Jo, (unnamed)" in out
+        assert '"Jo", (unnamed)' in out
         assert "44.428, -110.5885 · Teton County, Wyoming, United States" in out
         assert "SeedCam 1" in out
         assert "GPS Latitude Reference" in out
         assert out.endswith("Not found: 999999")
+
+    @respx.mock
+    async def test_names_holding_the_list_separator_are_quoted(self) -> None:
+        """#700: Tags and People join names with ", ", so a person "Jo, Ann" read as two people
+        and a tag "a, b" as two tags; a folder holding " (" read as the space."""
+        item = captured("item-get")
+        item["list"][0]["additional"].update(
+            tag=[{"id": 3, "name": "a, b"}, {"id": 4, "name": 'x"y'}],
+            person=[{"id": 1, "name": "Jo, Ann"}, {"id": 2, "name": ""}],
+        )
+        folders = _folders(FakePhotos())
+        install(folders.on(ITEM, "get", 2, item))
+        client = make_client()
+        async with client:
+            out = await get_photo(client, ids=[12])
+        assert 'Tags:         "a, b", "x\\"y"' in out, out
+        assert 'People:       "Jo, Ann", (unnamed)' in out, out
 
     @respx.mock
     async def test_indexing_item_has_no_taken_time_yet(self) -> None:

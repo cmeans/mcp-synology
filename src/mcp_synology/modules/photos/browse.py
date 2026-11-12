@@ -26,6 +26,8 @@ from mcp_synology.modules.photos.helpers import (
     one_ref,
     page_footer,
     parse_date,
+    quoted_name,
+    shown_folder,
     space_label,
     taken_or_indexing,
 )
@@ -545,7 +547,7 @@ async def _collections(
             },
             version=2,
         )
-        heading = f"Folders in {under.get('name') or '/'}"
+        heading = f"Folders in {shown_folder(under.get('name') or '/')}"
         headers = ["ID", "Path", "Shared"]
         rows = [
             [
@@ -562,7 +564,7 @@ async def _collections(
             for r, e in zip(rows, entries, strict=True)
             if wanted in str(e.get("name", "")).casefold()
         ]
-        heading += f' matching "{name}"'
+        heading += f" matching {quoted_name(name)}"
     total = len(rows)
     shown = rows[offset : offset + limit]
     noun = {"shared_with_me": "album", "person": "person", "place": "place"}.get(kind, kind)
@@ -708,16 +710,16 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
     if v7:
         rating += f" · favorite: {'yes' if add.get('favorite') else 'no'}"
     pairs = [
-        ("Folder", f"{folder} ({space_label(ph.space)})"),
+        ("Folder", f"{shown_folder(folder)} ({space_label(ph.space)})"),
         ("Taken", taken_or_indexing(item, "not known yet: still indexing")),
         ("Size", " · ".join(size)),
         ("Rating", rating),
         # Stripped: some cameras pad EXIF ImageDescription with spaces (#362).
         ("Description", str(add.get("description") or "").strip() or "—"),
-        ("Tags", ", ".join(str(t.get("name", "")) for t in add.get("tag") or []) or "—"),
+        ("Tags", ", ".join(quoted_name(t.get("name")) for t in add.get("tag") or []) or "—"),
         (
             "People",
-            ", ".join(str(p.get("name") or "(unnamed)") for p in add.get("person") or []) or "—",
+            ", ".join(quoted_name(p.get("name")) for p in add.get("person") or []) or "—",
         ),
         ("Location", _location(add)),
         ("Camera", _camera(add.get("exif") or {})),

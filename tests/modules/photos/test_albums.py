@@ -56,7 +56,7 @@ class TestCreate:
         assert 'Created album "mcp-spec-album" (id 4) with 1 item(s).' in out
         assert "Not found: 99" in out
         assert "another album already has this name" in out
-        assert "Album 4: mcp-spec-album · normal · 2 item(s)" in out
+        assert 'Album 4: "mcp-spec-album" · normal · 2 item(s)' in out
 
     @respx.mock
     async def test_create_smart_builds_condition(self) -> None:
@@ -448,7 +448,7 @@ class TestShareLink:
             {"action": "delete", "member": {"type": "public"}}
         ]
         assert "(expired)" in out
-        assert "eve (download)" in out and "group 101 (view)" in out
+        assert '"eve" (download)' in out and "group 101 (view)" in out
 
     @respx.mock
     async def test_update_needs_a_shared_album(self) -> None:

@@ -29,6 +29,7 @@ from mcp_synology.core.errors import (
     SynologyError,
 )
 from mcp_synology.core.formatting import error_response
+from mcp_synology.modules.filestation.helpers import json_quoted, plain_quoted, shown
 from mcp_synology.modules.filestation.paths import check_parts
 
 if TYPE_CHECKING:
@@ -60,6 +61,25 @@ def prefix(space: Space) -> str:
 
 def space_label(space: Space) -> str:
     return "Shared Space" if space == "shared" else "personal space"
+
+
+def quoted_name(name: object, unnamed: str = "(unnamed)") -> str:
+    """An album's, person's, tag's or request's name in a reply, JSON-quoted (`json_quoted`,
+    #695), so a ``"``, ``", "`` or ``" ("`` inside it can't read as the line's structure;
+    ``unnamed`` (the server's placeholder, unquoted so it can't pass for a name) when it has
+    none (#700)."""
+    text = str(name or "")
+    return json_quoted(text) if text else unnamed
+
+
+def shown_folder(path: object) -> str:
+    """A Photos folder path in a reply, as `shown` writes one, and plain-quoted when it holds
+    ``" ("`` or ``": "``, which the lines that name a folder put after it (``/Trips (Shared
+    Space)``, ``… to /Trips: 2 of 2 processed``), so a folder named ``/Trips (Shared Space)``
+    can't read as the space (#700)."""
+    text = str(path)
+    out = shown(text)
+    return plain_quoted(text) if out == text and (" (" in text or ": " in text) else out
 
 
 def check_space(operation: str, space: str) -> Space:
@@ -469,7 +489,7 @@ class Photos:
                 value=name,
                 suggestion=hint,
             )
-        listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
+        listed = ", ".join(f"{m['id']} {quoted_name(m.get('name'))}" for m in matches[:10])
         invalid(
             self.operation,
             f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
@@ -543,7 +563,7 @@ class Photos:
         if node is None:
             invalid(
                 self.operation,
-                f"place {place_id} ({place.get('name', '')}) can't be "
+                f"place {place_id} {quoted_name(place.get('name'))} can't be "
                 "used in a smart album condition here.",
                 param=param,
                 value=place_id,
@@ -586,7 +606,7 @@ class Photos:
                 continue
             matches = folded.get(name.casefold(), [])
             if len(matches) > 1:
-                listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
+                listed = ", ".join(f"{m['id']} {quoted_name(m.get('name'))}" for m in matches[:10])
                 invalid(
                     self.operation,
                     f"{len(matches):,} tags match {name!r} ignoring case: {listed}.",

@@ -192,7 +192,7 @@ class TestTags:
             out = await tag_photos(client, action="add", ids=[12, 15, 999], tags=["2024", "new"])
         assert fake.one(TAG, "create").params == {"name": "new"}
         assert fake.one(ITEM, "add_tag").params == {"id": [12, 15], "tag": [4, 9]}
-        assert "Added tags 2024, new to 2 item(s)" in out
+        assert 'Added tags "2024", "new" to 2 item(s)' in out
         assert "Rejected by DSM: 15" in out
         assert "Not found: 999" in out
         assert "dates and sizes change" in out
@@ -630,7 +630,7 @@ class TestPeople:
         async with client:
             out = await edit_person(client, action="rename", person_id=12, name="")
         assert fake.one(PERSON, "set").params == {"id": 12, "name": ""}
-        assert out == "Person 12: Person 1 (70 items, visible, cover: item 26)."
+        assert out == 'Person 12: "Person 1" (70 items, visible, cover: item 26).'
 
     @respx.mock
     async def test_hide_and_cover(self) -> None:
@@ -956,7 +956,7 @@ class TestDsmErrors:
 
 def test_person_line_separates_thousands() -> None:
     assert person_line({"id": 12, "name": "Jo", "item_count": 1_234}) == (
-        "Person 12: Jo (1,234 items, visible)."
+        'Person 12: "Jo" (1,234 items, visible).'
     )
 
 

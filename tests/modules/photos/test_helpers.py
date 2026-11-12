@@ -10,6 +10,7 @@ import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
+from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.photos.helpers import (
     Photos,
     Ref,
@@ -24,7 +25,9 @@ from mcp_synology.modules.photos.helpers import (
     parse_expires,
     photo_time,
     prefix,
+    quoted_name,
     refs,
+    shown_folder,
     taken,
 )
 from tests.modules.photos.dsm import CAPTURE_191, PEOPLE, FakePhotos, captured, install, make_client
@@ -456,7 +459,7 @@ class TestNames:
                 await Photos(client, "personal", "Op").person(Ref("person_name", name="JO"))
         err = _error(exc)
         assert (err["code"], err["param"]) == ("invalid_parameter", "person_name")
-        assert "1 (Jo)" in str(err["message"]) and "2 (jo)" in str(err["message"])
+        assert '1 "Jo"' in str(err["message"]) and '2 "jo"' in str(err["message"])
         assert err["suggestion"] == "Ask the user which one they mean, then pass its person_id."
 
     @respx.mock
@@ -565,7 +568,7 @@ class TestOneRef:
         err = _error(exc)
         assert err["code"] == "invalid_parameter"
         assert err["param"] == "tag"
-        assert "3 (Beach)" in str(err["message"]) and "7 (beach)" in str(err["message"])
+        assert '3 "Beach"' in str(err["message"]) and '7 "beach"' in str(err["message"])
 
 
 class TestPlaceNode:
@@ -621,3 +624,22 @@ def test_id_limit_refusals_name_what_and_separate_thousands() -> None:
             assert f"at most 1,000 {noun} per call." in str(e)
         else:
             raise AssertionError("1,001 ids accepted")
+
+
+class TestQuotedNamesAndFolders:
+    """#700: a name or folder set in a line of text can't read as the line's structure."""
+
+    def test_names_are_json_quoted_and_a_missing_one_is_the_placeholder(self) -> None:
+        assert quoted_name("Trip 2024") == '"Trip 2024"'
+        assert quoted_name('Trip" (7)') == '"Trip\\" (7)"'
+        assert quoted_name("a, b") == '"a, b"'
+        assert quoted_name("Ann\u200b") == '"Ann\\u200b"'
+        assert quoted_name("") == "(unnamed)"
+        assert quoted_name(None, "(no subject)") == "(no subject)"
+
+    def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
+        assert shown_folder("/Trips/2024") == "/Trips/2024"
+        assert shown_folder("/Trips (Shared Space)") == "'/Trips (Shared Space)'"
+        assert shown_folder("/a: b") == "'/a: b'"
+        assert shown_folder("/a, b") == "'/a, b'"  # shown()'s own rule (#685)
+        assert shown_folder("/pad \t (x)") == shown("/pad \t (x)")  # escapes kept

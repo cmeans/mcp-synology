@@ -20,6 +20,7 @@ from mcp_synology.modules.photos.helpers import (
     one_ref,
     parse_date,
     parse_expires,
+    quoted_name,
     refs,
 )
 
@@ -85,7 +86,7 @@ def _shared(album: dict[str, Any]) -> str:
 def album_line(album: dict[str, Any]) -> str:
     """``Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared``."""
     return (
-        f"Album {album['id']}: {album.get('name', '')} · {album.get('type', 'normal')} · "
+        f"Album {album['id']}: {quoted_name(album.get('name'))} · {album.get('type', 'normal')} · "
         f"{int(album.get('item_count') or 0):,} item(s) · {_span(album)} · {_shared(album)}"
     )
 
@@ -160,7 +161,8 @@ async def _photo_album(
             data = await ph.call("Browse.NormalAlbum", "create", params, personal=True)
             created = data["album"]
             lines.append(
-                f'Created album "{name}" (id {created["id"]}) with {len(found):,} item(s).'
+                f"Created album {quoted_name(name)} (id {created['id']}) "
+                f"with {len(found):,} item(s)."
             )
             lines += _rejected(data)
             if missing:
@@ -182,7 +184,7 @@ async def _photo_album(
                 personal=True,
             )
             created = data["album"]
-            lines.append(f'Created smart album "{name}" (id {created["id"]}).')
+            lines.append(f"Created smart album {quoted_name(name)} (id {created['id']}).")
             lines.append(f"Matches {int(count.get('count', 0)):,} item(s) now.")
         if same:
             others = ", ".join(str(a["id"]) for a in same)
@@ -215,7 +217,7 @@ async def _photo_album(
 
     if action == "rename":
         await ph.call("Browse.Album", "set_name", {"id": album_id, "name": name}, personal=True)
-        lines.append(f'Renamed album {album_id} to "{name}".')
+        lines.append(f"Renamed album {album_id} to {quoted_name(name)}.")
     elif action in ("add", "remove"):
         found, missing = await ph.items(ids)
         if found:
@@ -253,7 +255,7 @@ async def _photo_album(
             personal=True,
         )
         copied = data["album"]
-        lines.append(f'Copied album {album_id} to "{name}" (id {copied["id"]}).')
+        lines.append(f"Copied album {album_id} to {quoted_name(name)} (id {copied['id']}).")
         album_id = int(copied["id"])
     else:
         cond = await _condition(ph, condition or {})
@@ -618,9 +620,11 @@ def _share_block(album: dict[str, Any]) -> str:
     members = []
     for entry in info.get("permission") or []:
         member = entry.get("member") or entry
-        label = member.get("name") or f"{member.get('type', 'member')} {member.get('id', '')}"
+        label = quoted_name(
+            member.get("name"), f"{member.get('type', 'member')} {member.get('id', '')}"
+        )
         members.append(f"{label} ({entry.get('role', '?')})")
-    head = f'Album {album["id"]} "{album.get("name", "")}" is ' + (
+    head = f"Album {album['id']} {quoted_name(album.get('name'))} is " + (
         "shared." if album.get("shared") else "not shared."
     )
     return "\n".join(
@@ -678,7 +682,7 @@ async def delete_photo_albums(
             await ph.call("Browse.Album", "delete", {"id": list(found)}, personal=True)
         lines = []
         if found:
-            named = ", ".join(f'{i} "{n}"' for i, n in found.items())
+            named = ", ".join(f"{i} {quoted_name(n)}" for i, n in found.items())
             lines.append(
                 f"Deleted {len(found):,} album(s): {named}; their photos stay where they are."
             )

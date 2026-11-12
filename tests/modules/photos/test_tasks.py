@@ -468,7 +468,7 @@ class TestDeletes:
             out = await delete_photo_folders(client, folder_paths=["/a, b", "/c"])
         assert out.startswith("Deleted 2 folders (listed last)"), out
         assert out.endswith(
-            "The folders:\n  /a, b (2 item(s) directly in it)\n  /c (2 item(s) directly in it)"
+            "The folders:\n  '/a, b' (2 item(s) directly in it)\n  /c (2 item(s) directly in it)"
         ), out
 
     @respx.mock

@@ -199,6 +199,8 @@ Plain text through the shared formatters. `time` (taken time) is Unix seconds, b
 
 **Text from the NAS (#604):** every reply is escaped where the client reads it, so a control character other than a tab, a line or paragraph separator, a bidi control or a tag character in an album, person, tag or folder name, a description or a file name shows as an escape (`\n`), never as a line of its own. An argument holding one is refused (`server.py`), `description` excepted, which is escaped wherever a reply shows it. A folder with such a name can't be given by path until it's renamed in Photos, but its ID still works (`list_photo_collections type=folder` lists IDs), so `photo_folder` can rename it. `merge_people` with no `name` refuses when the kept person's name came escaped, since sending it back would rename the person (a real backslash that looks like an escape is refused too, cautiously); and `download_photos` names a file it can't name as DSM does `item-<id>` with its extension. Albums, people and tags are found by name among the escaped names, so one can be used by its name as shown; another with a real backslash spelled the same way makes the name ambiguous, which is refused as any duplicate is.
 
+**Names and folders in a line of text (#695, #699, #700):** an album's, person's, tag's, place's or photo request's name set in a line of other text is JSON-quoted by `photos/helpers.py` `quoted_name` (File Station's `json_quoted`: a `"` inside written `\"`, a character that draws nothing written `\uXXXX`), so a `"`, `, ` or ` (` inside it can't read as the line's structure: `Album 9: "Trip 2024" · normal · …`, `Tags: "beach", "2024"`, a candidate list `1 "Jo", 2 "jo"`. A missing name is the server's placeholder, unquoted (`(unnamed)`, `(no subject)`), so it can't pass for a name. A folder path is written by `shown_folder`: as File Station's `shown()` writes a path, and plain-quoted when it holds ` (` or `: `, which the lines that name a folder put after it (`Copied 3 item(s) to '/Trips (Shared Space)' (personal space): …`). A name in a table's own column isn't quoted (`list_photo_collections`' rows), and a refusal quotes the caller's own text with `!r`. The server instructions' SYNOLOGY PHOTOS section says what the quotes mean.
+
 ### Errors
 
 Photos-specific codes, dispatched when the API name starts with `SYNO.Foto`. Codes 105, 106, 107 and 119 fall through to the common handlers (105 never re-auths).
@@ -362,8 +364,8 @@ Item 41: beach-sunset.jpg
   Size:         50.1 KiB · 1600×1200 · photo
   Rating:       4 · favorite: yes (1.9.1+)
   Description:  spec capture
-  Tags:         beach, 2024
-  People:       Person 1, (unnamed)
+  Tags:         "beach", "2024"
+  People:       "Person 1", (unnamed)
   Location:     41.8781, -87.6298 · Chicago, Cook County, Illinois, United States
   Camera:       MCPTest SeedCam 1 · lens — · aperture — · exposure — · ISO —
 
@@ -523,7 +525,7 @@ Photos indexes new items over the next seconds to minutes; taken dates and previ
 
 ```
 Created album "Trip 2024" (id 9) with 2 item(s).
-Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared
+Album 9: "Trip 2024" · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not shared
 ```
 
 `create_smart` / `set_condition` add `Matches N item(s) now.` from `peek_item_count`. `add`/`remove` list IDs DSM rejected in `error_list`, and IDs that don't exist (checked first).
@@ -569,7 +571,7 @@ Album 9: Trip 2024 · normal · 2 item(s) · 2024-07-04 – 2024-07-06 · not sh
 Album 9 "Trip 2024" is shared.
   Link:      https://nas.example:5001/mo/sharing/6kJOJFJVq
   Public:    view · password: yes · expires 2030-03-17 23:59:59 UTC
-  Members:   alex (download), family (view)
+  Members:   "alex" (download), "family" (view)
 ```
 
 `stop` says `Album 9 is no longer shared; the link stops working (DSM keeps it, so sharing again may restore it).` On an HTTP connection, a line says the password crossed the network unencrypted.
@@ -744,7 +746,7 @@ Still running at `task_timeout`: `Still copying on the NAS (2 of 9 processed). H
 **Response shape:**
 
 ```
-Added tags beach, 2024 to 3 item(s) (personal space).
+Added tags "beach", "2024" to 3 item(s) (personal space).
   Rejected by DSM: 41 (error_list; e.g. still being indexed)
   Not found, or no permission for its Shared Space folder: 999999
 Photos rewrites tagged files, so their dates and sizes change.
@@ -818,7 +820,7 @@ Photos rewrites edited files, so their dates and sizes change.
 
 **Annotations:** `destructiveHint=true`, `idempotentHint=true`: `rename` and `set_cover` replace the previous name or cover.
 
-**Response shape:** the person after the change: `Person 12: Jo (70 items, visible, cover: item 26).`
+**Response shape:** the person after the change: `Person 12: "Jo" (70 items, visible, cover: item 26).`
 
 **Design notes:**
 - rename, hide/unhide and `set_cover` verified on the real NAS, and reverted.
