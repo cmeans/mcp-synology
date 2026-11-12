@@ -1276,3 +1276,22 @@ class TestQuotesRound2:
             )
         for out in (renamed, merged, updated):
             assert "Note: the" not in out, out
+
+
+@respx.mock
+async def test_several_new_tags_in_quotes_get_one_note() -> None:
+    """Pre-QA r5 on #709: a quoted tag list passed back made one note line per tag."""
+    fake = FakePhotos().on(ITEM, "get", 2, _items(12))
+    fake.on(TAG, "list", 1, captured("tag-list"))
+    fake.on(TAG, "create", 1, {"tag": {"id": 9, "name": "x"}}, {"tag": {"id": 10, "name": "y"}})
+    fake.on(ITEM, "add_tag", 1, {"error_list": []})
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await tag_photos(client, action="add", ids=[12], tags=['"a"', '"b"', "2024"])
+    notes = [line for line in out.splitlines() if "Note: the new tag" in line]
+    assert notes == [
+        '  Note: the new tags "\\"a\\"", "\\"b\\"" start and end with a quote mark, which is '
+        "now part of them. If they came from a reply in quotes, remove them and add the tags "
+        "without them."
+    ], out

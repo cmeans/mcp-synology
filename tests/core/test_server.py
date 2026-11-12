@@ -2145,7 +2145,8 @@ class TestInstructionComments:
 # +187 by #709 (QA r2): which escapes a quoted name and a quoted folder use (JSON's, a surrogate
 # pair as one character; Python's), the doubled escape scoped to names, and that a folder like
 # that is passed by its ID.
-PAYLOAD_BUDGET_CHARS = 62_172
+# +28 by #709 (pre-QA r5): a folder's escapes are Python's in "..." too (a folder holding a ').
+PAYLOAD_BUDGET_CHARS = 62_200
 
 
 class TestPayloadBudget:

@@ -188,11 +188,22 @@ async def tag_photos(
                 lines.append(
                     f"  No item has the tag(s) {gone}, so there was nothing to remove.{hint}"
                 )
-            for tag in created:
+            # One note for all the new tags in a reply's quotes, so a quoted list passed back
+            # doesn't add a line per tag (pre-QA r5 on #709).
+            quoted_new = [t for t in created if in_reply_quotes(t)]
+            if len(quoted_new) == 1:
                 lines += [
                     f"  {n}"
-                    for n in quotes_note(tag, "new tag", "remove it and add the tag without them")
+                    for n in quotes_note(
+                        quoted_new[0], "new tag", "remove it and add the tag without them"
+                    )
                 ]
+            elif quoted_new:
+                lines.append(
+                    f"  Note: the new tags {', '.join(quoted_name(t) for t in quoted_new)} start "
+                    "and end with a quote mark, which is now part of them. If they came from a "
+                    "reply in quotes, remove them and add the tags without them."
+                )
             if rejected:
                 lines.append(
                     f"  Rejected by DSM: {rejected_text(rejected)} "

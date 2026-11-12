@@ -684,7 +684,7 @@ class TestFolderPassedBackInQuotes:
 
     HINT = "If the path came from a reply in quotes, pass it without them."
 
-    @pytest.mark.parametrize("given", ["'/Trips (Shared Space)'", '"/Trips: x"'])
+    @pytest.mark.parametrize("given", ["'/Trips (Shared Space)'", '"/Trips: x"', " '/x' "])
     @respx.mock
     async def test_a_quoted_path_not_found_hints(self, given: str) -> None:
         install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))
@@ -696,7 +696,7 @@ class TestFolderPassedBackInQuotes:
             f"list_photo_collections type=folder lists them. {self.HINT}"
         ), _error(exc)
 
-    @pytest.mark.parametrize("given", ["/nope", "/'a'", "'/a"])
+    @pytest.mark.parametrize("given", ["/nope", "/'a'", "'/a", "''", '""'])
     @respx.mock
     async def test_a_plain_path_has_no_hint(self, given: str) -> None:
         install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))

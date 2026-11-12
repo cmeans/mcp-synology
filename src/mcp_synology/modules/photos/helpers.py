@@ -453,7 +453,7 @@ class Photos:
                 what = ref.id if ref.id is not None else repr(ref.name)
                 advice = missing_advice or "list_photo_collections type=folder lists them."
                 given = (ref.name or "").strip()
-                if ref.id is None and len(given) >= 2 and given[0] == given[-1] in "'\"":
+                if ref.id is None and len(given) >= 3 and given[0] == given[-1] in "'\"":
                     advice = f"{advice} {PATH_QUOTES_HINT}"
                 not_found(
                     self.operation,
