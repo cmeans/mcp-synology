@@ -23,13 +23,13 @@ from mcp_synology.modules.photos.helpers import (
     Photos,
     Ref,
     add_rejected,
+    added_tags_quotes_note,
     check_folder_path,
     check_ids,
     check_space,
     in_batches,
     in_reply_quotes,
     invalid,
-    new_tags_quotes_note,
     not_found,
     one_ref,
     parse_expires,
@@ -157,11 +157,9 @@ async def tag_photos(
         if found:
             # Resolved now, never cached: 1.9.1 renumbers tags on re-index (spec).
             resolved = await ph.tag_ids(names, param="tags")
-            created: list[str] = []
             if action == "add":
                 for tag, tag_id in resolved.items():
                     if tag_id is None:
-                        created.append(tag)
                         # Idempotent by name: returns the existing tag's ID (verified).
                         made = await ph.call("Browse.GeneralTag", "create", {"name": tag})
                         resolved[tag] = int(made["tag"]["id"])
@@ -189,9 +187,9 @@ async def tag_photos(
                 lines.append(
                     f"  No item has the tag(s) {gone}, so there was nothing to remove.{hint}"
                 )
-            # One note for all the new tags in a reply's quotes, so a quoted list passed back
-            # doesn't add a line per tag (pre-QA r5 on #709).
-            lines += [f"  {n}" for n in new_tags_quotes_note(created)]
+            # One note for every tag added that's in a reply's quotes, new or not (pre-QA r8).
+            if action == "add" and tag_ids:
+                lines += [f"  {n}" for n in added_tags_quotes_note(names)]
             if rejected:
                 lines.append(
                     f"  Rejected by DSM: {rejected_text(rejected)} "

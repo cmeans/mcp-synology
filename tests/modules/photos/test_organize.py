@@ -1113,14 +1113,16 @@ class TestNamesPassedBackInQuotes:
         async with client:
             out = await tag_photos(client, action="add", ids=[12], tags=['"beach"', "new2"])
         assert (
-            '\n  Note: the new tag "\\"beach\\"" starts and ends with a quote mark, which is '
-            "now part of it. If it came from a reply in quotes, remove the tag and add it again "
-            "without the quote marks." in out
+            '\n  Note: the tag "\\"beach\\"" starts and ends with a quote mark, which is part of '
+            "its name. If it came from a reply in quotes, remove it from these items and add "
+            "the tag without the quote marks." in out
         ), out
-        assert out.count("Note: the new tag") == 1, out  # not for "new2"
+        assert out.count("Note: the tag") == 1, out  # not for "new2"
 
     @respx.mock
-    async def test_tag_add_of_an_existing_tag_in_quotes_has_no_note(self) -> None:
+    async def test_tag_add_of_an_existing_tag_in_quotes_is_noted_too(self) -> None:
+        """Pre-QA r8 on #709: an existing tag named `"quoted"` is most likely the same mistake
+        made earlier (QA r5's reasoning for album create), so adding it is noted too."""
         tags = captured("tag-list")
         tags["list"].append({"id": 77, "name": '"quoted"'})
         fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(TAG, "list", 1, tags)
@@ -1130,7 +1132,7 @@ class TestNamesPassedBackInQuotes:
         async with client:
             out = await tag_photos(client, action="add", ids=[12], tags=['"quoted"'])
         assert fake.one(ITEM, "add_tag").params == {"id": [12], "tag": [77]}
-        assert "Note:" not in out.split("dates and sizes")[0], out
+        assert 'Note: the tag "\\"quoted\\"" starts and ends with a quote mark' in out, out
 
     @respx.mock
     async def test_tag_remove_of_an_unknown_tag_in_quotes_hints(self) -> None:
@@ -1290,11 +1292,11 @@ async def test_several_new_tags_in_quotes_get_one_note() -> None:
     client = make_client()
     async with client:
         out = await tag_photos(client, action="add", ids=[12], tags=['"a"', '"b"', "2024"])
-    notes = [line for line in out.splitlines() if "Note: the new tag" in line]
+    notes = [line for line in out.splitlines() if "Note: the tag" in line]
     assert notes == [
-        '  Note: the new tags "\\"a\\"", "\\"b\\"" start and end with a quote mark, which is '
-        "now part of them. If they came from a reply in quotes, remove the tags and add them "
-        "again without the quote marks."
+        '  Note: the tags "\\"a\\"", "\\"b\\"" start and end with a quote mark, which is part '
+        "of their names. If they came from a reply in quotes, remove them from these items and "
+        "add the tags without the quote marks."
     ], out
 
 

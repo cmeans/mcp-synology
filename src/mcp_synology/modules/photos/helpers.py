@@ -143,21 +143,25 @@ def quotes_note(
     ]
 
 
-def new_tags_quotes_note(tags: Iterable[str]) -> list[str]:
-    """`quotes_note` for the tags a call created: one note naming every new tag in a reply's
-    quotes, so a quoted list passed back doesn't add a line per tag (pre-QA r5 on #709).
-    Kept beside `quotes_note` so their wording changes together (pre-QA r7)."""
+def added_tags_quotes_note(tags: Iterable[str]) -> list[str]:
+    """The `quotes_note` of `tag_photos` add: one note naming every tag it added that's in a
+    reply's quotes, so a quoted list passed back doesn't add a line per tag (pre-QA r5 on
+    #709). Every such tag, new or not: one that already exists, quotes and all, is most
+    likely the same mistake made earlier, as for album create (QA r5, pre-QA r8). Kept
+    beside `quotes_note` so their wording changes together (pre-QA r7)."""
     quoted = [t for t in tags if in_reply_quotes(t)]
-    if len(quoted) == 1:
-        return quotes_note(
-            quoted[0], "new tag", "remove the tag and add it again without the quote marks"
-        )
     if not quoted:
         return []
+    if len(quoted) == 1:
+        return [
+            f"Note: the tag {quoted_name(quoted[0])} starts and ends with a quote mark, which "
+            "is part of its name. If it came from a reply in quotes, remove it from these "
+            "items and add the tag without the quote marks."
+        ]
     return [
-        f"Note: the new tags {', '.join(quoted_name(t) for t in quoted)} start and end with a "
-        "quote mark, which is now part of them. If they came from a reply in quotes, remove "
-        "the tags and add them again without the quote marks."
+        f"Note: the tags {', '.join(quoted_name(t) for t in quoted)} start and end with a "
+        "quote mark, which is part of their names. If they came from a reply in quotes, remove "
+        "them from these items and add the tags without the quote marks."
     ]
 
 
