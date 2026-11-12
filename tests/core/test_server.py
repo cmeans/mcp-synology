@@ -2142,7 +2142,10 @@ class TestInstructionComments:
 # quoted to show its exact characters (PATH FORMAT says it only with File Station).
 # +116 by #709 (#700, QA r1): SYNOLOGY PHOTOS says an escape the NAS's text needed shows doubled
 # inside quotes, and decoding gives that escape back to pass.
-PAYLOAD_BUDGET_CHARS = 61_985
+# +187 by #709 (QA r2): which escapes a quoted name and a quoted folder use (JSON's, a surrogate
+# pair as one character; Python's), the doubled escape scoped to names, and that a folder like
+# that is passed by its ID.
+PAYLOAD_BUDGET_CHARS = 62_172
 
 
 class TestPayloadBudget:
