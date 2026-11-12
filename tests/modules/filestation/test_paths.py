@@ -1912,7 +1912,8 @@ class TestMoreShownSites:
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            "Search files failed: /video/f.txt/x/y doesn't exist on the NAS: /video/f.txt is a file."
+            "Search files failed: /video/f.txt/x/y doesn't exist on the NAS: "
+            "/video/f.txt is a file."
         )
         assert "start" not in [m for m, _ in client.calls]
 
