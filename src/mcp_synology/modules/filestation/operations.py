@@ -25,8 +25,11 @@ from mcp_synology.core.formatting import (
     format_size,
     format_status,
     holds_escape,
+    path_list,
     rewrapped_error,
+    sentence,
     synology_error_response,
+    then,
 )
 from mcp_synology.modules.filestation.batch import (
     BatchOutcome,
@@ -38,7 +41,6 @@ from mcp_synology.modules.filestation.batch import (
     no_scope,
     run_batch,
 )
-from mcp_synology.modules.filestation.batch import unstop as _unstop
 from mcp_synology.modules.filestation.helpers import (
     _escaped_repr,
     _is_dot,
@@ -54,6 +56,7 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
     probe_recycle_status,
     shown,
+    shown_beside,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -349,12 +352,14 @@ def _already_done(
     text = ""
     if done:
         past = _PAST_TENSE.get(operation, "processed")
-        text = f". Already {past} before this failure: " + ", ".join(map(named, done))
+        # One a line when there are two or more (#693).
+        text = path_list(f"Already {past} before this failure", [named(p) for p in done])
     if skipped:
         # A skip's advice warns here too: retrying one named like what landed replaces it (#580).
         ran = [*(done or []), *(landed or []), *([failing] if failing else [])]
-        line = skipped_line(operation != "Copy", skipped, ran, dest_of=dest_of, dest=dest)
-        text += ". " + line.removesuffix(".")
+        text = then(
+            text, skipped_line(operation != "Copy", skipped, ran, dest_of=dest_of, dest=dest)
+        )
     return text
 
 
@@ -371,9 +376,11 @@ async def _refuse_missing_sources(
         err_code, suggestion = unreadable_paths_error(missing)
         error_response(
             err_code,
-            f"{operation} files refused: "
-            + "; ".join(missing_text(p, c) for p, c in missing)
-            + f". Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
+            # One a line when two or more (#693).
+            then(
+                path_list(f"{operation} files refused", [missing_text(p, c) for p, c in missing]),
+                f"Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
+            ),
             retryable=False,
             param="paths",
             value=original,
@@ -551,8 +558,8 @@ def _partial_note(
         else ""
     )
     return (
-        f". Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
-        f"{past} before it stopped, so check there before trying again"
+        f"Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
+        f"{past} before it stopped, so check there before trying again."
     )
 
 
@@ -575,18 +582,22 @@ def _copy_move_result(
         mapped = error_from_code(err_code, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: {_code_text(err_code)} on path: {shown(str(err_path))}"
-            + _partial_note(status, [(err_path, err_code)], operation, path, dest)
-            + _already_done(
-                operation,
-                done,
-                skipped_so_far,
-                dest_of=dest_of,
-                dest=dest,
-                failing=path,
-                landed=landed,
-            )
-            + ".",
+            then(
+                then(
+                    f"{operation} files failed: {_code_text(err_code)} on path: "
+                    f"{shown(str(err_path))}.",
+                    _partial_note(status, [(err_path, err_code)], operation, path, dest),
+                ),
+                _already_done(
+                    operation,
+                    done,
+                    skipped_so_far,
+                    dest_of=dest_of,
+                    dest=dest,
+                    failing=path,
+                    landed=landed,
+                ),
+            ),
             retryable=mapped.retryable,
             suggestion=(
                 mapped.suggestion
@@ -606,19 +617,25 @@ def _copy_move_result(
         mapped = error_from_code(failed[0][1] if failed else 0, "SYNO.FileStation.CopyMove")
         error_response(
             mapped.error_code,
-            f"{operation} files failed: "
-            + "; ".join(f"{shown(p)} ({_code_text(code)})" for p, code in failed)
-            + _partial_note(status, failed, operation, path, dest)
-            + _already_done(
-                operation,
-                done,
-                skipped_so_far,
-                dest_of=dest_of,
-                dest=dest,
-                failing=path,
-                landed=landed,
-            )
-            + ".",
+            then(
+                then(
+                    # One a line when two or more failed (#693).
+                    path_list(
+                        f"{operation} files failed",
+                        [f"{shown(p)} ({_code_text(code)})" for p, code in failed],
+                    ),
+                    _partial_note(status, failed, operation, path, dest),
+                ),
+                _already_done(
+                    operation,
+                    done,
+                    skipped_so_far,
+                    dest_of=dest_of,
+                    dest=dest,
+                    failing=path,
+                    landed=landed,
+                ),
+            ),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -784,39 +801,38 @@ def _with_replaced_note(
     except (ValueError, KeyError, TypeError):
         return error
     past = _PAST_TENSE.get(operation, "processed")
-    clauses = []
-    if files:
-        clauses.append(f"these replaced what was already there: {', '.join(files)}")
-    if folders:
-        clauses.append(
-            "these merged into the folder(s) already there, replacing files with the same "
-            f"names: {', '.join(folders)}"
-        )
-    if other:
-        clauses.append(
-            "these met an item of the other kind (a file or a folder) under the same name, "
-            f"and what DSM did with it isn't known: {', '.join(other)}"
-        )
-    if unchecked:
-        clauses.append(
-            f"for these, whether anything was already there couldn't be checked: "
-            f"{', '.join(unchecked)}"
-        )
-    added = f"Of what was {past}, {'; '.join(clauses)}"
+    # One list per kind, each one a line when two or more (#693), after the list of what was
+    # done, which they're part of.
+    added = ""
+    for heading, names in (
+        ("Of those, these replaced what was already there", files),
+        (
+            "Of those, these merged into the folder(s) already there, replacing files with the "
+            "same names",
+            folders,
+        ),
+        (
+            "Of those, these met an item of the other kind (a file or a folder) under the same "
+            "name, and what DSM did with it isn't known",
+            other,
+        ),
+        ("Of those, these couldn't be checked for what was already there", unchecked),
+    ):
+        if names:
+            added = then(added, path_list(heading, names))
     if files or folders:
-        added += ". A file replaced this way may not be in the recycle bin"
+        added = then(added, "A file replaced this way may not be in the recycle bin.")
     # Right after the list of what was done, which this call wrote (_already_done), so a
-    # name holding ". Not started: " can't move it (pre-QA r6 on #623); otherwise at the end.
-    anchor = f"Already {past} before this failure: " + ", ".join(
-        where_it_went(q, went, dest) for q in done
+    # name holding "Not started: " can't move it (pre-QA r6 on #623); otherwise at the end.
+    anchor = path_list(
+        f"Already {past} before this failure", [where_it_went(q, went, dest) for q in done]
     )
     at = message.rfind(anchor)
     if at >= 0:
         end = at + len(anchor)
-        # What follows the list starts with its period; a message ending there gets one.
-        body["error"]["message"] = f"{message[:end]}. {added}{message[end:] or '.'}"
+        body["error"]["message"] = then(message[:end], added) + message[end:]
     else:
-        body["error"]["message"] = f"{_unstop(message)}. {added}."
+        body["error"]["message"] = then(sentence(message), added)
     return rewrapped_error(body)
 
 
@@ -1258,11 +1274,14 @@ class CopyMoveAdapter:
         alike = [q for q in self.group[self.group.index(p) + 1 :] if name_key(q) in ran]
         if alike:
             # #580: running them with overwrite=true would replace what it placed.
-            named = ", ".join(map(_escaped_repr, alike))
-            reply += (
-                f"\nNamed like one this call already ran: {named}. "
+            # One a line when two or more (#693).
+            named = path_list(
+                "Named like one this call already ran", [_escaped_repr(q) for q in alike]
+            )
+            reply += "\n" + then(
+                named,
                 "Run them with overwrite=false or send them to another folder: with "
-                "overwrite=true they could replace it."
+                "overwrite=true they could replace it.",
             )
         if not self.multi:
             return reply
@@ -1327,7 +1346,11 @@ class CopyMoveAdapter:
         # r3 on #687); a move's or restore's may be in either.
         dest = shown(item.dest or self.dest)
         if self.remove_src:
-            return f"check {shown(item.source)} and {dest} with list_files"
+            # A name holding " and " is quoted, so it can't read as two (pre-QA r1 on #693).
+            return (
+                f"check {shown_beside(item.source, ' and ')} and "
+                f"{shown_beside(item.dest or self.dest, ' and ')} with list_files"
+            )
         return f"check {dest} with list_files"
 
     def retry_advice(self) -> str:
@@ -1412,8 +1435,9 @@ async def _copy_move_summary(
         by_dir: dict[str, list[str]] = {}
         for p in ok:
             by_dir.setdefault("/".join(p.split("/")[:-1]), []).append(name(p))
+        # One a line when two or more (#693).
         lines.extend(
-            f"\nMoved sources removed from {shown(d)}/: {', '.join(map(shown, names))}"
+            "\n" + path_list(f"Moved sources removed from {shown(d)}/", [shown(n) for n in names])
             for d, names in sorted(by_dir.items())
         )
 
@@ -1462,9 +1486,11 @@ class DeleteAdapter:
             err_code, suggestion = unreadable_paths_error(missing)
             error_response(
                 err_code,
-                "Delete files refused: "
-                + "; ".join(missing_text(p, c) for p, c in missing)
-                + ". Nothing was deleted.",
+                # One a line when two or more (#693).
+                then(
+                    path_list("Delete files refused", [missing_text(p, c) for p, c in missing]),
+                    "Nothing was deleted.",
+                ),
                 retryable=False,
                 param="paths",
                 value=self.paths_arg,
@@ -1625,9 +1651,10 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
             )
         error_response(
             mapped.error_code,
-            "Delete files failed: "
-            + "; ".join(f"{shown(p)} (DSM error {code})" for p, code in failed)
-            + ".",
+            # One a line when two or more failed (#693).
+            path_list(
+                "Delete files failed", [f"{shown(p)} (DSM error {code})" for p, code in failed]
+            ),
             retryable=mapped.retryable,
             param="paths",
             value=path,
@@ -1995,11 +2022,15 @@ async def restore_from_recycle_bin(
             if dest_folder
             else await _recreate_missing_folders(client, restore_destinations)
         )
-        note = (
-            f"\nRe-created {', '.join(map(shown, recreated))} (no longer there) to restore into."
-            if recreated
-            else ""
-        )
+        # One a line when two or more (#693).
+        note = ""
+        if len(recreated) == 1:
+            note = f"\nRe-created {shown(recreated[0])} (no longer there) to restore into."
+        elif recreated:
+            note = "\n" + path_list(
+                "Re-created to restore into (they were no longer there)",
+                [shown(p) for p in recreated],
+            )
 
         if dest_folder is None and len(set(restore_destinations)) > 1:
             # Multiple different destinations: one batch, an item and a group per destination's
@@ -2083,9 +2114,17 @@ async def _recreate_missing_folders(
     if denied:
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            "Restore files refused: no permission to use the original folder"
-            f"{'s' if len(denied) > 1 else ''} {', '.join(map(shown, denied))}. "
-            "Nothing was restored.",
+            # One a line when two or more (#693).
+            f"Restore files refused: no permission to use the original folder {shown(denied[0])}. "
+            "Nothing was restored."
+            if len(denied) == 1
+            else then(
+                path_list(
+                    "Restore files refused: no permission to use the original folders",
+                    [shown(p) for p in denied],
+                ),
+                "Nothing was restored.",
+            ),
             retryable=False,
             param="dest_folder",
             value=denied[0],

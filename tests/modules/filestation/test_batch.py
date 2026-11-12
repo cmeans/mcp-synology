@@ -589,7 +589,9 @@ async def test_a_poll_errors_reply_says_how_the_stop_ended(
     with pytest.raises(ToolError) as raised:
         await tool.call(mock_client, TaskRecords())
     error = json.loads(str(raised.value))["error"]
-    assert says in error["message"], error["message"]
+    # After the not-started list, a sentence of its own line, not appended to the last path's
+    # (#693; pre-QA r2: the branch was untested).
+    assert f"\n  /s/d2\n{says[0].upper()}{says[1:]}" in error["message"], error["message"]
     assert bool(error.get("handle")) == handle
     if handle:
         assert error["retryable"] is False
@@ -685,7 +687,8 @@ async def test_a_restores_recreated_folder_note_comes_before_not_started(
     monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
     text = await tool.call(mock_client, TaskRecords())
     assert "Re-created /s/o2 (no longer there)" in text, text
-    assert text.rstrip().splitlines()[-1].startswith("Not started:"), text
+    assert "\nNot started (run them in another call):\n" in text, text
+    assert text.index("Re-created /s/o2") < text.index("Not started"), text
 
 
 async def test_an_item_started_near_the_end_still_gets_its_least_wait(
@@ -1084,6 +1087,41 @@ async def test_a_restore_whose_original_folder_is_refused_is_refused_up_front(
     )
     assert (body["param"], body["value"], body["retryable"]) == ("dest_folder", "/s/o1", False)
     assert dsm.starts() == []
+
+
+async def test_two_refused_original_folders_are_listed_one_a_line(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+) -> None:
+    """#693 (pre-QA r3: unpinned): two refused folders, one a line."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    dsm = FakeDsm({src: PathScript() for src in tool.sources})
+    dsm.unclear["/s/o1"] = 407
+    dsm.unclear["/s/o2"] = 407
+    dsm.mount(respx_mock)
+    with pytest.raises(ToolError) as refused:
+        await tool.call(mock_client, TaskRecords())
+    assert json.loads(str(refused.value))["error"]["message"] == (
+        "Restore files refused: no permission to use the original folders:\n  /s/o1\n  /s/o2\n"
+        "Nothing was restored."
+    )
+
+
+async def test_two_recreated_folders_are_listed_one_a_line(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#693 (pre-QA r3: unpinned)."""
+    tool = next(t for t in TOOLS if t.name == "restore_origin")
+    FakeDsm({src: PathScript() for src in tool.sources}).mount(respx_mock)
+
+    async def recreated(client: Any, destinations: Any) -> tuple[list[str], list[str]]:
+        return ["/s/o1", "/s/o2"], []
+
+    monkeypatch.setattr(operations, "_recreate_missing_folders", recreated)
+    text = await tool.call(mock_client, TaskRecords())
+    assert "\nRe-created to restore into (they were no longer there):\n  /s/o1\n  /s/o2" in text
 
 
 async def test_a_restore_whose_later_folder_is_gone_says_what_was_restored(

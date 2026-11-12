@@ -627,7 +627,7 @@ async def test_a_skip_before_a_hand_off_gets_its_own_line(admin_client: Any, nas
         handles.append(_handle(reply))
         assert (
             "Skipped in whole or in part, as an item of that name is already at the destination "
-            f"(not compared): {base}/f/x.txt, {base}/f/n." in reply
+            f"(not compared):\n  {base}/f/x.txt\n  {base}/f/n\n" in reply
         )
         assert "Already copied" not in reply
         # DSM's skip on a folder means only some of its items: the rest landed.

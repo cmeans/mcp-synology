@@ -20,6 +20,7 @@ from mcp_synology.core.formatting import (
     format_table,
     format_timestamp,
     holds_escape,
+    path_list,
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
@@ -126,9 +127,8 @@ async def get_file_info(
         err_code, suggestion = unreadable_paths_error(missing)
         error_response(
             err_code,
-            "Get file info failed: "
-            + "; ".join(missing_text(path, code) for path, code in missing)
-            + ".",
+            # One a line when two or more (#693).
+            path_list("Get file info failed", [missing_text(p, c) for p, c in missing]),
             retryable=False,
             param="paths",
             value=paths,

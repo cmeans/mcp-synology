@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.errors import ErrorCode
@@ -41,6 +43,7 @@ from mcp_synology.modules.filestation.paths import (
     resolve_bin_items,
     resolve_paths,
 )
+from tests.conftest import BASE_URL
 from tests.modules.filestation.formatter import with_progress_so_far as _with_progress_so_far
 from tests.modules.filestation.test_register import _fake_mcp_ctx, _make_ctx
 from tests.path_words import PATHLIKE_WORDS
@@ -1173,8 +1176,8 @@ QUOTED = repr(PADDED)
 
 
 class TestPathListsQuoteACommaName:
-    """#685: replies join paths with ", ", so a name holding ", " is quoted wherever a path is
-    shown (`shown`), and a list can't read it as two paths."""
+    """#685: a name holding ", " is quoted wherever a path is shown (`shown`), so the table cell
+    that still joins paths with ", ", or a sentence naming one, can't read it as two."""
 
     COMMA = "/s/a, photos/family"
 
@@ -1219,13 +1222,13 @@ class TestPathListsQuoteACommaName:
         except ToolError as e:
             error = e
         out = _error_of(_with_not_started(error, [self.COMMA, "/s/b"]))
-        assert out["message"].endswith(f"Not started: {self.COMMA!r}, /s/b."), out
+        assert out["message"].endswith(f"Not started:\n  {self.COMMA!r}\n  /s/b"), out
 
     def test_already_done(self) -> None:
         from mcp_synology.modules.filestation.operations import _already_done
 
         text = _already_done("Copy", [self.COMMA, "/s/b"])
-        assert text == f". Already copied before this failure: {self.COMMA!r}, /s/b", text
+        assert text == f"Already copied before this failure:\n  {self.COMMA!r}\n  /s/b", text
 
     def test_handoffs_lists(self) -> None:
         from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
@@ -1246,6 +1249,244 @@ class TestPathListsQuoteACommaName:
         from mcp_synology.modules.filestation.tasks import where_it_went
 
         assert where_it_went("/s/b", {"/s/b": self.COMMA}, "/s/d") == f"/s/b (to {self.COMMA!r})"
+
+
+class TestOnePathPerLine:
+    """#693 (the maintainer's option B): every list of two or more paths in a reply or error is
+    one path a line under its heading, so no separator a name can hold (", ", " and ", "; ")
+    reads as list structure; a name can't hold a line break (#604). One path stays inline."""
+
+    def test_path_list(self) -> None:
+        from mcp_synology.core.formatting import path_list
+
+        assert path_list("Not started", ["/s/a"]) == "Not started: /s/a."
+        assert path_list("Not started", ["/s/a", "/s/b"]) == "Not started:\n  /s/a\n  /s/b"
+        assert path_list("x", ["/a", "/b"], indent="    ") == "x:\n    /a\n    /b"
+
+    def test_what_follows_a_list_starts_its_own_line(self) -> None:
+        from mcp_synology.core.formatting import path_list, sentence, then
+
+        many = path_list("Not started", ["/s/a", "/s/b"])
+        assert then(many, "Run them later.") == many + "\nRun them later."
+        assert then("Failed.", "Run it later.") == "Failed. Run it later."
+        assert then("Failed.", many) == "Failed.\n" + many
+        assert then("", "x") == "x"
+        assert then("x", "") == "x"
+        assert sentence("Failed") == "Failed."
+        assert sentence(many) == many  # no period after an item: it would read as the name's
+
+    def test_a_source_named_like_where_it_went_is_quoted(self) -> None:
+        """#693: ``/s/b (to photos)`` read as a source that went to photos."""
+        from mcp_synology.modules.filestation.tasks import where_it_went
+
+        went = {"/s/b (to photos)": "/s/x"}
+        assert where_it_went("/s/b (to photos)", went, "/s/d") == "'/s/b (to photos)' (to /s/x)"
+        # Beside a source with a marker of its own, it would read as gone to photos too.
+        assert where_it_went("/s/b (to photos)", {}, "/s/d") == "'/s/b (to photos)'"
+        assert where_it_went("/s/b", {}, "/s/d") == "/s/b"
+
+    def test_where_to_look(self) -> None:
+        from mcp_synology.modules.filestation.tasks import _where_to_look
+
+        assert _where_to_look("copying", "/s/d", ["/s/a"]).startswith("List /s/d to see")
+        # Two paths are a list too: "List X and Y" read "a and photos" as two (pre-QA r1).
+        two = _where_to_look("moving", "/s/d", ["/s/a and photos"])
+        assert two.endswith(":\n  /s/a and photos\n  /s/d"), two
+        many = _where_to_look("moving", "/s/d", ["/s/a and b", "/s/c"])
+        assert many == (
+            "List these to see what's there (a folder there may be only partly moved):\n"
+            "  /s/a and b\n  /s/c\n  /s/d"
+        ), many
+
+    def test_skipped_line(self) -> None:
+        from mcp_synology.modules.filestation.tasks import skipped_line
+
+        line = skipped_line(True, ["/s/a", "/s/b", "/s/c"], ["/s/a", "/s/b"])
+        lines = line.splitlines()
+        assert lines[0].endswith("(not compared):"), line
+        assert lines[1:4] == ["  /s/a", "  /s/b", "  /s/c"], line
+        assert lines[4].startswith("A skipped file is still at the source"), line
+        assert lines[5].startswith("Don't retry these with overwrite=true"), line
+        assert lines[6:8] == ["  /s/a", "  /s/b"], line
+        assert lines[8].startswith("For the others, pass overwrite=true"), line
+
+    def test_handoff_not_started_advice_after_the_list(self) -> None:
+        from mcp_synology.modules.filestation.tasks import Handle, handoff_reply
+
+        text = handoff_reply(
+            verb="Still copying",
+            path="/s/x",
+            handle=Handle("copy", "FileStation_1"),
+            status={},
+            dest="/s/d",
+            done=["/s/a", "/s/b"],
+            not_started=["/s/c", "/s/e"],
+        )
+        assert "\nAlready copied:\n  /s/a\n  /s/b\n" in text, text
+        assert text.endswith(
+            "Not started:\n  /s/c\n  /s/e\nRun them once the task of /s/x finishes."
+        ), text
+
+    def test_a_refusal_lists_each_missing_path(self) -> None:
+        from mcp_synology.core.formatting import error_response, path_list
+        from mcp_synology.modules.filestation.helpers import missing_text
+
+        assert path_list("Get file info failed", [missing_text("/s/a", 408)]) == (
+            "Get file info failed: /s/a: doesn't exist (DSM error 408)."
+        )
+        del error_response  # imported to keep the names the refusals use in one place
+
+    @respx.mock
+    async def test_get_file_info_and_delete_refusals_list_two(self, mock_client: Any) -> None:
+        """Pre-QA r3: the two-path form of these refusals was unpinned (mutated, no failure)."""
+        from mcp_synology.modules.filestation.metadata import get_file_info
+        from mcp_synology.modules.filestation.operations import delete_files
+
+        codes = {"/a/x": 408, "/a/y": 407}
+
+        def getinfo(request: Any) -> Any:
+            asked = [p for p in codes if p in request.url.params.get("path", "")]
+            files = [{"code": codes[p], "path": p} for p in asked]
+            return httpx.Response(200, json={"success": True, "data": {"files": files}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=getinfo)
+        two = "\n  /a/x: doesn't exist (DSM error 408)\n  /a/y: no permission (DSM error 407)"
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(mock_client, paths=["/a/x", "/a/y"])
+        assert _error(exc)["message"] == "Get file info failed:" + two
+        with pytest.raises(ToolError) as exc:
+            await delete_files(mock_client, paths=["/a/x", "/a/y"])  # type: ignore[list-item]
+        assert _error(exc)["message"] == "Delete files refused:" + two + "\nNothing was deleted."
+
+    def test_finished_task_errors_list_two(self) -> None:
+        from mcp_synology.modules.filestation.operations import _delete_result
+        from mcp_synology.modules.filestation.tasks import Handle, _generic_final
+
+        errors = [{"path": "/s/a", "code": 900}, {"path": "/s/b", "code": 900}]
+        with pytest.raises(ToolError) as exc:
+            _delete_result({"finished": True, "errors": errors}, "/s", recursive=True)
+        assert _error(exc)["message"] == (
+            "Delete files failed:\n  /s/a (DSM error 900)\n  /s/b (DSM error 900)"
+        )
+        text = _generic_final(Handle("copy", "T1"), {"finished": True, "errors": errors})
+        lines = text.splitlines()
+        assert lines[1] == "DSM reported errors:", text
+        assert lines[2].startswith("  /s/a ("), text
+        assert lines[3].startswith("  /s/b ("), text
+        assert not lines[4].startswith(" "), text  # the partial note on its own line
+
+    def test_a_copys_errors_list_two_then_the_partial_note(self) -> None:
+        from mcp_synology.modules.filestation.operations import _copy_move_result
+
+        errors = [{"path": "/s/a/x", "code": 1004}, {"path": "/s/a/y", "code": 1004}]
+        with pytest.raises(ToolError) as exc:
+            _copy_move_result({"finished": True, "errors": errors}, "/s/a", "Copy", dest="/s/d")
+        lines = _error(exc)["message"].splitlines()
+        assert lines[0] == "Copy files failed:", lines
+        assert [line[:9] for line in lines[1:3]] == ["  /s/a/x ", "  /s/a/y "], lines
+        assert lines[3].startswith("Part of it may already be in /s/d"), lines
+
+    async def test_moved_sources_list_two(self, mock_client: Any) -> None:
+        from mcp_synology.modules.filestation.operations import _copy_move_summary
+
+        text = await _copy_move_summary(
+            mock_client,
+            ["/s/a", "/s/b"],
+            "/s/d",
+            True,
+            0,
+            [],
+            probe=False,
+            only_named_sources_removed=True,
+        )
+        assert "Moved sources removed from /s/:\n  a\n  b" in text, text
+
+    def test_no_path_list_is_joined_inline(self) -> None:
+        """The guard: a ", ", "; " or " and " join in File Station (and Photos' tasks) is one
+        listed here, none of which joins paths. Every list of paths goes through
+        `formatting.path_list`; the one exception is `file_task`'s table cell (`_list_reply`),
+        which can't hold a line per path and joins them with ", ", quoted by `shown`."""
+        root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
+        files = [*sorted((root / "filestation").glob("*.py")), root / "photos" / "tasks.py"]
+        allowed = {
+            ("helpers.py", "validate_additional"),  # field names
+            ("helpers.py", "invisible_problem"),  # code points
+            ("helpers.py", "validate_share_path"),  # share names, in an error of their own
+            ("listing.py", "_recycle_column"),  # task kinds
+            ("operations.py", "_skip_report"),  # counts
+            ("search.py", "search_files"),  # filters
+            ("tasks.py", "_list_reply"),  # the table cell (#693's exception)
+            ("photos/tasks.py", "_what"),  # counts
+        }
+        found = set()
+        for file in files:
+            tree = ast.parse(file.read_text())
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for node in ast.walk(func):
+                    if (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "join"
+                        and isinstance(node.func.value, ast.Constant)
+                        and node.func.value.value in (", ", "; ", " and ")
+                    ):
+                        name = "photos/tasks.py" if file.parent.name == "photos" else file.name
+                        found.add((name, func.name))
+        assert found <= allowed, sorted(found - allowed)
+
+    def test_no_two_paths_share_a_line_unquoted(self) -> None:
+        """Pre-QA r1: the join guard missed f-strings, ``f"List {a} and {b}"``. A separator a
+        name can hold, between two values of one f-string, is allowed only when both are
+        quoted for it (`shown_beside`, `_escaped_repr`, which always quotes) or the line joins
+        no paths (listed here)."""
+        root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
+        files = [*sorted((root / "filestation").glob("*.py")), root / "photos" / "tasks.py"]
+        quoting = {"shown_beside", "_escaped_repr"}
+        allowed = {
+            ("batch.py", "_with_stop"),  # a message and what the stop did
+            ("photos/tasks.py", "_counts"),  # counts
+            ("photos/tasks.py", "_run_delete"),  # what was deleted and the space's bin note
+            ("photos/tasks.py", "photo_task"),  # a handle and its operation
+        }
+
+        def quoted(value: ast.expr) -> bool:
+            return (
+                isinstance(value, ast.FormattedValue)
+                and isinstance(value.value, ast.Call)
+                and isinstance(value.value.func, ast.Name)
+                and value.value.func.id in quoting
+            )
+
+        found = set()
+        for file in files:
+            name = "photos/tasks.py" if file.parent.name == "photos" else file.name
+            for func in ast.walk(ast.parse(file.read_text())):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for node in ast.walk(func):
+                    if not isinstance(node, ast.JoinedStr):
+                        continue
+                    parts = node.values
+                    for i in range(1, len(parts) - 1):
+                        sep = parts[i]
+                        if (
+                            isinstance(sep, ast.Constant)
+                            and sep.value in (", ", " and ", "; ")
+                            and isinstance(parts[i - 1], ast.FormattedValue)
+                            and isinstance(parts[i + 1], ast.FormattedValue)
+                            and not (quoted(parts[i - 1]) and quoted(parts[i + 1]))
+                        ):
+                            found.add((name, func.name))
+        assert found <= allowed, sorted(found - allowed)
+
+    def test_check_clause_quotes_a_name_holding_and(self) -> None:
+        from mcp_synology.modules.filestation.helpers import shown_beside
+
+        assert shown_beside("/s/a and photos", " and ") == "'/s/a and photos'"
+        assert shown_beside("/s/a", " and ") == "/s/a"
+        assert shown_beside(" /s/pad and x", " and ").startswith("'")  # shown's own quoting
 
 
 class TestPaddedPathsAreShownQuoted:
@@ -1526,7 +1767,7 @@ class TestPaddedPathsAreShownQuoted:
     def test_plain_paths_stay_plain(self) -> None:
         from mcp_synology.modules.filestation.operations import _already_done
 
-        assert _already_done("Delete", ["/video/a b"]).endswith(": /video/a b")
+        assert _already_done("Delete", ["/video/a b"]).endswith(": /video/a b.")
 
 
 def _error_of(err: ToolError) -> dict[str, Any]:
@@ -1956,6 +2197,9 @@ def test_every_pair_is_named_in_one_refusal() -> None:
     message = _error(exc)["message"]
     for pair in ("'/v/a/cover' and '/v/c/cover'", "'/v/a/folder' and '/v/b/folder'"):
         assert pair in message
+    # One pair a line under "Also:" (#693), then the closing sentence on its own line.
+    assert "\nAlso:\n  '/v/a/cover' and '/v/c/cover'\n" in message, message
+    assert message.endswith("\nNothing was changed."), message
 
 
 def test_a_long_list_of_pairs_is_capped() -> None:

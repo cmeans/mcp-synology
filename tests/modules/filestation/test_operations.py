@@ -2933,7 +2933,7 @@ class TestCopyMoveHandoff:
             timeout=1,
             records=records,
         )
-        assert "Named like one this call already ran: '/s/x/b', '/s/x/a'." in result
+        assert "Named like one this call already ran:\n  '/s/x/b'\n  '/s/x/a'\nRun them" in result
         record = records.get(Handle("copy", "FileStation_B"))
         assert record is not None
         assert record.earlier == ["/s/a"]
@@ -3921,7 +3921,7 @@ class TestDeleteFailurePartway:
         )
         assert json.loads(str(out))["error"]["message"] == (
             "Failed. Failed on: /video/x... Already deleted before this failure: "
-            "/video/notes.... Not started: /video/v1., /video/b."
+            "/video/notes....\nNot started:\n  /video/v1.\n  /video/b"
         )
 
     def test_an_error_that_isnt_the_envelope_is_kept(self) -> None:
@@ -4545,7 +4545,7 @@ async def test_a_lost_copy_partway_hands_off_and_stops_nothing(
     assert "Already copied: /s/a." in result
     assert (
         "Not started: /s/c. First: List /s/dst to see what's there; a folder there may be only "
-        "partly copied. Then run it." in result
+        "partly copied. Then run the one not started." in result
     )
     assert records.get(Handle("copy", "T_b")) is not None
     assert not [call for call in calls if call.get("method") == "stop"]
@@ -5172,8 +5172,8 @@ def test_a_skip_is_listed_once_and_shows_odd_paths_safely() -> None:
     from mcp_synology.modules.filestation.tasks import skipped_line
 
     line = skipped_line(True, ["/a/x", "/a/x", "/b/q\u200br"], ["/c/q\u200br"])
-    assert "(not compared): /a/x, " in line
-    assert "/a/x, /a/x" not in line
+    assert "(not compared):\n  /a/x\n  " in line
+    assert line.count("/a/x") == 1, line
     assert "\u200b" not in line
     assert "Don't retry" in line
 
@@ -5500,7 +5500,7 @@ async def test_a_restores_skip_warns_the_same_when_it_was_handed_off(
     reply = await restore_from_recycle_bin(
         mock_client, share="/s", paths=["a/n", "b/y", "a/N"], timeout=1, records=records
     )
-    assert "Already restored: /s/#recycle/a/n, /s/#recycle/b/y (to /s/b)." in reply
+    assert "Already restored:\n  /s/#recycle/a/n\n  /s/#recycle/b/y (to /s/b)" in reply
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_for_each(skipped=(item,)))
     text = await file_task(mock_client, records=records, handle="restore:T_N")
     assert "Don't retry these with overwrite=true" in text
@@ -6130,7 +6130,7 @@ async def test_a_task_starting_during_an_earlier_path_is_seen(
     message = json.loads(str(refused.value))["error"]["message"]
     # The mock answers every destination name as there, so /b/big replaced one (#620).
     assert message.endswith(
-        "Already moved before this failure: /b/big. Of what was moved, these replaced what was "
+        "Already moved before this failure: /b/big. Of those, these replaced what was "
         "already there: /b/big. A file replaced this way may not be in the recycle bin."
     ), message
     assert started == ["/b/big"]
@@ -7263,8 +7263,8 @@ class TestSourcesDsmWontShow:
         err = json.loads(str(exc_info.value))["error"]
         assert err["code"] == "not_found", err
         assert err["message"] == (
-            "Copy files refused: /w/gone: doesn't exist (DSM error 408); "
-            "/w/locked: no permission (DSM error 407). Nothing was copied."
+            "Copy files refused:\n  /w/gone: doesn't exist (DSM error 408)\n"
+            "  /w/locked: no permission (DSM error 407)\nNothing was copied."
         )
         perm = error_from_code(407, "SYNO.FileStation.List").suggestion
         assert err["suggestion"] == (
@@ -7311,7 +7311,7 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/a.txt. Of what was copied, these "
+            "Already copied before this failure: /w/src/a.txt. Of those, these "
             "replaced what was already there: /w/src/a.txt. A file replaced this way may not "
             "be in the recycle bin."
         ), message
@@ -7368,8 +7368,8 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already restored before this failure: /s/#recycle/x/a (to /s/x). Of what was "
-            "restored, these replaced what was already there: /s/#recycle/x/a (to /s/x). A file "
+            "Already restored before this failure: /s/#recycle/x/a (to /s/x). Of those, "
+            "these replaced what was already there: /s/#recycle/x/a (to /s/x). A file "
             "replaced this way may not be in the recycle bin."
         ), message
 
@@ -7398,7 +7398,7 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/f. Of what was copied, these merged "
+            "Already copied before this failure: /w/src/f. Of those, these merged "
             "into the folder(s) already there, replacing files with the same names: /w/src/f. "
             "A file replaced this way may not be in the recycle bin."
         ), message
@@ -7441,10 +7441,10 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/a.txt, /w/src/f. Of what was copied, "
-            "these replaced what was already there: /w/src/a.txt; these merged into the "
-            "folder(s) already there, replacing files with the same names: /w/src/f. A file "
-            "replaced this way may not be in the recycle bin."
+            "Already copied before this failure:\n  /w/src/a.txt\n  /w/src/f\n"
+            "Of those, these replaced what was already there: /w/src/a.txt. "
+            "Of those, these merged into the folder(s) already there, replacing files with the "
+            "same names: /w/src/f. A file replaced this way may not be in the recycle bin."
         ), message
 
     @respx.mock
@@ -7527,12 +7527,37 @@ class TestSourcesDsmWontShow:
             )
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.endswith(
-            "Already copied before this failure: /w/src/f, /w/src/u.txt. Of what was copied, "
-            "these met an item of the other kind (a file or a folder) under the same name, and "
-            "what DSM did with it isn't known: /w/src/f; for these, whether anything was "
-            "already there couldn't be checked: /w/src/u.txt."
+            "Already copied before this failure:\n  /w/src/f\n  /w/src/u.txt\n"
+            "Of those, these met an item of the other kind (a file or a folder) under the same "
+            "name, and what DSM did with it isn't known: /w/src/f. "
+            "Of those, these couldn't be checked for what was already there: /w/src/u.txt."
         ), message
         assert "recycle bin" not in message, message
+
+    def test_the_note_follows_the_done_list_not_a_later_one(self) -> None:
+        """Pre-QA r2 on #693: "Of those" names the list just above it, so the note must follow
+        the done list, never a skipped list after it (moving the anchor failed no test)."""
+        from mcp_synology.core.formatting import path_list, then
+        from mcp_synology.modules.filestation.operations import (
+            _REPLACED_FILE,
+            _with_replaced_note,
+        )
+
+        message = then(
+            then(
+                "Move files failed.",
+                path_list("Already moved before this failure", ["/s/a", "/s/b"]),
+            ),
+            path_list("Skipped in whole or in part", ["/s/c", "/s/e"]),
+        )
+        error = ToolError(json.dumps({"status": "error", "error": {"message": message}}))
+        replaced = {"/s/a": _REPLACED_FILE, "/s/b": _REPLACED_FILE}
+        out = json.loads(
+            str(_with_replaced_note(error, "Move", ["/s/a", "/s/b"], replaced, {}, "/d"))
+        )
+        text = out["error"]["message"]
+        assert text.index("Of those") < text.index("Skipped"), text
+        assert "  /s/b\nOf those, these replaced what was already there:\n  /s/a\n  /s/b\n" in text
 
     @respx.mock
     async def test_a_not_started_name_cant_move_the_note(self, mock_client: DsmClient) -> None:
@@ -7579,7 +7604,7 @@ class TestSourcesDsmWontShow:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert (
             # A name holding ", " is quoted in every list, so it can't read as two (#685).
-            "Already copied before this failure: '/w/src/a, b'. Of what was copied, these "
+            "Already copied before this failure: '/w/src/a, b'. Of those, these "
             "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
             "be in the recycle bin. Not started: "
         ) in message, message

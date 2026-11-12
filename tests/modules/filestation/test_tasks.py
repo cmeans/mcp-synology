@@ -1035,6 +1035,32 @@ class TestDiscover:
         assert "copying /s/b" in note
 
     @respx.mock
+    async def test_a_task_of_several_paths_lists_them_one_a_line(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#693: another client's task can hold several paths; each goes on its own line under
+        the task's, so a name holding ", " or " and " can't read as two."""
+        from mcp_synology.modules.filestation.tasks import discover_running_tasks, file_task
+
+        two = {
+            **LIST_MOVE,
+            "params": {**LIST_MOVE["params"], "path": ["/s/a and b", "/s/c"]},  # type: ignore[dict-item]
+        }
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=_router({"list": _list_reply(two), "status": _ok(two)})
+        )
+        records = TaskRecords()
+        found = await discover_running_tasks(mock_client, records)
+        assert found is not None
+        note = found.text()
+        assert note is not None
+        assert "  moving 2 items to /s/d/ (" in note, note
+        assert "handle `move:FileStation_M1`, its items:\n    /s/a and b\n    /s/c\n" in note, note
+        text = await file_task(mock_client, records=records, handle="move:FileStation_M1")
+        assert "moving on the NAS: 2 items to /s/d/" in text, text
+        assert text.endswith("Its items:\n  /s/a and b\n  /s/c"), text
+
+    @respx.mock
     async def test_discover_nothing_running_returns_none(self, mock_client: DsmClient) -> None:
         from mcp_synology.modules.filestation.tasks import discover_running_tasks
 
@@ -2489,7 +2515,7 @@ class TestFileTask:
         records = TaskRecords()
         h = Handle("delete", "FileStation_D1")
         record = TaskRecord(
-            handle=h, paths=["/s/a"], recursive=True, recycle={}, done_earlier=["/s/b"]
+            handle=h, paths=["/s/a"], recursive=True, recycle={}, done_earlier=["/s/b", "/s/c"]
         )
         if path == "remembered":
             record.final_status = DELETE_FINISHED
@@ -2499,7 +2525,7 @@ class TestFileTask:
         assert real_time.monotonic() - started < 5, text
         assert "DSM was too slow to check the details" in text, text
         assert "file_task with this handle shows them" in text
-        assert text.endswith("Already deleted before this task: /s/b."), text
+        assert text.endswith("Already deleted before this task:\n  /s/b\n  /s/c"), text
         # Later, with DSM quick again, the remembered result gets its full summary.
         slow["probe"] = False
         route.side_effect = lambda request: (
@@ -2785,11 +2811,14 @@ class TestFileTask:
 
         h = Handle("copy", "FileStation_C1")
         records = TaskRecords()
-        records.add(TaskRecord(handle=h, paths=["/s/a"], dest="/s/d", done_earlier=["/s/b"]))
+        records.add(
+            TaskRecord(handle=h, paths=["/s/a"], dest="/s/d", done_earlier=["/s/b", "/s/c"])
+        )
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._slow_stop(after))
         text = await file_task(mock_client, records=records, handle=str(h), action="stop")
         assert text.startswith(start), text
-        assert "Already copied before this task: /s/b" in text, text
+        # One a line (#693; pre-QA r3: the two-path form was unpinned).
+        assert "Already copied before this task:\n  /s/b\n  /s/c" in text, text
 
     @respx.mock
     async def test_a_slow_stop_s_status_reads_wait_stop_wait(self, mock_client: DsmClient) -> None:
@@ -3166,8 +3195,8 @@ ODD = "/s/rep\u200bort"
             "/s/d",
             "status",
             _err(599),
-            f"List {ODD!r} and /s/d to see what's there; a folder there may be only partly "
-            "restored.",
+            "List these to see what's there (a folder there may be only partly restored):\n"
+            f"  {ODD!r}\n  /s/d",
         ),
         (
             "copy",
@@ -3181,7 +3210,8 @@ ODD = "/s/rep\u200bort"
             "/s/d",
             "status",
             _err(599),
-            f"List {ODD!r} and /s/d to see what's there; a folder there may be only partly moved.",
+            "List these to see what's there (a folder there may be only partly moved):\n"
+            f"  {ODD!r}\n  /s/d",
         ),
         ("copy", "/s/d\u200best", "status", _err(599), repr("/s/d\u200best")),
         ("delete", None, "stop", _ok(RUNNING), repr(ODD)),

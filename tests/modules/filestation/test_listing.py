@@ -1330,13 +1330,13 @@ class TestRecycleBinSearch:
     async def test_an_unreadable_subfolder_holding_a_comma_is_quoted(
         self, mock_client: DsmClient
     ) -> None:
-        """#685: a list joined by ", " quotes a name holding ", ", so it reads as one."""
+        """#685, #693: a name holding ", " is quoted, and each unlisted folder has its own line."""
         names = ["a, photos", "b"]
         tree = {_BIN: [_entry(f"{_BIN}/{n}", isdir=True) for n in names]}
         errors = {f"{_BIN}/{n}": 407 for n in names}
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree, errors))
         out = await list_recycle_bin(mock_client, share="home", pattern="zzz")
-        assert "Not searched (couldn't be listed): 'a, photos', b." in out, out
+        assert "Not searched (couldn't be listed):\n  'a, photos'\n  b" in out, out
 
     @respx.mock
     async def test_more_than_five_unreadable_subfolders_are_counted(
@@ -1347,7 +1347,10 @@ class TestRecycleBinSearch:
         errors = {f"{_BIN}/{n}": 407 for n in names}
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_bin_responder(tree, errors))
         out = await list_recycle_bin(mock_client, share="home", pattern="zzz")
-        assert "Not searched (couldn't be listed): d0, d1, d2, d3, d4 and 2 more." in out
+        assert (
+            "Not searched (couldn't be listed):\n  d0\n  d1\n  d2\n  d3\n  d4\n"
+            "2 more couldn't be listed either."
+        ) in out, out
 
     @respx.mock
     async def test_pattern_on_a_share_without_a_bin(self, mock_client: DsmClient) -> None:
