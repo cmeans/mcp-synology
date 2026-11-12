@@ -821,3 +821,38 @@ async def test_a_concept_with_no_name_is_its_placeholder_and_id() -> None:
     async with client:
         out = await list_photos(client, concept=7)
     assert out.startswith("Photos: concept (unnamed) (7) ("), out
+
+
+@respx.mock
+async def test_title_quotes_digit_names_after_the_keyword() -> None:
+    """Pre-QA r10 on #709: `album 42 (4)` read as album ID 42, as `person 12` does."""
+    album = captured("album-get")
+    album["list"][0]["name"] = "42"
+    person = captured("person-get", PEOPLE)
+    person["list"][0]["name"] = "13"
+    fake = _folders(FakePhotos())
+    fake.on("SYNO.Foto.Browse.Album", "get", 1, album)
+    fake.on("SYNO.Foto.Browse.Person", "get", 1, person)
+    fake.on(ITEM, "list", 2, captured("item-list-album"))
+    fake.on(ITEM, "list_with_filter", 2, {"list": []}).on(
+        ITEM, "count_with_filter", 2, {"count": 0}
+    )
+    install(fake)
+    client = make_client()
+    async with client:
+        by_album = await list_photos(client, album_id=4)
+        by_person = await list_photos(client, person_id=12)
+    assert 'album "42" (4)' in by_album, by_album
+    assert 'person "13" (12)' in by_person, by_person
+
+
+@respx.mock
+async def test_a_concept_named_with_digits_is_quoted() -> None:
+    """Pre-QA r10 on #709: `concept 7 (1)` read as concept 7."""
+    fake = FakePhotos().on(ITEM, "list", 7, {"list": []})
+    fake.on("SYNO.Foto.Browse.Concept", "get", 2, {"list": [{"id": 1, "name": "7"}]})
+    install(fake)
+    client = make_client(CAPTURE_191)
+    async with client:
+        out = await list_photos(client, concept=1)
+    assert out.startswith('Photos: concept "7" (1) ('), out

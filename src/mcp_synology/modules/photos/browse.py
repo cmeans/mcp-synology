@@ -257,7 +257,8 @@ async def _list(
         params = {"album_id": int(found["id"]), **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int(found.get("item_count", 0))
-        source = f"album {quoted_name(found.get('name'))} ({found['id']})"
+        # `album 42` reads as an ID, as `person 12` does in merge_people (pre-QA r10).
+        source = f"album {quoted_name(found.get('name'), beside_id=True)} ({found['id']})"
         return await _render(ph, source, [], _order(*sort), items, total, offset)
 
     if concept is not None:
@@ -271,7 +272,7 @@ async def _list(
         name = listed[0].get("name", "") if listed else ""
         return await _render(
             ph,
-            f"concept {quoted_name(name)} ({concept})",
+            f"concept {quoted_name(name, beside_id=True)} ({concept})",
             [],
             _order(*sort),
             items,
@@ -303,7 +304,7 @@ async def _list(
         keys["person_policy"] = "or"
         # The placeholder is the server's text, not a name: unquoted, so it can't pass for a
         # person named "(unnamed)" (pre-QA r2 on #695).
-        described.append(f"person {quoted_name(p.get('name'))} ({p['id']})")
+        described.append(f"person {quoted_name(p.get('name'), beside_id=True)} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
         # The caller's own text, `""` when empty: `(unnamed)` is for a name missing from the
