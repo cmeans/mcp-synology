@@ -440,3 +440,48 @@ class TestSearchCancellation:
             tg.cancel_scope.cancel()
         assert "stop-done" in calls
         assert "clean-done" in calls
+
+
+class TestFolderCheckStalls:
+    """#517 (pre-QA r5): the search's own folder check, on a NAS or proxy that doesn't
+    answer: a proxy's 502 or a page that isn't DSM's ends the call, as a transport error
+    does, and no search starts. A malformed reply reads as "can't tell"."""
+
+    @pytest.mark.parametrize("answer", ["502", "html"])
+    @respx.mock
+    async def test_a_proxy_stall_ends_the_call(self, mock_client: DsmClient, answer: str) -> None:
+        from mcp_synology.core.errors import DsmHttpError, DsmReplyError
+
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            methods.append(request.url.params["method"])
+            if answer == "502":
+                return httpx.Response(502)
+            return httpx.Response(200, text="<html>login</html>")
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(DsmHttpError if answer == "502" else DsmReplyError):
+            await search_files(mock_client, folder_path="/video", pattern="x")
+        assert "start" not in methods, methods
+
+    @pytest.mark.parametrize("data", [None, [], {"files": None}, {"files": [None]}])
+    @respx.mock
+    async def test_a_malformed_check_reply_lets_the_search_run(
+        self, mock_client: DsmClient, data: object
+    ) -> None:
+        methods: list[str] = []
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            method = request.url.params["method"]
+            methods.append(method)
+            if method == "getinfo":
+                return httpx.Response(200, json={"success": True, "data": data})
+            if method == "start":
+                return httpx.Response(200, json={"success": True, "data": {"taskid": "T1"}})
+            reply = {"finished": True, "total": 0, "files": []}
+            return httpx.Response(200, json={"success": True, "data": reply})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        await search_files(mock_client, folder_path="/video", pattern="x")
+        assert "start" in methods, methods

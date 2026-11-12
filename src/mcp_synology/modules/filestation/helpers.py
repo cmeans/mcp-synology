@@ -1084,8 +1084,23 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
     return None
 
 
-# What a NAS that doesn't answer raises from a request (#517, #282): it ends the call.
-_NO_ANSWER = (DsmTimeoutError, DsmUnavailableError, DsmHttpError, DsmReplyError)
+# What a NAS that doesn't answer raises from a request (#517, #282): it ends the call. A GET
+# gives httpx's own transport error; a proxy's error status or a page that isn't DSM's is
+# `DsmHttpError` / `DsmReplyError`; the POST helpers' timeout and unreachable are the others.
+_NO_ANSWER = (
+    httpx.TransportError,
+    DsmHttpError,
+    DsmReplyError,
+    DsmTimeoutError,
+    DsmUnavailableError,
+)
+
+
+def _files(data: Any) -> list[dict[str, Any]]:
+    """``getinfo``'s ``files`` entries that are objects; nothing for a malformed reply, which
+    then reads as "can't tell" (pre-QA r5 on #517)."""
+    files = data.get("files") if isinstance(data, dict) else None
+    return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
 
 
 @dataclass(frozen=True)
@@ -1102,11 +1117,10 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     answer shows none of these (another code, such as 407, or no entry) or DSM answers the
     request with an error code: a caller then lets DSM's own answer stand (#517).
 
-    A NAS that doesn't answer ends the call, as `get_dir_size`'s pre-check does, since the
-    request after the check would wait as long again, past a client's 60 s (pre-QA r3): a
-    transport error or timeout raises, and so does a proxy's error status or a reply that
-    isn't DSM's (`DsmHttpError`, `DsmReplyError`), which is how a proxy reports the same
-    stall (#282)."""
+    A NAS that doesn't answer ends the call, since the request after the check would wait as
+    long again, past a client's 60 s (pre-QA r3): a transport error or timeout raises, as in
+    `get_dir_size`'s pre-check, and so does a proxy's error status or a reply that isn't DSM's
+    (`DsmHttpError`, `DsmReplyError`), which is how a proxy reports the same stall (#282)."""
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     try:
         data = await client.request(
@@ -1117,7 +1131,7 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     except SynologyError as e:
         logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
         return None
-    for entry in data.get("files", []):
+    for entry in _files(data):
         if entry.get("code") == 408:
             return FolderKind("missing")
         if entry.get("code") == 401:
@@ -1139,7 +1153,8 @@ async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
     log2(depth) requests, not one per level, which a deep path would make outlast a client's
     60 s (pre-QA r2)."""
     parts = path.rstrip("/").split("/")
-    low, high = 2, len(parts) - 1  # parent lengths: the share (`/<share>`) to the nearest
+    # Parent lengths below the share (never a file) to the nearest parent (pre-QA r5).
+    low, high = 3, len(parts) - 1
     while low <= high:
         end = (low + high) // 2
         parent = "/".join(parts[:end])
@@ -1152,7 +1167,7 @@ async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
         except SynologyError as e:
             logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
             return None
-        entry: dict[str, Any] = next(iter(data.get("files", [])), {})
+        entry: dict[str, Any] = next(iter(_files(data)), {})
         if entry.get("isdir") is False:
             return parent
         if entry.get("isdir") is True:
