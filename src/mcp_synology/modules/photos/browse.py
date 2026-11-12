@@ -16,6 +16,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
+from mcp_synology.modules.filestation.helpers import json_quoted, shown_beside
 from mcp_synology.modules.photos.helpers import (
     V7,
     Photos,
@@ -241,14 +242,16 @@ async def _list(
         data = await ph.call("Search.Search", "list_item", {"keyword": keyword, **page})
         items = data.get("list", [])
         total = int((await ph.call("Search.Search", "count_item", {"keyword": keyword}))["count"])
-        return await _render(ph, f'search "{keyword}"', [], "search order", items, total, offset)
+        return await _render(
+            ph, f"search {json_quoted(keyword)}", [], "search order", items, total, offset
+        )
 
     if album is not None:
         found = await ph.album(album)
         params = {"album_id": int(found["id"]), **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int(found.get("item_count", 0))
-        source = f'album "{found.get("name", "")}" ({found["id"]})'
+        source = f"album {json_quoted(str(found.get('name', '')))} ({found['id']})"
         return await _render(ph, source, [], _order(*sort), items, total, offset)
 
     if concept is not None:
@@ -261,7 +264,13 @@ async def _list(
         total = int(listed[0].get("item_count", 0)) if listed else None
         name = listed[0].get("name", "") if listed else ""
         return await _render(
-            ph, f"concept {name or concept}".strip(), [], _order(*sort), items, total, offset
+            ph,
+            f"concept {json_quoted(str(name)) if name else concept}",
+            [],
+            _order(*sort),
+            items,
+            total,
+            offset,
         )
 
     if place is not None:
@@ -278,21 +287,28 @@ async def _list(
         f = await ph.folder(folder)
         folder_id = int(f["id"])
         keys["folder"] = [folder_id]
-        described.append(str(f.get("name", "")) or "/")
+        # Plain unless it holds what `shown` quotes or the title's other separator, " (": the
+        # title joins what was asked for with ", " and ends each with " (…)" (#695).
+        described.append(shown_beside(str(f.get("name", "")) or "/", " ("))
     if person is not None:
         p = await ph.person(person)
         # count_with_filter answers 120 without the policy (verified on both versions).
         keys["person"] = [int(p["id"])]
         keys["person_policy"] = "or"
-        described.append(f"person {p.get('name') or '(unnamed)'} ({p['id']})")
+        # The placeholder is the server's text, not a name: unquoted, so it can't pass for a
+        # person named "(unnamed)" (pre-QA r2 on #695).
+        named = json_quoted(str(p["name"])) if p.get("name") else "(unnamed)"
+        described.append(f"person {named} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        described.append(f'tag "{tag}"')
+        described.append(f"tag {json_quoted(tag)}")
         if tag_id is None:
-            heading = _heading(ph, described, filters_text, _order(*sort))
+            heading = _heading(
+                ph, described, filters_text, _order(*sort), in_folder=folder is not None
+            )
             return (
-                f"{heading}\nNo items: no item has the tag {tag!r} (a tag exists only while "
-                "some item has it)."
+                f"{heading}\nNo items: no item has the tag {json_quoted(tag)} (a tag exists only "
+                "while some item has it)."
             )
         keys["general_tag"] = [tag_id]
         keys["general_tag_policy"] = "or"
@@ -302,7 +318,9 @@ async def _list(
         params = {"folder_id": folder_id, **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int((await ph.call("Browse.Item", "count", {"folder_id": folder_id}))["count"])
-        return await _render(ph, None, described, _order(*sort), items, total, offset)
+        return await _render(
+            ph, None, described, _order(*sort), items, total, offset, in_folder=True
+        )
 
     # Everything else: list_with_filter, which (unlike Item.list outside a folder view)
     # honors sort_by. With no keys at all it lists the whole space.
@@ -326,14 +344,28 @@ async def _list(
     )
     counted = await ph.call("Browse.Item", "count_with_filter", keys, version=version)
     total = int(counted.get("count", 0))
-    return await _render(ph, None, described, _order(*sort), items, total, offset, filters_text)
+    return await _render(
+        ph,
+        None,
+        described,
+        _order(*sort),
+        items,
+        total,
+        offset,
+        filters_text,
+        in_folder=folder is not None,
+    )
 
 
-def _heading(ph: Photos, described: list[str], filters: list[str], order: str) -> str:
-    """``Photos in /Trips/2024 (personal space; newest first)``, as the spec shows."""
+def _heading(
+    ph: Photos, described: list[str], filters: list[str], order: str, *, in_folder: bool = False
+) -> str:
+    """``Photos in /Trips/2024 (personal space; newest first)``, as the spec shows.
+    ``in_folder``: ``described`` starts with a folder (pre-QA r4 on #695: read from a flag,
+    not the text, which a quoted folder starts with a quote)."""
     if not described:
         lead = "All photos and videos"
-    elif described[0].startswith("/"):
+    elif in_folder:
         lead = f"Photos in {', '.join(described)}"
     else:
         lead = f"Photos: {', '.join(described)}"
@@ -350,8 +382,12 @@ async def _render(
     total: int | None,
     offset: int,
     filters: list[str] | None = None,
+    *,
+    in_folder: bool = False,
 ) -> str:
-    heading = _heading(ph, [source] if source else described, filters or [], order)
+    heading = _heading(
+        ph, [source] if source else described, filters or [], order, in_folder=in_folder
+    )
     rows = await _rows(ph, items)
     if not rows:
         return f"{heading}\nNo items to display.\n\n{page_footer(total, offset, 0)}"
