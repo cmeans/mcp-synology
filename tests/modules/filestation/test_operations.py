@@ -5172,8 +5172,8 @@ def test_a_skip_is_listed_once_and_shows_odd_paths_safely() -> None:
     from mcp_synology.modules.filestation.tasks import skipped_line
 
     line = skipped_line(True, ["/a/x", "/a/x", "/b/q\u200br"], ["/c/q\u200br"])
-    assert "(not compared): /a/x, " in line
-    assert "/a/x, /a/x" not in line
+    assert "(not compared):\n  /a/x\n  " in line
+    assert line.count("/a/x") == 1, line
     assert "\u200b" not in line
     assert "Don't retry" in line
 
@@ -5500,7 +5500,7 @@ async def test_a_restores_skip_warns_the_same_when_it_was_handed_off(
     reply = await restore_from_recycle_bin(
         mock_client, share="/s", paths=["a/n", "b/y", "a/N"], timeout=1, records=records
     )
-    assert "Already restored: /s/#recycle/a/n, /s/#recycle/b/y (to /s/b)." in reply
+    assert "Already restored:\n  /s/#recycle/a/n\n  /s/#recycle/b/y (to /s/b)" in reply
     respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_dsm_for_each(skipped=(item,)))
     text = await file_task(mock_client, records=records, handle="restore:T_N")
     assert "Don't retry these with overwrite=true" in text

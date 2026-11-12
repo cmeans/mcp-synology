@@ -38,7 +38,9 @@ from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     name_key,
     never_sent,
+    path_list,
     shown,
+    then,
 )
 
 if TYPE_CHECKING:
@@ -671,26 +673,40 @@ def skipped_line(
     def named(path: str) -> str:
         return where_it_went(path, dest_of, dest)
 
-    line = (
+    # One a line when two or more (#693); what follows a list starts on its own line.
+    line = path_list(
         "Skipped in whole or in part, as an item of that name is already at the destination "
-        f"(not compared): {', '.join(map(named, dict.fromkeys(skipped)))}."
+        "(not compared)",
+        [named(p) for p in dict.fromkeys(skipped)],
     )
     if removes_source:
-        line += " A skipped file is still at the source; a skipped folder keeps the items skipped."
+        line = then(
+            line, "A skipped file is still at the source; a skipped folder keeps the items skipped."
+        )
     ran = {key(path) for path in landed or []}
     own: list[str] = []
     others: list[str] = []
     for path in dict.fromkeys(skipped):
         (own if key(path) in ran else others).append(path)
         ran.add(key(path))
-    if own:
-        line += (
-            f" Don't retry {', '.join(map(named, own))} with overwrite=true unless the user asked "
-            "to replace that item: what's there may be what this call put there."
+    if len(own) == 1:
+        line = then(
+            line,
+            f"Don't retry {named(own[0])} with overwrite=true unless the user asked to replace "
+            "that item: what's there may be what this call put there.",
+        )
+    elif own:
+        line = then(
+            line,
+            path_list(
+                "Don't retry these with overwrite=true unless the user asked to replace them, as "
+                "what's there may be what this call put there",
+                [named(p) for p in own],
+            ),
         )
     if others:
-        line += f" {'For the others, pass' if own else 'Pass'} overwrite=true to replace them, "
-        line += SKIP_CAUTION
+        pass_it = "For the others, pass" if own else "Pass"
+        line = then(line, f"{pass_it} overwrite=true to replace them, {SKIP_CAUTION}")
     return line
 
 
@@ -757,8 +773,8 @@ def handoff_reply(
         'action="stop" (it may then be partly done).',
     ]
     if done:
-        named = ", ".join(where_it_went(p, dest_of, dest) for p in done)
-        lines.append(f"Already {past}: {named}.")
+        # One a line when two or more (#693).
+        lines.append(path_list(f"Already {past}", [where_it_went(p, dest_of, dest) for p in done]))
     if skipped:
         lines.append(
             skipped_line(
@@ -770,12 +786,13 @@ def handoff_reply(
         # Named, not "this one": right after the not-started list, that reads as one of them;
         # and they never ran, so not "again" (#679).
         them = "it" if len(not_started) == 1 else "them"
-        then = f"Run {them} once the task of {shown(path)} finishes."
+        advice = f"Run {them} once the task of {shown(path)} finishes."
         if lost and dest:
-            then = f"First: {_where_to_look(gerund, dest, [path])} Then run {them}."
+            advice = then(f"First: {_where_to_look(gerund, dest, [path])}", f"Then run {them}.")
         elif lost:
-            then = f"Check {shown(path)} first by listing it, then run {them}."
-        lines.append(f"Not started: {', '.join(map(shown, not_started))}. {then}")
+            advice = f"Check {shown(path)} first by listing it, then run {them}."
+        # The advice on its own line after a list (#693), so it can't read as part of an item.
+        lines.append(then(path_list("Not started", [shown(p) for p in not_started]), advice))
     return "\n".join(lines)
 
 
@@ -1059,19 +1076,23 @@ def _where_to_look(gerund: str, dest: str, sources: list[str]) -> str:
     """Where a lost copy, move or restore can be checked: a folder appears at the destination as
     soon as it starts, so what's there may not be all of it (QA round 3 on #590)."""
     moved = gerund in ("moving", "restoring")
-    source = f"{', '.join(map(shown, sources))} and " if moved else ""
-    return (
-        f"List {source}{shown(dest)} to see what's there; a folder there may be only partly "
-        f"{_PAST.get(gerund, 'done')}."
-    )
+    partly = f"a folder there may be only partly {_PAST.get(gerund, 'done')}"
+    look = [*(sources if moved else []), dest]
+    if len(look) == 1:
+        return f"List {shown(dest)} to see what's there; {partly}."
+    if len(look) == 2:
+        return f"List {shown(look[0])} and {shown(dest)} to see what's there; {partly}."
+    # One a line when there are more (#693).
+    return path_list(f"List these to see what's there ({partly})", [shown(p) for p in look])
 
 
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
-    """``deleting /s/a`` or ``moving /s/b to /s/d/``."""
-    where = ", ".join(map(shown, paths)) or "(path unknown)"
+    """``deleting /s/a`` or ``moving /s/b to /s/d/``; ``moving 2 items to /s/d/`` for more than
+    one path, which the caller lists one a line (#693)."""
+    where = shown(paths[0]) if len(paths) == 1 else f"{len(paths)} items" if paths else ""
     # The folder quoted, then its slash, as the tools' summaries write it (#688).
     to = f" to {shown(dest)}/" if dest and kind != "delete" else ""
-    return f"{_GERUND[kind]} {where}{to}"
+    return f"{_GERUND[kind]} {where or '(path unknown)'}{to}"
 
 
 @dataclass
@@ -1108,10 +1129,14 @@ async def discover_running_tasks(client: DsmClient, records: TaskRecords) -> Dis
         lines: dict[str, str] = {}
         for task in tasks:
             records.add(task.record())
-            lines[str(task.handle)] = (
+            line = (
                 f"  {_describe(task.handle.kind, task.paths, task.dest)} "
                 f"({progress_text(task.task)}), handle `{task.handle}`"
             )
+            if len(task.paths) > 1:
+                # Its paths one a line under it (#693).
+                line = path_list(line, [shown(p) for p in task.paths], indent="    ")
+            lines[str(task.handle)] = line
     except Exception as e:
         # Malformed task data included: discovery must never fail a tool call.
         logger.debug("Running-task discovery failed, ignoring: %s", e)
@@ -1215,11 +1240,12 @@ async def _final_text(
                 only_named_sources_removed=True,
             )
             if record.done_earlier:
-                earlier_done = ", ".join(
-                    where_it_went(p, record.dest_of, record.dest) for p in record.done_earlier
-                )
                 past = _PAST[_GERUND[handle.kind]]
-                text += f"\n\nAlready {past} before this task: {earlier_done}."
+                earlier_done = path_list(
+                    f"Already {past} before this task",
+                    [where_it_went(p, record.dest_of, record.dest) for p in record.done_earlier],
+                )
+                text += f"\n\n{earlier_done}"
             if record.skipped_earlier:
                 line = skipped_line(
                     handle.kind != "copy",
@@ -1262,11 +1288,14 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
             (str(e.get("path") or "item"), e.get("code", 0)) for e in errors if isinstance(e, dict)
         )
     if failed:
-        text = "; ".join(f"{shown(p)} ({_code_text(c)})" for p, c in failed)
+        # One a line when two or more (#693).
+        text = path_list(
+            "DSM reported errors", [f"{shown(p)} ({_code_text(c)})" for p, c in failed]
+        )
         if handle.kind != "delete":
             # No record of the source here, so a 408 can't be told apart: say it anyway.
-            text += _partial_note(status, failed, handle.kind.capitalize(), None, None)
-        lines.append("DSM reported errors: " + text + ".")
+            text = then(text, _partial_note(status, failed, handle.kind.capitalize(), None, None))
+        lines.append(text)
     skip = status.get("skipstatus")
     skip_value = (skip.get("status") or "unseen") if isinstance(skip, dict) else skip
     if skip_value not in (None, "", "none"):
@@ -1362,9 +1391,31 @@ async def file_task(
         return await _list_reply(client, records)
     parsed = parse_handle(handle)
     record = records.get(parsed)
+    paths = record.paths if record is not None else []
+    # A task of several paths is named by its count, and its paths listed last, one a line
+    # (#693), so no separator inside a name can read as another path.
+    many = len(paths) > 1
+    what = (
+        f"{len(paths)} items (listed last)" if many else shown(paths[0]) if paths else f"`{parsed}`"
+    )
+    reply = await _file_task_reply(client, records, parsed, record, action, paths, what)
+    if many:
+        reply = f"{reply}\n{path_list('Its items', [shown(p) for p in paths])}"
+    return reply
+
+
+async def _file_task_reply(
+    client: DsmClient,
+    records: TaskRecords,
+    parsed: Handle,
+    record: TaskRecord | None,
+    action: Literal["status", "stop"],
+    paths: list[str],
+    what: str,
+) -> str:
+    """`file_task`'s reply for a handle, ``what`` naming its task's paths."""
     version = min(2, client.negotiate_version(parsed.api, max_version=2))
     taskid = dsm_str(parsed.taskid)
-    paths = record.paths if record is not None else []
 
     # A stop ends by STOP_DEADLINE from here, however slow DSM is (#630); a status check
     # keeps the client's own timeout.
@@ -1458,10 +1509,10 @@ async def file_task(
             hint = _LIST_HINT
             if record is not None and record.dest and parsed.kind != "delete":
                 hint = _where_to_look(_GERUND[parsed.kind], record.dest, paths)
-            return (
-                f"DSM has no task for the {parsed.kind} of {', '.join(map(shown, paths))}: it "
-                f"may have finished, failed, been stopped or still be running.{sent} "
-                f"{_RUNNING_HINT} {hint}"
+            return then(
+                f"DSM has no task for the {parsed.kind} of {what}: it may have finished, failed, "
+                f"been stopped or still be running.{sent} {_RUNNING_HINT}",
+                hint,
             )
         return (
             "DSM has no task with this handle: it may have finished, failed, been stopped or still "
@@ -1474,10 +1525,12 @@ async def file_task(
             return ""
         lines = []
         if record.done_earlier:
-            done = ", ".join(
-                where_it_went(p, record.dest_of, record.dest) for p in record.done_earlier
+            lines.append(
+                path_list(
+                    f"Already {_PAST[_GERUND[parsed.kind]]} before this task",
+                    [where_it_went(p, record.dest_of, record.dest) for p in record.done_earlier],
+                )
             )
-            lines.append(f"Already {_PAST[_GERUND[parsed.kind]]} before this task: {done}.")
         if record.skipped_earlier:
             lines.append(
                 skipped_line(
@@ -1603,7 +1656,6 @@ async def file_task(
         As in ``status_or_none``, one 599 isn't a verdict (#521): it's read again, a few times
         within ``_LOST_TASK_BOUND``. Each read waits at most ``STOP_WAIT``, so the whole stop
         stays under an MCP client's 60 s limit."""
-        what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
         now: dict[str, Any] | None = None
         unknown = ""  # why the status couldn't be read, when it couldn't
         started = time.monotonic()
@@ -1728,7 +1780,6 @@ async def file_task(
         if refused is not None:
             return await after_refusal(refused)
         records.clear_stop(parsed, "DSM confirmed a stop")
-        what = ", ".join(map(shown, paths)) if paths else f"`{parsed}`"
         stopped = f"Stopped {parsed.kind} of {what}; it may be partly done. {_LIST_HINT}"
         return stopped + earlier_skip()
 
@@ -1747,7 +1798,7 @@ async def file_task(
 
     dest = record.dest if record is not None else None
     where = _describe(parsed.kind, paths, dest).partition(" ")[2] if paths else ""
-    what = f"{_GERUND[parsed.kind]} on the NAS" + (f": {where}" if where else "")
+    doing = f"{_GERUND[parsed.kind]} on the NAS" + (f": {where}" if where else "")
     progress = progress_text(status)
     started = taskid_started(parsed.taskid)
     if started is not None:
@@ -1763,7 +1814,7 @@ async def file_task(
         # effect at once (#630), so another stop would change nothing, unless the progress has
         # moved since or it's been running far longer than that.
         sent = f"A stop was sent at {format_timestamp(record.stop.sent)}"
-        then = record.stop.progress
+        then_progress = record.stop.progress
         stop_sent_at = record.stop.sent
         # Before the verdict, which can make this read an unsettled note's baseline.
         compared = records.compared(record, status)
@@ -1773,7 +1824,7 @@ async def file_task(
         # What the counts were compared with, when it isn't the progress shown as "then" (named
         # only when its text differs: two equal points would read as a puzzle).
         baseline = record.stop.baseline if record.stop is not None else None
-        if baseline == then:
+        if baseline == then_progress:
             baseline = None
         since = f" since the first check after the stop ({baseline})" if baseline else " since"
         if verdict != "pending":
@@ -1783,7 +1834,9 @@ async def file_task(
                 if baseline:
                     why = f"the progress has moved{since}"
                 else:
-                    why = "the progress has moved since" + (f" (then: {then})" if then else "")
+                    why = "the progress has moved since" + (
+                        f" (then: {then_progress})" if then_progress else ""
+                    )
             elif compared:
                 # Frozen counts past the limit: the 300 s is a chosen bound, not a measured
                 # one, so this says what's known rather than that the stop failed.
@@ -1795,12 +1848,12 @@ async def file_task(
             else:
                 why = f"it's still running {later} later"
             return (
-                f"Still {what} ({progress}). Handle: `{parsed}`\n"
+                f"Still {doing} ({progress}). Handle: `{parsed}`\n"
                 f"{sent}, but {why}, so it doesn't look like it took effect. If the user "
                 'still wants it canceled, call file_task with action="stop" again (it may '
                 f"then be partly done).{earlier_skip()}"
             )
-        then_text = f" (progress then: {then})" if then is not None else ""
+        then_text = f" (progress then: {then_progress})" if then_progress is not None else ""
         # The server compared the counts (pending means unchanged), so it says so; with no
         # counts to compare, it can't. Unchanged counts suggest the stop took effect only for a
         # copy or move that has written something: a delete counts finished items, and a
@@ -1812,13 +1865,13 @@ async def file_task(
             if parsed.kind != "delete" and wrote:
                 hint = f" The progress hasn't moved{since}, so it most likely has."
         return (
-            f"Still shows as {what} ({progress}). Handle: `{parsed}`\n"
+            f"Still shows as {doing} ({progress}). Handle: `{parsed}`\n"
             f"{sent}{then_text} and DSM hasn't confirmed it yet. DSM can be slow to confirm a "
             f"stop that already took effect.{hint} {no_resend_before(stop_sent_at)}"
             f"{earlier_skip()}"
         )
     return (
-        f"Still {what} ({progress}). Handle: `{parsed}`\n"
+        f"Still {doing} ({progress}). Handle: `{parsed}`\n"
         f"{slow} It keeps running without anything more from you; stopping and starting it "
         "again doesn't make it faster. "
         "Check again later, or, if the user wants it canceled, call file_task with "
