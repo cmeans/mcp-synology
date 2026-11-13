@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
@@ -40,6 +41,8 @@ from mcp_synology.server import (
     create_server,
 )
 from tests.conftest import BASE_URL, make_test_config
+
+_MODULES_DIR = Path(__file__).parents[2] / "src" / "mcp_synology" / "modules"
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1211,6 +1214,53 @@ class TestWithheldToolsNotice:
         other = next(x for x in text.splitlines() if "The photos module" in x)
         assert "administrator" not in other
 
+    @pytest.mark.parametrize("with_file_station", [False, True])
+    def test_downloadstation_says_what_its_quotes_mean(self, with_file_station: bool) -> None:
+        """#708: create_download and edit_download quote a destination folder or a .torrent
+        file's name through `shown()`, and nothing said what the quotes mean: File Station's
+        PATH FORMAT speaks of its /share/... paths, and isn't sent without it."""
+        modules: dict[str, Any] = {"downloadstation": {"enabled": True, "permission": "write"}}
+        if with_file_station:
+            modules["filestation"] = {"enabled": True}
+        text = self._instructions(modules=modules)
+        assert "\n\nDOWNLOAD STATION:\n" in text
+        flat = " ".join(text.split())
+        assert "A folder or file name a reply shows in quotes" in flat
+        assert "pass what's inside the quotes" in flat
+
+    def test_a_read_only_downloadstation_has_no_quotes_to_explain(self) -> None:
+        """Pre-QA r1 on #708: only its WRITE tools quote, as Photos' and File Station's
+        write guidance is sent only with theirs (#318)."""
+        text = self._instructions(modules={"downloadstation": {"enabled": True}})
+        assert "DOWNLOAD STATION:" not in text
+
+    @pytest.mark.parametrize(
+        "module", sorted(p.name for p in _MODULES_DIR.iterdir() if (p / "__init__.py").exists())
+    )
+    def test_every_module_that_quotes_says_what_quotes_mean(self, module: str) -> None:
+        """#708: a module that imports one of `core/display.py`'s quoting helpers for a NAS
+        path or name (under any alias: pre-QA r1) gets a line saying what the quotes mean when
+        it's the only module enabled, with its WRITE tools; local paths are LOCAL MACHINE's
+        (`shown_local`, `shown_local_beside`)."""
+        quoting = {"shown", "shown_beside", "escaped_repr", "plain_quoted", "json_quoted"}
+        imported: set[str] = set()
+        for path in (_MODULES_DIR / module).rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom) and node.module == "mcp_synology.core.display":
+                    imported |= {alias.name for alias in node.names} & quoting
+        if not imported:
+            return
+        modules = {module: {"enabled": True, "permission": "write"}}
+        text = " ".join(self._instructions(modules=modules).split())
+        # The escape clause in the same passage, so LOCAL MACHINE's can't stand in for it
+        # (QA r1 on #720).
+        said = (
+            r"shows? in quotes (\([^)]*\) )?is quoted to show its exact characters: pass what's"
+            r" inside the quotes(, |\. In one written with escapes \([^)]*\), )each escape"
+            r" (stands|standing) for the one character it names"
+        )
+        assert re.search(said, text), module
+
     def test_storage_section_only_when_storage_is_enabled(self) -> None:
         """#49: the STORAGE section says the tools need an administrator account."""
         on = self._instructions(modules={"storage": {"enabled": True}})
@@ -2148,7 +2198,9 @@ class TestInstructionComments:
 # +28 by #709 (pre-QA r5): a folder's escapes are Python's in "..." too (a folder holding a ').
 # +49 by #697: LOCAL MACHINE says a quoted local path can appear in these instructions or a tool's
 # description too, not only in a reply.
-PAYLOAD_BUDGET_CHARS = 62_249
+# +248 by #708: a DOWNLOAD STATION section says what a quoted destination folder or .torrent
+# file name means, sent with Download Station's WRITE tools.
+PAYLOAD_BUDGET_CHARS = 62_497
 
 
 class TestPayloadBudget:
