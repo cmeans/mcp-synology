@@ -29,6 +29,7 @@ from mcp_synology.modules.filestation.helpers import (
     file_type_icon,
     folder_kind,
     missing_paths_suggestion,
+    no_answer,
     normalize_path,
     path_exists,
     paths_isdir,
@@ -336,11 +337,17 @@ async def list_files(
             # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,
             # pre-QA on #515): one getinfo tells them apart.
             isdir: bool | None = None
+            checked = not tell_files_apart  # nothing to tell apart: DSM's 408 stands
             if tell_files_apart:
-                # A failed check can't tell: say what DSM said, naming the path.
+                # No answer (a transport error, a proxy's error status or a reply that isn't
+                # DSM's) ends the call, as every check before a request does (#705, #704); a
+                # DSM error code can't tell, so the reply doesn't claim the path is missing.
                 try:
                     isdir = (await paths_isdir(client, [normalized])).get(normalized)
-                except (SynologyError, httpx.HTTPError) as check_error:
+                    checked = True
+                except SynologyError as check_error:
+                    if no_answer(check_error):
+                        synology_error_response("List files", check_error)
                     logger.debug(
                         "Couldn't check whether %s is a file: %s: %s",
                         normalized,
@@ -370,6 +377,17 @@ async def list_files(
                     value=path,
                     suggestion="Retry list_files; if it fails the same way, check the folder "
                     "in DSM's File Station.",
+                )
+            if not checked:
+                error_response(
+                    ErrorCode.NOT_FOUND,
+                    f"List files failed: DSM says {shown_path(normalized)} doesn't exist (DSM "
+                    "error 408), and whether it's a file couldn't be checked.",
+                    retryable=False,
+                    param="path",
+                    value=path,
+                    suggestion="Check the path with get_file_info, or list its parent folder: "
+                    "DSM answers 408 for a file too.",
                 )
             # Name the path, quoted when padded: paths are taken exactly now (#488), and
             # DSM's own message names none, so `/video/Movies ` would read as a missing

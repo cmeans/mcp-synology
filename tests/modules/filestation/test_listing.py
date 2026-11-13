@@ -644,9 +644,15 @@ class TestListFiles:
     ) -> None:
         """Paths are taken exactly (#488): a padded path that doesn't exist shows its padding,
         where DSM's 408 names no path (pre-QA on #515)."""
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
-            json={"success": False, "error": {"code": 408}}
-        )
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if request.url.params["method"] == "getinfo":  # its 408 entry: missing
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [{"code": 408}]}}
+                )
+            return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
             await list_files(mock_client, path=path)
         error = json.loads(str(exc_info.value))["error"]
@@ -655,7 +661,9 @@ class TestListFiles:
         assert error["suggestion"].startswith("Check the paths with list_files")
 
     @respx.mock
-    @pytest.mark.parametrize("getinfo", ["file", "folder", "missing", "502", "connect"])
+    @pytest.mark.parametrize(
+        "getinfo", ["file", "folder", "missing", "502", "page", "connect", "dsm-error"]
+    )
     @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg", "/video/a.jpg "])
     async def test_a_file_is_not_called_missing(
         self,
@@ -665,15 +673,20 @@ class TestListFiles:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """DSM answers List's 408 for a file too (seska DSM 7.1.1): getinfo tells a file
-        from a missing path. Only ``isdir`` false is a file; a failed getinfo leaves the
-        not-found reply (pre-QA on #515). A folder getinfo has just seen isn't called
-        missing (QA round 5 on #515)."""
+        from a missing path. Only ``isdir`` false is a file. A folder getinfo has just seen
+        isn't called missing (QA round 5 on #515). A check with no answer (a transport error,
+        a proxy's 502, a page that isn't DSM's) ends the call, and one DSM answers with an
+        error code can't tell, so the reply doesn't claim the path is missing (#705)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             if request.url.params["method"] != "getinfo":
                 return httpx.Response(200, json={"success": False, "error": {"code": 408}})
             if getinfo == "502":
                 return httpx.Response(502)
+            if getinfo == "page":
+                return httpx.Response(200, text="<html>Sign in</html>")
+            if getinfo == "dsm-error":
+                return httpx.Response(200, json={"success": False, "error": {"code": 400}})
             if getinfo == "connect":
                 raise httpx.ConnectError("refused", request=request)
             entry = (
@@ -685,15 +698,30 @@ class TestListFiles:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         caplog.set_level(logging.DEBUG, logger="mcp_synology.modules.filestation.listing")
+        if getinfo == "connect":
+            with pytest.raises(httpx.ConnectError):
+                await list_files(mock_client, path=path)
+            return
         with pytest.raises(ToolError) as exc_info:
             await list_files(mock_client, path=path)
         error = json.loads(str(exc_info.value))["error"]
-        assert error["value"] == path
-        # A failed check is in the debug log, so "doesn't exist" can be told from "couldn't
-        # check" (pre-QA on #515).
-        failed_check = "Couldn't check whether /video/a.jpg"
-        assert (failed_check in caplog.text) == (getinfo in ("502", "connect"))
         named = "'/video/a.jpg '" if path.endswith(" ") else "/video/a.jpg"
+        if getinfo in ("502", "page"):
+            assert error["code"] == "unavailable", error
+            assert error["message"].startswith("List files failed"), error
+            return
+        assert error["value"] == path
+        # A check DSM refused is in the debug log (pre-QA on #515).
+        failed_check = "Couldn't check whether /video/a.jpg"
+        assert (failed_check in caplog.text) == (getinfo == "dsm-error")
+        if getinfo == "dsm-error":
+            assert error["code"] == "not_found"
+            assert error["message"] == (
+                f"List files failed: DSM says {named} doesn't exist (DSM error 408), and "
+                "whether it's a file couldn't be checked."
+            )
+            assert "get_file_info" in error["suggestion"]
+            return
         if getinfo == "file":
             assert error["code"] == "invalid_parameter"
             assert error["message"] == f"List files failed: {named} is a file, not a folder."

@@ -28,6 +28,7 @@ from mcp_synology.modules.filestation.helpers import (
     files_above,
     missing_paths_suggestion,
     missing_text,
+    no_answer,
     normalize_path,
     task_request,
     unanswered_status_response,
@@ -327,6 +328,11 @@ async def get_dir_size(
     try:
         entry = await _getinfo_entry(client, normalized)
     except SynologyError as e:
+        # A proxy's error status or a reply that isn't DSM's is a NAS that doesn't answer,
+        # which ends the call as a transport error does (#705; one rule for the checks
+        # before a request, #704): DirSize started after a 502 and reported a size.
+        if no_answer(e):
+            synology_error_response("Get directory size", e)
         logger.debug("Get directory size: path check failed: %s", e)
         entry = {}
     code = entry.get("code")
