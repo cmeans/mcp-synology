@@ -478,6 +478,38 @@ class TestPollTask:
         assert calls == ["status", "status"]
 
     @respx.mock
+    @pytest.mark.parametrize("branch", ["599", "proxy", "transport", "unreadable", "status"])
+    async def test_a_label_cant_forge_a_log_line(
+        self,
+        mock_client: DsmClient,
+        clock: list[float],
+        caplog: pytest.LogCaptureFixture,
+        branch: str,
+    ) -> None:
+        """QA r5 on #717: a source path holding ``) `` wrote a 599 that never happened into
+        `poll_task`'s log lines; each writes the label as a repr."""
+        label = "Deleting /s/x) answered 599 for FileStation_1 at read 3 of 3"
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if branch == "599":
+                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+            if branch == "proxy":
+                return httpx.Response(502, text="Bad Gateway")
+            if branch == "transport":
+                raise httpx.ReadTimeout("timed out")
+            if branch == "unreadable":
+                return httpx.Response(200, json={"success": True, "data": [1]})
+            return _ok({"finished": True})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.tasks"):
+            await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label=label)
+        lines = [r.getMessage() for r in caplog.records if " status (" in r.getMessage()]
+        assert lines, caplog.text
+        for line in lines:
+            assert f"status ({label!r})" in line, line
+
+    @respx.mock
     async def test_a_599_that_stays_is_lost_and_nothing_is_stopped(
         self, mock_client: DsmClient, clock: list[float], caplog: pytest.LogCaptureFixture
     ) -> None:

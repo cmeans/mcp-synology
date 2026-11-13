@@ -362,7 +362,7 @@ class MonotonicProgress:
         try:
             await self._callback(value, total, message)
         except Exception:
-            logger.debug("Progress notification failed (%s), ignoring", message, exc_info=True)
+            logger.debug("Progress notification failed (%r), ignoring", message, exc_info=True)
 
 
 @dataclass
@@ -558,7 +558,7 @@ async def poll_task(
                 # it; the stop would go through the same broken path anyway (#282). A
                 # status URL is short, so a 414 comes from a proxy too (#325).
                 logger.warning(
-                    "%s status (%s) failed, handing off: %s", api, label, type(e).__name__
+                    "%s status (%r) failed, handing off: %s", api, label, type(e).__name__
                 )
                 return PollResult(status, "stalled", e)
             except SynologyError as e:
@@ -568,7 +568,7 @@ async def poll_task(
                 last_missing = e
                 # At WARNING so CI's logs keep what's needed to find the cause (#521).
                 logger.warning(
-                    "%s status (%s) answered 599 for %s, read %d of %d, %s",
+                    "%s status (%r) answered 599 for %s, read %d of %d, %s",
                     api,
                     label,
                     taskid,
@@ -588,14 +588,14 @@ async def poll_task(
             except httpx.TransportError as e:
                 # No answer: DSM is probably busy with this very task. Leave it running
                 # and hand it off; never stop it (#245, maintainer decision 2026-10-17).
-                logger.debug("%s status (%s) unanswered, handing off: %r", api, label, e)
+                logger.debug("%s status (%r) unanswered, handing off: %r", api, label, e)
                 return PollResult(status, "stalled", e)
             except Exception as e:
                 # Any other unexpected answer (a proxy's page is a DsmReplyError, above):
                 # the task may well still be running, so hand it off like a stall rather
                 # than lose it (QA R1 on #251).
                 logger.warning(
-                    "%s status (%s) unreadable, handing off: %s", api, label, type(e).__name__
+                    "%s status (%r) unreadable, handing off: %s", api, label, type(e).__name__
                 )
                 return PollResult(status, "stalled", e)
 
