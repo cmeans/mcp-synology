@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
+from mcp_synology.core.display import shown, shown_local
 from mcp_synology.core.errors import ApiNotFoundError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -39,7 +40,6 @@ from mcp_synology.modules.downloadstation.helpers import (
     task_error_detail,
     task_size_unknown,
 )
-from mcp_synology.modules.filestation.helpers import shown
 
 logger = logging.getLogger(__name__)
 
@@ -758,7 +758,8 @@ async def create_download(
         if raw.suffix.lower() not in _TORRENT_SUFFIXES:
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Create download refused: {torrent_file_path!r} isn't a .torrent or .nzb file.",
+                f"Create download refused: {shown_local(torrent_file_path)} isn't a .torrent "
+                "or .nzb file.",
                 retryable=False,
                 param="torrent_file_path",
                 value=torrent_file_path,
@@ -779,7 +780,7 @@ async def create_download(
         except RuntimeError as e:  # only reachable unconfined (local_roots=None)
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Create download refused: {torrent_file_path!r} can't be expanded: {e}",
+                f"Create download refused: {shown_local(torrent_file_path)} can't be expanded: {e}",
                 retryable=False,
                 param="torrent_file_path",
                 value=torrent_file_path,
@@ -790,8 +791,8 @@ async def create_download(
         if path.resolve().suffix.lower() not in _TORRENT_SUFFIXES:
             error_response(
                 ErrorCode.INVALID_PARAMETER,
-                f"Create download refused: {torrent_file_path!r} links to a file that isn't "
-                "a .torrent or .nzb file.",
+                f"Create download refused: {shown_local(torrent_file_path)} links to a file "
+                "that isn't a .torrent or .nzb file.",
                 retryable=False,
                 param="torrent_file_path",
                 value=torrent_file_path,
@@ -800,7 +801,8 @@ async def create_download(
         if not path.is_file():
             error_response(
                 ErrorCode.NOT_FOUND,
-                f"Create download failed: torrent file not found at {torrent_file_path!r}.",
+                "Create download failed: torrent file not found at "
+                f"{shown_local(torrent_file_path)}.",
                 retryable=False,
                 param="torrent_file_path",
                 value=torrent_file_path,
@@ -813,9 +815,9 @@ async def create_download(
                 destination=destination,
             )
         except SynologyError as e:
-            _create_failed(f"Create download ({path.name})", e, destination)
+            _create_failed(f"Create download ({shown(path.name)})", e, destination)
         task_ids = [str(t) for t in data.get("task_id", [])]
-        return f"{_created_message(task_ids, 1)} Source: file {path.name}.{note}"
+        return f"{_created_message(task_ids, 1)} Source: file {shown(path.name)}.{note}"
 
     uris = split_uris(uri or "")
     if not uris:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import anyio
 import httpx
 
+from mcp_synology.core.display import shown
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import (
     ESCAPED_NAME_ADVICE,
@@ -28,7 +29,6 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     missing_text,
     normalize_path,
-    shown,
     task_request,
     unanswered_status_response,
     under_file_text,

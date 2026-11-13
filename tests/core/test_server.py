@@ -315,7 +315,7 @@ class TestInstructionsPerModule:
         text = _instructions(**modules)
         local = text.index("LOCAL MACHINE:")
         # Directly before LOCAL PATHS, with nothing (e.g. PERMISSIONS) between them.
-        assert "local filesystem.\nA local path a reply shows in quotes" in text
+        assert "local filesystem.\nA local path shown in quotes (in a reply," in text
         assert "the one character it names.\n\nLOCAL PATHS:" in text[local:]
         assert "This MCP server runs on the user's Linux machine." in text
         assert f"Home directory: {Path.home()}" in text
@@ -2146,7 +2146,9 @@ class TestInstructionComments:
 # pair as one character; Python's), the doubled escape scoped to names, and that a folder like
 # that is passed by its ID.
 # +28 by #709 (pre-QA r5): a folder's escapes are Python's in "..." too (a folder holding a ').
-PAYLOAD_BUDGET_CHARS = 62_200
+# +49 by #697: LOCAL MACHINE says a quoted local path can appear in these instructions or a tool's
+# description too, not only in a reply.
+PAYLOAD_BUDGET_CHARS = 62_249
 
 
 class TestPayloadBudget:
@@ -2303,6 +2305,17 @@ class TestLocalPathsNotice:
         section = text.split("LOCAL PATHS", 1)[1]
         assert str((tmp_path / "media").resolve()) in section
         assert "allowed_local_paths" in section
+
+    def test_two_folders_are_one_a_line_and_shown(self, tmp_path: Path) -> None:
+        """#697: the folders were joined with ", ", so `a, b` read as two and `c ` hid its
+        space; each is now written as replies write a local path, one a line."""
+        a, c = tmp_path / "a, b", tmp_path / "c "
+        text = self._instructions({"allowed_local_paths": [str(a), str(c)]})
+        section = text.split("LOCAL PATHS:\n", 1)[1]
+        assert section.startswith(
+            "upload_file and download_file only use local paths inside these folders (or "
+            f"below them):\n  '{a.resolve()}'\n  {str(c.resolve())!r}\n"
+        ), section
 
     def test_lists_the_shared_folders(self, tmp_path: Path) -> None:
         """#257: the top-level list alone decides the folders (no Downloads default)."""

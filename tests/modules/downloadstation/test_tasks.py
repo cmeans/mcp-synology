@@ -2925,3 +2925,27 @@ class TestTaskNotFoundOrNotYours:
         with pytest.raises(ToolError) as exc:
             await get_download_info(mock_client, task_id="dbid_9")
         assert "another user" in _envelope(exc.value)["suggestion"]
+
+
+class TestTorrentPathsShown:
+    """#697: the local .torrent path in a refusal, and its name in the reply, are written as
+    replies write a local path or name (`shown_local`, `shown`), never raw or with `!r`."""
+
+    async def test_a_refused_path_is_shown(self, mock_client: DsmClient, tmp_path: Path) -> None:
+        path = tmp_path / "a\tb.txt"
+        path.write_bytes(b"x")
+        with pytest.raises(ToolError) as exc:
+            await create_download(mock_client, torrent_file_path=str(path))
+        message = _envelope(exc.value)["message"]
+        assert f"refused: {str(path)!r} isn't a .torrent" in message, message
+
+    @respx.mock
+    async def test_the_source_line_shows_the_name(
+        self, mock_client: DsmClient, tmp_path: Path
+    ) -> None:
+        _has_default()
+        torrent = tmp_path / "a\tb.torrent"
+        torrent.write_bytes(b"d4:infod6:lengthi100eee")
+        respx.post("http://nas:5000/webapi/entry.cgi").respond(json=captured("ds2_task_create_url"))
+        result = await create_download(mock_client, torrent_file_path=str(torrent))
+        assert "Source: file 'a\\tb.torrent'." in result, result

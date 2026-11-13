@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.display import escaped_repr, shown, shown_beside
 from mcp_synology.core.errors import (
     FILESTATION_ERROR_CODES,
     ErrorCode,
@@ -44,7 +45,6 @@ from mcp_synology.modules.filestation.batch import (
 from mcp_synology.modules.filestation.helpers import (
     RESTORE_UNDER_FILE_ADVICE,
     UNDER_FILE_ADVICE,
-    _escaped_repr,
     _is_dot,
     describe_transport_error,
     diagnose_under_file,
@@ -60,8 +60,6 @@ from mcp_synology.modules.filestation.helpers import (
     path_exists,
     paths_isdir,
     probe_recycle_status,
-    shown,
-    shown_beside,
     under_file_text,
     unreadable_paths_error,
 )
@@ -459,7 +457,7 @@ def _refuse_landing_on_a_running_task(
         # was read during this call's check, so that call may have returned since.
         what = (
             f"another {task.handle.kind} call through this server is landing in "
-            f"{_escaped_repr(dest)} (with {_escaped_repr(clash)}, started or about to start when "
+            f"{escaped_repr(dest)} (with {escaped_repr(clash)}, started or about to start when "
             "this call checked; it may have returned since)"
         )
         advice = (
@@ -468,8 +466,8 @@ def _refuse_landing_on_a_running_task(
         )
     else:
         what = (
-            f"a running {task.handle.kind} of {_escaped_repr(clash)} is landing in "
-            f"{_escaped_repr(dest)}"
+            f"a running {task.handle.kind} of {escaped_repr(clash)} is landing in "
+            f"{escaped_repr(dest)}"
         )
         advice = (
             f"Check on it with file_task and the handle `{task.handle}`, and when it's done, "
@@ -478,7 +476,7 @@ def _refuse_landing_on_a_running_task(
         )
     error_response(
         ErrorCode.INVALID_PARAMETER,
-        f"{operation} files refused: {what}, with {names} as {_escaped_repr(source)}, so one "
+        f"{operation} files refused: {what}, with {names} as {escaped_repr(source)}, so one "
         f"could replace the other (for folders, items of the same name inside them).{outcome}",
         retryable=False,
         param="paths",
@@ -820,7 +818,7 @@ async def _skip_report(
             "the recycle bin. Send them to another folder, or rename them first:"
         )
         lines.extend(
-            f"  {_escaped_repr(p)} (this call's {_escaped_repr(first)} went first)"
+            f"  {escaped_repr(p)} (this call's {escaped_repr(first)} went first)"
             for p, first in own.items()
         )
     if not own:
@@ -1331,7 +1329,7 @@ class CopyMoveAdapter:
             # #580: running them with overwrite=true would replace what it placed.
             # One a line when two or more (#693).
             named = path_list(
-                "Named like one this call already ran", [_escaped_repr(q) for q in alike]
+                "Named like one this call already ran", [escaped_repr(q) for q in alike]
             )
             reply += "\n" + then(
                 named,

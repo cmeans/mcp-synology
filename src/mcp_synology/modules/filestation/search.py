@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 
+from mcp_synology.core.display import shown
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -26,7 +27,6 @@ from mcp_synology.modules.filestation.helpers import (
     normalize_path,
     parse_human_size,
     parse_mtime,
-    shown,
     task_request,
 )
 

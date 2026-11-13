@@ -7,10 +7,10 @@ a newer Python decomposes it (U+16121 is U+1611E twice on 3.14), and a name woul
 fail by interpreter. Canonical decompositions never change once a character is assigned,
 so this script lists those of every character newer than Unicode 14.0, taken from the
 same Unicode version as `regex`'s property data, in
-`src/mcp_synology/modules/filestation/decompositions.py`.
+`src/mcp_synology/core/decompositions.py`.
 
 Usage, with X.Y.Z the Unicode version of the `regex` floor's data, recorded in the header
-of `src/mcp_synology/modules/filestation/standardized_variants.py` (`regex` doesn't report
+of `src/mcp_synology/core/standardized_variants.py` (`regex` doesn't report
 it; its release notes name it):
     curl -O https://www.unicode.org/Public/X.Y.Z/ucd/UnicodeData.txt
     curl -O https://www.unicode.org/Public/X.Y.Z/ucd/DerivedAge.txt
@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = REPO_ROOT / "src/mcp_synology/modules/filestation/decompositions.py"
+OUTPUT = REPO_ROOT / "src/mcp_synology/core/decompositions.py"
 # Python 3.11's `unicodedata` (requires-python's floor) knows every character to here.
 FLOOR_AGE = (14, 0)
 _AGE = re.compile(r"([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*(\d+)\.(\d+)")

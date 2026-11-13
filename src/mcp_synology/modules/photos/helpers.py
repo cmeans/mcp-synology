@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import httpx
 
+from mcp_synology.core.display import edge_quote, json_quoted, plain_quoted, shown
 from mcp_synology.core.errors import (
     DsmHttpError,
     DsmReplyError,
@@ -30,7 +31,6 @@ from mcp_synology.core.errors import (
     SynologyError,
 )
 from mcp_synology.core.formatting import error_response
-from mcp_synology.modules.filestation.helpers import _edge_quote, json_quoted, plain_quoted, shown
 from mcp_synology.modules.filestation.paths import check_parts
 
 if TYPE_CHECKING:
@@ -79,8 +79,8 @@ def quoted_name(
     - holds what its line puts around a name (`_NAME_MARKS`, or ``also``), checked in NFC
       too, where U+037E and U+0387 become ``;`` and ``·``;
     - holds a character JSON escapes (a quote, a backslash, one that draws nothing);
-    - has whitespace at an end, starts or ends with any quote mark File Station counts
-      (`_edge_quote`: typographic quotes and a backtick too), starts with ``(`` (it would
+    - has whitespace at an end, starts or ends with any quote mark `shown` counts
+      (`edge_quote`: typographic quotes and a backtick too), starts with ``(`` (it would
       read as the server's placeholder) or ends with ``:``;
     - with ``beside_id`` (the line writes it right after an ID: ``9 Trip``, ``person 12
       Jo``), starts with a digit of any script, or ``9 12`` would read as two IDs (the #614
@@ -98,7 +98,7 @@ def quoted_name(
     needed = (
         quoted != f'"{text}"'
         or text != text.strip()
-        or _edge_quote(text)  # any quote mark File Station counts, typographic too (QA r7)
+        or edge_quote(text)  # any quote mark `shown` counts, typographic too (QA r7)
         or text.startswith("(")
         or text.endswith(":")
         or any(m in text or m in nfc for m in (*_NAME_MARKS, *also))

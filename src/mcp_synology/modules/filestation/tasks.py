@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, get_args
 import anyio
 import httpx
 
+from mcp_synology.core.display import shown, shown_beside
 from mcp_synology.core.errors import (
     DsmHttpError,
     DsmReplyError,
@@ -40,8 +41,6 @@ from mcp_synology.modules.filestation.helpers import (
     dsm_str,
     name_key,
     never_sent,
-    shown,
-    shown_beside,
 )
 
 if TYPE_CHECKING:

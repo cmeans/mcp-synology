@@ -291,3 +291,506 @@ class TestSharedPaths:
         with pytest.raises(ValueError) as own:
             allowed_local_roots(["/a\x00b"], module="downloadstation")
         assert "downloadstation setting allowed_local_paths" in str(own.value)
+
+
+class TestLocalPathsQuoted:
+    """#697: a local path in a refusal, a config error, a tool description or the instructions
+    is written as replies write one (`shown_local`): quoted when a part holds a tab, padding,
+    `, ` or a character that draws nothing, so it can't hide or read as two paths."""
+
+    @staticmethod
+    def _refusal(value: str, roots: list[Path]) -> dict[str, Any]:
+        import json
+
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.core.local_paths import refuse_outside_roots
+
+        with pytest.raises(ToolError) as exc:
+            refuse_outside_roots("Op", "local_path", value, Path(value), roots, module="x")
+        text = str(exc.value)
+        return json.loads(text[text.index("{") :])["error"]  # type: ignore[no-any-return]
+
+    def test_a_refused_path_and_one_folder_are_shown(self, tmp_path: Path) -> None:
+        root = (tmp_path / "ok, dl").resolve()
+        value = str(tmp_path / "out" / "a\tb.txt")
+        err = self._refusal(value, [root])
+        assert err["message"] == (
+            f"Op refused: {value!r} is outside the folders this server may use on this "
+            f"machine: '{root}'."
+        ), err
+        assert err["value"] == value  # the caller's text, as sent
+
+    def test_two_folders_are_one_a_line(self, tmp_path: Path) -> None:
+        roots = [(tmp_path / "a").resolve(), (tmp_path / "b ").resolve()]
+        err = self._refusal(str(tmp_path / "c.txt"), roots)
+        assert err["message"].endswith(f"on this machine:\n  {roots[0]}\n  {str(roots[1])!r}"), err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    def test_the_path_a_link_resolves_to_is_shown(self, tmp_path: Path) -> None:
+        root = tmp_path / "dl"
+        root.mkdir()
+        outside = tmp_path / "x, y"
+        outside.mkdir()
+        (root / "link").symlink_to(outside)
+        err = self._refusal(str(root / "link" / "f.txt"), [root.resolve()])
+        assert f"(resolves to '{outside.resolve() / 'f.txt'}')" in err["message"], err
+
+    def test_an_unknown_user_is_refused_shown(self, tmp_path: Path) -> None:
+        """The refusal that hides which local users exist writes the path shown too."""
+        import json
+
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.core.local_paths import refuse_outside_roots
+
+        value = "~no-such-user-697/a\tb.txt"
+        with pytest.raises(ToolError) as exc:
+            refuse_outside_roots(
+                "Op",
+                "local_path",
+                value,
+                Path(value),
+                [tmp_path.resolve()],
+                module="x",
+                hide_unknown_users=True,
+            )
+        text = str(exc.value)
+        message = json.loads(text[text.index("{") :])["error"]["message"]
+        assert message.startswith(f"Op refused: {value!r} is outside"), message
+
+    def test_an_unresolvable_path_is_shown_escaped(self, tmp_path: Path) -> None:
+        err = self._refusal(str(tmp_path / "a\x00b"), [tmp_path.resolve()])
+        assert "\\x00" in err["message"] and "\x00" not in err["message"], err
+
+    def test_the_description_quotes_each_folder(self) -> None:
+        from mcp_synology.core.local_paths import roots_for_description
+
+        text = roots_for_description([Path("/home/u/a, b"), Path("/home/u/c ")])
+        assert text == "one of the allowed local folders ('/home/u/a, b', '/home/u/c ')"
+
+    def test_a_config_entry_is_shown(self) -> None:
+        from mcp_synology.core.local_paths import check_local_path_entries
+
+        with pytest.raises(ValueError, match="start with ~\\): 'a, b'$"):
+            check_local_path_entries("allowed_local_paths", ["a, b"])
+
+
+@pytest.mark.parametrize(
+    ("raised", "said"),
+    [
+        (RuntimeError("Symlink loop from '/x/loop'"), "a symlink loop"),
+        (RecursionError("maximum recursion depth exceeded"), "too many symlinks to follow"),
+        (
+            OSError(40, "Too many levels of symbolic links", "/x/loop"),
+            "Too many levels of symbolic links",
+        ),
+        (OSError("bare"), "OSError"),
+    ],
+)
+def test_an_unresolvable_path_names_it_once(
+    monkeypatch: pytest.MonkeyPatch, raised: Exception, said: str
+) -> None:
+    """Pre-QA r2 on #712: the error's own text repeated the path with repr (3.11/3.12)."""
+    from mcp_synology.core import local_paths
+
+    def boom(self: Path, strict: bool = False) -> Path:
+        raise raised
+
+    monkeypatch.setattr(Path, "resolve", boom)
+    with pytest.raises(ValueError) as exc:
+        local_paths._resolve("/x/loop")
+    assert str(exc.value) == f"/x/loop can't be resolved: {said}", exc.value
+
+
+def test_an_unknown_user_isnt_called_a_symlink_loop() -> None:
+    """Pre-QA r3 on #712: expanduser's RuntimeError was labeled a loop."""
+    from mcp_synology.core import local_paths
+
+    with pytest.raises(ValueError) as exc:
+        local_paths._resolve("~no-such-user-712/x")
+    assert str(exc.value) == (
+        "~no-such-user-712/x can't be resolved: Could not determine home directory"
+    ), exc.value
+
+
+@pytest.mark.parametrize(
+    ("where", "code"), [("out", "permission_denied"), ("ok", "invalid_parameter")]
+)
+def test_a_loop_outside_is_refused_as_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, code: str
+) -> None:
+    """#458, pre-QA r3 on #712: a loop outside the allowed folders gave invalid_parameter,
+    every other outside path permission_denied, so the reply showed a loop exists there."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real = Path.resolve
+
+    def resolve(self: Path, strict: bool = False) -> Path:
+        if "loopy" in self.parts:
+            raise RuntimeError(f"Symlink loop from {self!r}")  # what 3.11/3.12 raise
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    root = real(tmp_path / "ok")
+    value = str(tmp_path / where / "loopy" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == code, err
+
+
+@pytest.mark.parametrize(
+    ("where", "code"), [("out", "permission_denied"), ("ok", "invalid_parameter")]
+)
+def test_a_chain_too_long_to_follow_is_followed_as_far_as_it_can_be(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, code: str
+) -> None:
+    """QA r3 on #712: on 3.11/3.12 realpath recurses once per link, so a long chain raises
+    RecursionError (a RuntimeError), which the catch-all read as "inside" and called a loop,
+    though it leads outside. Its deepest ancestor realpath resolves decides."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core import local_paths
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real = Path.resolve
+
+    def deep(self: Path, strict: bool = False) -> Path:
+        if "chain" in self.parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, strict=strict)
+
+    real_realpath = local_paths.os.path.realpath
+
+    def realpath(path: object, *args: object, **kwargs: object) -> str:
+        if "chain" in Path(str(path)).parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_realpath(path)  # type: ignore[arg-type]
+
+    root = real(tmp_path / "ok")
+    monkeypatch.setattr(Path, "resolve", deep)
+    monkeypatch.setattr(local_paths.os.path, "realpath", realpath)
+    value = str(tmp_path / where / "chain" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == code, err
+    if code == "invalid_parameter":
+        assert "too many symlinks to follow" in err["message"], err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_real_long_chain_outside_is_refused_as_outside(tmp_path: Path) -> None:
+    """QA r3 on #712, as QA probed it: 3,000 links, all outside the allowed folder. On
+    3.11/3.12 realpath runs out of recursion; on 3.13+ it follows them. Either way it's
+    refused as outside, never called a loop."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "l0").mkdir()
+    for i in range(1, 3000):
+        (out / f"l{i}").symlink_to(f"l{i - 1}")
+    value = str(out / "l2999" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "permission_denied", err
+    assert "loop" not in err["message"], err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.parametrize("spelled", ["home", "var/home"])
+def test_a_long_chain_in_a_root_spelled_through_a_link_isnt_outside(
+    tmp_path: Path, spelled: str
+) -> None:
+    """Pre-QA r5 on #712: a long chain in the allowed folder, spelled through `/home` ->
+    `/var/home`, was refused as outside, naming the folder it was in. Not refused on 3.13+,
+    where realpath follows it; on 3.11/3.12, too many symlinks (DSM is never reached)."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real_home = tmp_path / "var" / "home"
+    dl = real_home / "dl"
+    dl.mkdir(parents=True)
+    (tmp_path / "home").symlink_to(real_home)
+    (dl / "l0").mkdir()
+    for i in range(1, 3000):
+        (dl / f"l{i}").symlink_to(f"l{i - 1}")
+    value = str(tmp_path / spelled / "dl" / "l2999" / "f")
+    if sys.version_info >= (3, 13):  # realpath follows it: inside, allowed
+        refuse_outside_roots("Op", "local_path", value, Path(value), [dl.resolve()], module="x")
+        return
+    with pytest.raises(ToolError) as exc:  # QA r4 on #712: a refusal, never allowed
+        refuse_outside_roots("Op", "local_path", value, Path(value), [dl.resolve()], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert "too many symlinks to follow" in err["message"], err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.parametrize(
+    ("rest", "code"),
+    [
+        ("../f", "invalid_parameter"),
+        ("x/../../f", "invalid_parameter"),
+        ("../../../f", "permission_denied"),
+    ],
+)
+def test_a_dotdot_past_a_chain_is_decided_by_its_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rest: str, code: str
+) -> None:
+    """Pre-QA r5 and r6 on #712: where `..` after a link that can't be followed leads isn't
+    known, so the spelling decides: inside the allowed folder it's too many symlinks (r5
+    called it outside the folder the reply listed), outside it's refused as outside."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core import local_paths
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    real = Path.resolve
+    real_realpath = local_paths.os.path.realpath
+
+    def deep(self: Path, strict: bool = False) -> Path:
+        if "chain" in self.parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, strict=strict)
+
+    def realpath(path: object, *args: object, **kwargs: object) -> str:
+        if "chain" in Path(str(path)).parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_realpath(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "resolve", deep)
+    monkeypatch.setattr(local_paths.os.path, "realpath", realpath)
+    value = str(root) + "/chain/" + rest
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == code, err
+    if code == "invalid_parameter":
+        assert "too many symlinks to follow" in err["message"], err
+
+
+def test_a_long_path_past_a_chain_takes_few_tries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-QA r6 on #712: each realpath try follows the chain again, up to the recursion limit
+    (about 5 ms on 3.11), and one try per part took 27 s for 5,000 parts. Halving takes about
+    log2(parts)."""
+    import math
+
+    from mcp_synology.core import local_paths
+
+    tried: list[str] = []
+
+    def realpath(path: object, *args: object, **kwargs: object) -> str:
+        tried.append(str(path))
+        if "chain" in Path(str(path)).parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return str(path)
+
+    monkeypatch.setattr(local_paths.os.path, "realpath", realpath)
+    value = "/ok/chain/" + "/".join(["a"] * 5000)
+    assert local_paths._leads_to(value) == Path(value)
+    assert len(tried) <= 3 + math.ceil(math.log2(5003)), len(tried)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_last_link_to_a_loop_outside_is_refused_as_outside(tmp_path: Path) -> None:
+    """Pre-QA r7 on #712: with the path's last part a link inside the allowed folder that
+    leads out to a loop, realpath's own answer (outside) decides; were it read as spelled,
+    the reply would say a loop exists outside."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "loop").symlink_to("loop")
+    (root / "link_out").symlink_to(out / "loop")
+    value = str(root / "link_out")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "permission_denied", err
+
+
+def test_an_absolute_path_the_os_refused_keeps_the_general_advice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA r8 on #712: the absolute-path advice is for a relative path only; an absolute
+    one the OS refused (a race on readlink, say) keeps the general advice."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core import local_paths
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    def refused(path: object) -> Path:
+        raise ValueError("/x/f can't be resolved: Permission denied") from OSError(13, "denied")
+
+    monkeypatch.setattr(local_paths, "_resolve", refused)
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", "/x/f", Path("/x/f"), [Path("/x")], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert err["suggestion"] != "Pass an absolute local path.", err
+
+
+def test_a_relative_path_that_cant_be_resolved_is_told_to_be_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-QA r7 on #712: with the working folder gone, a relative path's advice was about
+    NUL characters and symlinks, which a model could follow without changing anything."""
+    import json
+    import os
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    os.rmdir(gone)
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", "rel/f", Path("rel/f"), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert err["suggestion"] == "Pass an absolute local path.", err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.skipif(sys.version_info >= (3, 13), reason="realpath follows loops from 3.13")
+@pytest.mark.parametrize(("name", "said"), [("loop", "a symlink loop"), ("l2999", "too many")])
+def test_a_relative_loop_or_chain_keeps_its_own_advice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, said: str
+) -> None:
+    """QA r4 on #712: a relative path that fails on a loop or a long chain was told "Pass an
+    absolute local path.", which wouldn't change the answer; that advice is for a working
+    folder that's gone."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    (root / "loop").symlink_to("loop")
+    (root / "l0").mkdir()
+    for i in range(1, 3000):
+        (root / f"l{i}").symlink_to(f"l{i - 1}")
+    monkeypatch.chdir(root)
+    value = f"{name}/f"
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert said in err["message"], err
+    assert "Pass an absolute local path." not in err["suggestion"], err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_loop_in_a_root_spelled_through_a_link_stays_a_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA r2 on #712: `/home` -> `/var/home` (Fedora Atomic): a loop in the allowed folder,
+    spelled through the link, was refused as outside, with advice that couldn't help."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real_home = tmp_path / "var" / "home"
+    (real_home / "dl").mkdir(parents=True)
+    (tmp_path / "home").symlink_to(real_home)
+    real = Path.resolve
+
+    def resolve(self: Path, strict: bool = False) -> Path:
+        if "loopy" in self.parts:
+            raise RuntimeError(f"Symlink loop from {self!r}")
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    value = str(tmp_path / "home" / "dl" / "loopy" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots(
+            "Op", "local_path", value, Path(value), [real(real_home / "dl")], module="x"
+        )
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert "a symlink loop" in err["message"], err
+
+
+def test_a_relative_path_with_the_working_folder_gone_is_a_structured_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """QA r2 on #712: deciding inside or outside called getcwd() again, unguarded."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    def gone() -> str:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(os, "getcwd", gone)
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots(
+            "Op", "local_path", "rel/x", Path("rel/x"), [tmp_path.resolve()], module="x"
+        )
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+
+
+def test_shown_local_reads_windows_separators(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-QA r4 on #712: nothing ran `shown_local` with Windows separators (CI is Linux),
+    so dropping `os.altsep` passed. It reads them at call time: patch both."""
+    from mcp_synology.core.display import shown_local
+
+    monkeypatch.setattr(os, "sep", "\\")
+    monkeypatch.setattr(os, "altsep", "/")
+    assert shown_local("C:\\Users\\Jo Smith\\Downloads") == "C:\\Users\\Jo Smith\\Downloads"
+    assert shown_local("C:/Users/jo/ x") == "'C:/Users/jo/ x'"  # padding after "/"
+    assert shown_local("C:\\Users\\jo\\a, b") == repr("C:\\Users\\jo\\a, b")
+    assert shown_local("C:\\Users\\jo\\tab\tx") == repr("C:\\Users\\jo\\tab\tx")

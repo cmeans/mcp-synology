@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.display import shown as shown_path
 from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -33,7 +34,6 @@ from mcp_synology.modules.filestation.helpers import (
     paths_isdir,
     probe_recycle_status,
 )
-from mcp_synology.modules.filestation.helpers import shown as shown_path
 from mcp_synology.modules.filestation.paths import ResolvedPath
 
 logger = logging.getLogger(__name__)

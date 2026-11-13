@@ -74,7 +74,7 @@ def test_the_generated_module_is_current() -> None:
     """The committed module is formatted as the script renders it. Its values are checked
     against `unicodedata` by test_helpers on a Python that knows them (3.14: Unicode 16)."""
     gen = _load()
-    from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
+    from mcp_synology.core.decompositions import NEW_DECOMPOSITIONS
 
     table = {ord(c): [ord(p) for p in parts] for c, parts in NEW_DECOMPOSITIONS.items()}
     rendered = gen.render("DerivedAge-18.0.0.txt", "UnicodeData-18.0.0.txt", table)
