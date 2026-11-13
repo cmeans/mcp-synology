@@ -749,9 +749,9 @@ def _part(value: object, marks: tuple[str, ...]) -> str:
     """One part of the Location or Camera line, JSON-quoted as `quoted_name` quotes a name
     when it's needed (#710): when it holds one of the line's ``marks``, also with the space
     the line writes around it (`· F1.0` after `lens ` makes a separator of its own, pre-QA
-    r1), or is ``—``, which would read as missing (the Camera line's other placeholders,
-    ``aperture —`` and the like, start with a label: `_camera_model`). ``""`` for no
-    value."""
+    r1), or is ``—``, which would read as missing. A labeled placeholder (``aperture —``) is
+    quoted only where a slot has no label of its own (`_camera_model`, and the aperture and
+    exposure in `_camera`). ``""`` for no value."""
     text = "" if value is None else str(value)
     if not text:
         return ""
@@ -816,7 +816,14 @@ def _camera(exif: dict[str, Any]) -> str:
 
 # The labels the Camera line writes before a value (its placeholders start with one too:
 # `aperture —`).
-_CAMERA_LABELS = re.compile(r"(?:lens|aperture|exposure|iso)\b", re.IGNORECASE)
+# Also what starts like an aperture or exposure in any spelling (`f1.0`, `F/1.0`, `F 1.0`,
+# `1/30s`, `30 sec`; pre-QA r2 on #722), since that slot's form is DSM's and this one's is free.
+_CAMERA_LABELS = re.compile(
+    r"(?:lens|aperture|exposure|iso)(?![^\W\d_])"
+    r"|f ?/? ?[0-9]"
+    r"|[0-9]+(?:[./][0-9]+)? ?(?:s|sec)\b",
+    re.IGNORECASE,
+)
 
 
 def _camera_model(model: str) -> str:
@@ -824,11 +831,13 @@ def _camera_model(model: str) -> str:
     that reads as another slot (a label first, an aperture or exposure in DSM's form, a bare
     number, a placeholder) is quoted, or `ISO 3200` there would read as a second ISO (QA r1 on
     #722)."""
+    # NFKC: fullwidth `ＩＳＯ 3200` reads as `ISO 3200` (pre-QA r2).
+    folded = unicodedata.normalize("NFKC", model)
     if model and (
-        _CAMERA_LABELS.match(model)
-        or _APERTURE_FORM.fullmatch(model)
-        or _EXPOSURE_FORM.fullmatch(model)
-        or _BARE_NUMBER.fullmatch(model)
+        _CAMERA_LABELS.match(folded)
+        or _APERTURE_FORM.fullmatch(folded)
+        or _EXPOSURE_FORM.fullmatch(folded)
+        or _BARE_NUMBER.fullmatch(folded)
     ):
         return json_quoted(model)
     return _part(model, _CAMERA_MARKS)

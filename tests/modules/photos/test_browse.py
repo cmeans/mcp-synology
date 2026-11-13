@@ -784,6 +784,22 @@ class TestGetPhoto:
             ),
             ({"camera": "1/30 s"}, '"1/30 s" · lens — · aperture — · exposure — · ISO —'),
             ({"camera": "Isotope X"}, "Isotope X · lens — · aperture — · exposure — · ISO —"),
+            # A label only at the start counts (pre-QA r2 on #722).
+            ({"camera": "Leica M ISO"}, "Leica M ISO · lens — · aperture — · exposure — · ISO —"),
+            # Other spellings of another slot, and fullwidth (NFKC) ones (pre-QA r2).
+            *(
+                ({"camera": c}, f'"{c}" · lens — · aperture — · exposure — · ISO —')
+                for c in (
+                    "ISO3200",
+                    "f1.0",
+                    "F/1.0",
+                    "F 1.0",
+                    "1/30s",
+                    "30 sec",
+                    "\uff29\uff33\uff2f 3200",
+                    "\uff261.0",
+                )
+            ),
             # U+0387 at the edge makes a separator with the label only in NFC (QA r1 on #722).
             (
                 {"camera": "x", "lens": "\u0387 F1.0"},
