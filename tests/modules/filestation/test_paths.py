@@ -3476,3 +3476,56 @@ class TestPlanIsTheOnlyWayIntoABatch:
                 budget=Budget(1.0),
                 records=None,
             )
+
+
+class TestPathBeforeItsSeparator:
+    """#706: a path written right before its line's own separator (``": "``, ``" ("``, two
+    spaces) goes through `shown_beside` / `shown_local_beside`, so a name holding that
+    separator is quoted and can't read as the line's structure (the File Station sibling of
+    #695 and #699)."""
+
+    _RAW = __import__("re").compile(r"\{(shown|shown_local)\([^{}]*\)\}(: | \(|  )")
+
+    def test_no_shown_path_sits_before_its_separator(self) -> None:
+        src = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
+        hits = [
+            f"{f.relative_to(src)}:{n}: {line.strip()}"
+            for f in sorted(src.rglob("*.py"))
+            for n, line in enumerate(f.read_text().splitlines(), 1)
+            if self._RAW.search(line)
+        ]
+        assert hits == [], hits
+
+    @pytest.mark.parametrize(
+        ("path", "code", "want"),
+        [
+            (
+                "/s/x: doesn't exist (DSM error 408)",
+                105,
+                '"/s/x: doesn\'t exist (DSM error 408)": ',
+            ),
+            ("/s/plain", 408, "/s/plain: "),
+        ],
+    )
+    def test_missing_text_quotes_a_path_holding_its_separator(
+        self, path: str, code: int, want: str
+    ) -> None:
+        """The issue's repro: the path's own text read as the error."""
+        from mcp_synology.modules.filestation.helpers import missing_text
+
+        assert missing_text(path, code, None).startswith(want)
+
+    def test_a_failure_list_quotes_a_path_holding_a_paren(self) -> None:
+        from mcp_synology.core.display import shown_beside
+
+        assert shown_beside("/s/a (DSM error 900)", " (") == "'/s/a (DSM error 900)'"
+        assert shown_beside("/s/a", " (") == "/s/a"
+
+    def test_a_local_path_holding_its_separator_is_quoted(self) -> None:
+        from mcp_synology.core.display import shown_local_beside
+
+        assert shown_local_beside("/home/u/a: b", ": ") == "'/home/u/a: b'"
+        assert shown_local_beside("/home/u/a (1)", " (") == "'/home/u/a (1)'"
+        assert shown_local_beside("/home/u/plain", ": ") == "/home/u/plain"
+        # Already quoted by shown_local (padding): left as it writes it.
+        assert shown_local_beside("/home/u/a ", ": ") == "'/home/u/a '"

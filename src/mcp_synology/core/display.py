@@ -562,6 +562,15 @@ def shown_beside(path: str, marker: str) -> str:
     return plain_quoted(path) if marker in path and text == path else text
 
 
+def shown_local_beside(path: str | os.PathLike[str], marker: str) -> str:
+    """A local path as `shown_local` writes it, quoted (`plain_quoted`) when it holds
+    ``marker``, the text its line puts right after it (`": "`, `" ("`), as `shown_beside` does
+    for a NAS path (#706)."""
+    text = shown_local(path)
+    raw = os.fspath(path)
+    return plain_quoted(raw) if marker in raw and text == raw else text
+
+
 def plain_quoted(path: str) -> str:
     """``path`` in quotes that hold it exactly: single quotes, or double when it holds a
     single one; with both, or with a backslash, `escaped_repr`'s form. In any quoted path a

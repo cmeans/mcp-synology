@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import httpx
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.display import shown
+from mcp_synology.core.display import shown, shown_beside
 from mcp_synology.core.errors import (
     AuthenticationError,
     DsmHttpError,
@@ -793,13 +793,17 @@ def missing_text(path: str, code: int, under_file: str | None) -> str:
     if under_file is not None:
         # The code beside "doesn't exist", as for a 408, so it isn't read as the file's (QA r1
         # on #714).
-        return f"{shown(path)}: doesn't exist (DSM error {code}): {shown(under_file)} is a file"
+        return (
+            f"{shown_beside(path, ': ')}: doesn't exist (DSM error {code}): "
+            f"{shown(under_file)} is a file"
+        )
     why = (
         "no permission"
         if code in _NO_PERMISSION
         else {408: "doesn't exist"}.get(code, "can't be read")
     )
-    return f"{shown(path)}: {why} (DSM error {code})"
+    # The path's own ": " can't read as the line's (#706).
+    return f"{shown_beside(path, ': ')}: {why} (DSM error {code})"
 
 
 def unreadable_paths_error(

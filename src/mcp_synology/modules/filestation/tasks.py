@@ -744,13 +744,15 @@ def handoff_reply(
     if lost:
         last = f" Last progress: {progress_text(status)}." if status else ""
         first = (
-            f"DSM answered that it has no task {gerund} {shown(path)} (error 599), so how it ended "
+            f"DSM answered that it has no task {gerund} {shown_beside(path, ' (')} (error 599), "
+            "so how it ended "
             f"isn't known: it may have finished, failed or still be running.{last} It wasn't "
             f"stopped, so check before starting it again. {_RUNNING_HINT}"
         )
     elif stall is None:
         first = (
-            f"{verb} on the NAS: {shown(path)} ({progress_text(status)}). This operation keeps "
+            f"{verb} on the NAS: {shown_beside(path, ' (')} ({progress_text(status)}). "
+            "This operation keeps "
             "running after this reply, so nothing more needs to be done to finish it."
         )
     else:
@@ -766,7 +768,8 @@ def handoff_reply(
         else:
             what, why = "The NAS's status reply couldn't be read", type(stall).__name__
         first = (
-            f"{what} while {gerund} {shown(path)} ({why}{last}). It's probably still running "
+            f"{what} while {gerund} {shown_beside(path, ' (')} ({why}{last}). "
+            "It's probably still running "
             "there; don't start it again."
         )
     lines = [
@@ -1295,7 +1298,7 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
     if failed:
         # One a line when two or more (#693).
         text = path_list(
-            "DSM reported errors", [f"{shown(p)} ({_code_text(c)})" for p, c in failed]
+            "DSM reported errors", [f"{shown_beside(p, ' (')} ({_code_text(c)})" for p, c in failed]
         )
         if handle.kind != "delete":
             # No record of the source here, so a 408 can't be told apart: say it anyway.

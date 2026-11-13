@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
-from mcp_synology.core.display import shown, shown_local
+from mcp_synology.core.display import shown, shown_beside, shown_local, shown_local_beside
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
     NO_FILE_NOTE,
@@ -213,7 +213,8 @@ async def upload_file(
     except OSError as e:
         error_response(
             ErrorCode.FILESYSTEM_ERROR,
-            f"Upload failed: Failed to read local file {shown_local(local)}: {e.strerror or e}",
+            f"Upload failed: Failed to read local file {shown_local_beside(local, ': ')}: "
+            f"{e.strerror or e}",
             retryable=False,
             param="local_path",
             value=local_path,
@@ -231,7 +232,8 @@ async def upload_file(
 
     # Quoted when padding or a hidden character wouldn't show (#519, #688).
     result = format_status(
-        f"Uploaded {shown(effective_name)} ({format_size(file_size)}) to {shown(dest)}/"
+        f"Uploaded {shown_beside(effective_name, ' (')} ({format_size(file_size)}) to "
+        f"{shown(dest)}/"
     )
     if replaced:
         # Whether DSM's Upload keeps the old file in the recycle bin isn't probed; say what
@@ -469,7 +471,8 @@ async def download_file(
         # The local file appeared while the download streamed; overwrite=False holds.
         error_response(
             ErrorCode.ALREADY_EXISTS,
-            f"Download failed: Local file already exists: {shown_local(dest_file)} (it was created "
+            "Download failed: Local file already exists: "
+            f"{shown_local_beside(dest_file, ' (')} (it was created "
             "while the download was in progress)",
             retryable=False,
             param="filename",
@@ -512,7 +515,8 @@ async def download_file(
         if e.errno == errno.ENOSPC:
             error_response(
                 ErrorCode.DISK_FULL,
-                f"Download failed: No space left on local disk writing {shown_local(dest_file)}: "
+                "Download failed: No space left on local disk writing "
+                f"{shown_local_beside(dest_file, ': ')}: "
                 f"{e.strerror or e}",
                 retryable=False,
                 suggestion="Free space on the local disk or choose a different destination.",
@@ -520,7 +524,7 @@ async def download_file(
         # Name the file the caller asked for: str(e) can carry the internal temp path.
         error_response(
             ErrorCode.FILESYSTEM_ERROR,
-            f"Download failed: Failed to write local file {shown_local(dest_file)}: "
+            f"Download failed: Failed to write local file {shown_local_beside(dest_file, ': ')}: "
             f"{e.strerror or e}",
             retryable=False,
             param="dest_folder",
@@ -539,7 +543,8 @@ async def download_file(
         )
     else:
         result = format_status(
-            f"Downloaded {shown(effective_name)} ({format_size(bytes_written)}) to {written}"
+            f"Downloaded {shown_beside(effective_name, ' (')} ({format_size(bytes_written)}) "
+            f"to {written}"
         )
 
     # The server log, too, says which local file was written and whether one was replaced

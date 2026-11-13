@@ -675,7 +675,7 @@ def _copy_move_result(
                     # One a line when two or more failed (#693).
                     path_list(
                         f"{operation} files failed",
-                        [f"{shown(p)} ({_code_text(code)})" for p, code in failed],
+                        [f"{shown_beside(p, ' (')} ({_code_text(code)})" for p, code in failed],
                     ),
                     _partial_note(status, failed, operation, path, dest),
                 ),
@@ -1710,7 +1710,8 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
             mapped.error_code,
             # One a line when two or more failed (#693).
             path_list(
-                "Delete files failed", [f"{shown(p)} (DSM error {code})" for p, code in failed]
+                "Delete files failed",
+                [f"{shown_beside(p, ' (')} (DSM error {code})" for p, code in failed],
             ),
             retryable=mapped.retryable,
             param="paths",
@@ -2082,7 +2083,10 @@ async def restore_from_recycle_bin(
         # One a line when two or more (#693).
         note = ""
         if len(recreated) == 1:
-            note = f"\nRe-created {shown(recreated[0])} (no longer there) to restore into."
+            note = (
+                f"\nRe-created {shown_beside(recreated[0], ' (')} (no longer there) to restore "
+                "into."
+            )
         elif recreated:
             note = "\n" + path_list(
                 "Re-created to restore into (they were no longer there)",
