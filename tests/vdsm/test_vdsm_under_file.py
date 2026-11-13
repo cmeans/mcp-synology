@@ -15,6 +15,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from tests.vdsm.test_vdsm_search import dated_folder  # noqa: F401 - the fixture
 
@@ -200,3 +201,59 @@ class TestVdsmPathUnderAFile:
             f"Upload failed: the destination folder {file}/{below} doesn't exist on the NAS: "
             f"{file} is a file."
         )
+
+
+async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_path: Path) -> None:
+    """QA r1 on #714: a restore of several items whose original folder is now under a file
+    is refused before anything moves; it restored the earlier ones first. In the test user's
+    home, which has a recycle bin (the bake's shares don't)."""
+    import contextlib
+    import uuid
+
+    from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin
+    from mcp_synology.modules.filestation.operations import (
+        create_folder,
+        delete_files,
+        restore_from_recycle_bin,
+    )
+    from mcp_synology.modules.filestation.transfer import upload_file
+
+    client = nas_client[0]
+    top = f"t714-{uuid.uuid4().hex[:8]}"
+    local = tmp_path / "a.txt"
+    local.write_text("x")
+    try:
+        await create_folder(client, paths=[f"/home/{top}/d/x", f"/home/{top}/ok"])
+        for folder in ("d/x", "ok"):
+            await upload_file(
+                client,
+                local_path=str(local),
+                dest_folder=f"/home/{top}/{folder}",
+                allowed_roots=[tmp_path],
+            )
+        await delete_files(
+            client, paths=[f"/home/{top}/d", f"/home/{top}/ok/a.txt"], recycle_bin_status={}
+        )
+        # A file named d where the folder d was.
+        named_d = tmp_path / "d"
+        named_d.write_text("a file now")
+        await upload_file(
+            client, local_path=str(named_d), dest_folder=f"/home/{top}", allowed_roots=[tmp_path]
+        )
+        error = await _error(
+            restore_from_recycle_bin(
+                client, share="home", paths=[f"{top}/ok/a.txt", f"{top}/d/x/a.txt"]
+            )
+        )
+        assert (error["code"], error["retryable"]) == ("not_found", False), error
+        assert error["message"] == (
+            f"Restore files refused: the original folder /home/{top}/d/x doesn't exist on the "
+            f"NAS: /home/{top}/d is a file. Nothing was restored."
+        ), error
+        assert "a.txt" not in await list_files(client, path=f"/home/{top}/ok")
+        left = await list_recycle_bin(client, share="home", pattern="a.txt")
+        assert f"{top}/ok/a.txt" in left and f"{top}/d/x/a.txt" in left, left
+    finally:
+        for paths in ([f"/home/#recycle/{top}"], [f"/home/{top}"], [f"/home/#recycle/{top}"]):
+            with contextlib.suppress(ToolError):
+                await delete_files(client, paths=paths, recycle_bin_status={})
