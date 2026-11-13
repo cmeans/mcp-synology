@@ -548,12 +548,20 @@ def test_a_long_chain_in_a_root_spelled_through_a_link_isnt_outside(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-@pytest.mark.parametrize("rest", ["../f", "x/../../f"])
-def test_a_dotdot_past_a_chain_is_refused_as_outside(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rest: str
+@pytest.mark.parametrize(
+    ("rest", "code"),
+    [
+        ("../f", "invalid_parameter"),
+        ("x/../../f", "invalid_parameter"),
+        ("../../../f", "permission_denied"),
+    ],
+)
+def test_a_dotdot_past_a_chain_is_decided_by_its_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rest: str, code: str
 ) -> None:
-    """Pre-QA r5 on #712: where `..` after a link that can't be followed leads isn't known,
-    so it's refused as outside, as any path that might be."""
+    """Pre-QA r5 and r6 on #712: where `..` after a link that can't be followed leads isn't
+    known, so the spelling decides: inside the allowed folder it's too many symlinks (r5
+    called it outside the folder the reply listed), outside it's refused as outside."""
     import json
 
     from mcp.server.mcpserver.exceptions import ToolError
@@ -583,7 +591,30 @@ def test_a_dotdot_past_a_chain_is_refused_as_outside(
         refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
     text = str(exc.value)
     err = json.loads(text[text.index("{") :])["error"]
-    assert err["code"] == "permission_denied", err
+    assert err["code"] == code, err
+    if code == "invalid_parameter":
+        assert "too many symlinks to follow" in err["message"], err
+
+
+def test_a_long_path_past_a_chain_takes_few_tries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-QA r6 on #712: each realpath try runs the whole chain again (about 5 ms on 3.11),
+    and one try per part took 27 s for 5,000 parts. Halving takes about log2(parts)."""
+    import math
+
+    from mcp_synology.core import local_paths
+
+    tried: list[str] = []
+
+    def realpath(path: object, *args: object, **kwargs: object) -> str:
+        tried.append(str(path))
+        if "chain" in Path(str(path)).parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return str(path)
+
+    monkeypatch.setattr(local_paths.os.path, "realpath", realpath)
+    value = "/ok/chain/" + "/".join(["a"] * 5000)
+    assert local_paths._leads_to(value) == Path(value)
+    assert len(tried) <= 3 + math.ceil(math.log2(5003)), len(tried)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")

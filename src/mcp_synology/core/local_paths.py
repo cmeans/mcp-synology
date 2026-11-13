@@ -126,26 +126,33 @@ def _lexical(path: str | Path) -> Path:
 def _leads_to(path: str | Path) -> Path | None:
     """Where ``path`` leads: ``os.path.realpath``'s answer, which follows links as far as they
     go and stops at a loop without raising. A chain of links too long for its recursion
-    (3.11/3.12, one level per link) is followed in its deepest ancestor realpath can
-    resolve, with the rest as spelled, so a root spelled through a link (`/home` for
-    `/var/home`) still holds it (pre-QA r5 on #712); None when a ``..`` follows the part that
-    couldn't be followed, as where it leads then isn't known. Raises what ``expanduser``,
-    ``cwd`` and ``realpath`` raise (an unknown ~user, the working folder gone)."""
+    (3.11/3.12, one level per link) is followed in its longest prefix realpath can resolve,
+    with the rest as spelled, so a root spelled through a link (`/home` for `/var/home`)
+    still holds it (pre-QA r5 on #712); None when a ``..`` follows the part that couldn't be
+    followed, as where it leads then isn't known. The prefix is found by halving: every prefix
+    longer than one that fails fails too, and each try runs the whole chain again (pre-QA r6:
+    one try per part took 27 s for 5,000 parts, blocking the event loop). Raises what
+    ``expanduser``, ``cwd`` and ``realpath`` raise (an unknown ~user, the working folder
+    gone)."""
     expanded = Path(path).expanduser()
     current = expanded if expanded.is_absolute() else Path.cwd() / expanded
-    rest: list[str] = []
-    while True:
+    try:
+        return Path(os.path.realpath(current))
+    except RecursionError:
+        pass
+    parts = current.parts
+    good, bad = 1, len(parts)  # the anchor (`/`) alone resolves; the whole path doesn't
+    while good + 1 < bad:
+        mid = (good + bad) // 2
         try:
-            real = Path(os.path.realpath(current))
+            os.path.realpath(Path(*parts[:mid]))
+            good = mid
         except RecursionError:
-            if current.parent == current:
-                raise
-            rest.append(current.name)
-            current = current.parent
-            continue
-        if ".." in rest:
-            return None
-        return real.joinpath(*reversed(rest))
+            bad = mid
+    rest = parts[good:]
+    if ".." in rest:
+        return None
+    return Path(os.path.realpath(Path(*parts[:good]))).joinpath(*rest)
 
 
 def lexically_inside(path: str | Path, roots: list[Path]) -> bool:
@@ -337,10 +344,14 @@ def refuse_outside_roots(
         if "\x00" not in value:
             try:
                 # A chain too long for realpath (3.11/3.12) is followed as far as it can be
-                # (QA r3 on #712); where it leads unknown, it's refused as outside.
+                # (QA r3 on #712); where it leads unknown (a `..` past it), its spelling
+                # decides, so one spelled in an allowed folder isn't called outside it
+                # (pre-QA r6).
                 real = _leads_to(path)
-                inside = real is not None and any(
-                    real == root or root in real.parents for root in roots
+                inside = (
+                    lexically_inside(path, roots)
+                    if real is None
+                    else any(real == root or root in real.parents for root in roots)
                 )
             except (OSError, RuntimeError, ValueError):
                 inside = True
