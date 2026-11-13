@@ -598,8 +598,9 @@ def test_a_dotdot_past_a_chain_is_decided_by_its_spelling(
 
 
 def test_a_long_path_past_a_chain_takes_few_tries(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pre-QA r6 on #712: each realpath try runs the whole chain again (about 5 ms on 3.11),
-    and one try per part took 27 s for 5,000 parts. Halving takes about log2(parts)."""
+    """Pre-QA r6 on #712: each realpath try follows the chain again, up to the recursion limit
+    (about 5 ms on 3.11), and one try per part took 27 s for 5,000 parts. Halving takes about
+    log2(parts)."""
     import math
 
     from mcp_synology.core import local_paths
@@ -641,6 +642,30 @@ def test_a_last_link_to_a_loop_outside_is_refused_as_outside(tmp_path: Path) -> 
     text = str(exc.value)
     err = json.loads(text[text.index("{") :])["error"]
     assert err["code"] == "permission_denied", err
+
+
+def test_an_absolute_path_the_os_refused_keeps_the_general_advice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-QA r8 on #712: the absolute-path advice is for a relative path only; an absolute
+    one the OS refused (a race on readlink, say) keeps the general advice."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core import local_paths
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    def refused(path: object) -> Path:
+        raise ValueError("/x/f can't be resolved: Permission denied") from OSError(13, "denied")
+
+    monkeypatch.setattr(local_paths, "_resolve", refused)
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", "/x/f", Path("/x/f"), [Path("/x")], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert err["suggestion"] != "Pass an absolute local path.", err
 
 
 def test_a_relative_path_that_cant_be_resolved_is_told_to_be_absolute(
