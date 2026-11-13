@@ -123,7 +123,10 @@ async def get_file_info(
                 files.append(entry)
 
     # A 401 entry for a path under a file means it doesn't exist (#702).
-    under = await files_above(client, missing)
+    try:
+        under = await files_above(client, missing)
+    except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's (QA r1 on #714)
+        synology_error_response("Get file info", e)
     if missing and not files:
         # The code and advice follow what DSM said for each path (#620); a missing one gets
         # the shared suggestion, which leads with the escaped-name advice when the paths hold
@@ -330,7 +333,10 @@ async def get_dir_size(
     if code == 401:
         # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). A transport
         # error ends the call, as in the check above.
-        blocker = (await files_above(client, [(normalized, 401)])).get(normalized)
+        try:
+            blocker = (await files_above(client, [(normalized, 401)])).get(normalized)
+        except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's
+            synology_error_response("Get directory size", e)
         if blocker:
             error_response(
                 ErrorCode.NOT_FOUND,

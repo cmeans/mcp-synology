@@ -354,7 +354,10 @@ async def download_file(
         exists = False
     elif entry.get("code") == 401:  # a path under a file (vdsm 7.1), which DSM answers 404
         # No answer ends the call, as before a request elsewhere (pre-QA r2 on #702).
-        blocker = (await files_above(client, [(nas_path, 401)])).get(nas_path)
+        try:
+            blocker = (await files_above(client, [(nas_path, 401)])).get(nas_path)
+        except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's
+            synology_error_response("Download", e)
         exists = False if blocker else None
     elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
         error_response(

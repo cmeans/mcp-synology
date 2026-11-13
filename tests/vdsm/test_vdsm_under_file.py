@@ -49,12 +49,12 @@ class TestVdsmPathUnderAFile:
         error = await _error(get_file_info(client, paths=[f"{file}/{below}"]))
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert error["message"] == (
-            f"Get file info failed: {file}/{below}: doesn't exist: {file} is a file "
-            "(DSM error 401)."
+            f"Get file info failed: {file}/{below}: doesn't exist (DSM error 401): "
+            f"{file} is a file."
         )
         # Beside a path that exists, it's a note under the found one's info.
         out = await get_file_info(client, paths=[f"{file}/{below}", file])
-        assert f"{file}/{below}: doesn't exist: {file} is a file (DSM error 401)" in out
+        assert f"{file}/{below}: doesn't exist (DSM error 401): {file} is a file" in out
 
     async def test_get_dir_size(self, client: Any, dated_folder: str, below: str) -> None:  # noqa: F811
         from mcp_synology.modules.filestation.metadata import get_dir_size
@@ -63,7 +63,7 @@ class TestVdsmPathUnderAFile:
         error = await _error(get_dir_size(client, path=f"{file}/{below}"))
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert error["message"] == (
-            f"Get directory size failed: {file}/{below} doesn't exist: {file} is a file."
+            f"Get directory size failed: {file}/{below} doesn't exist on the NAS: {file} is a file."
         )
 
     async def test_download_file(
@@ -83,7 +83,8 @@ class TestVdsmPathUnderAFile:
         )
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert (
-            error["message"] == f"Download failed: {file}/{below} doesn't exist: {file} is a file."
+            error["message"]
+            == f"Download failed: {file}/{below} doesn't exist on the NAS: {file} is a file."
         )
         assert not list(tmp_path.iterdir())
 
@@ -103,8 +104,8 @@ class TestVdsmPathUnderAFile:
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         verb = op.capitalize()
         assert error["message"] == (
-            f"{verb} files refused: {file}/{below}: doesn't exist: {file} is a file "
-            f"(DSM error 401). Nothing was {'copied' if op == 'copy' else 'moved'}."
+            f"{verb} files refused: {file}/{below}: doesn't exist (DSM error 401): "
+            f"{file} is a file. Nothing was {'copied' if op == 'copy' else 'moved'}."
         )
 
     @pytest.mark.parametrize("op", ["copy", "move"])
@@ -137,8 +138,8 @@ class TestVdsmPathUnderAFile:
         error = await _error(delete_files(client, paths=[f"{file}/{below}"]))
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert error["message"] == (
-            f"Delete files refused: {file}/{below}: doesn't exist: {file} is a file "
-            "(DSM error 401). Nothing was deleted."
+            f"Delete files refused: {file}/{below}: doesn't exist (DSM error 401): "
+            f"{file} is a file. Nothing was deleted."
         )
 
     @pytest.mark.parametrize("force_parent", [True, False])
@@ -167,7 +168,8 @@ class TestVdsmPathUnderAFile:
         error = await _error(rename(client, path=f"{file}/{below}", new_name="z"))
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert error["message"] == (
-            f"Rename failed (DSM error 1200): {file}/{below} doesn't exist: {file} is a file."
+            f"Rename failed (DSM error 1200): {file}/{below} doesn't exist on the NAS: "
+            f"{file} is a file."
         )
 
     @pytest.mark.parametrize("create_parents", [True, False])
@@ -195,5 +197,6 @@ class TestVdsmPathUnderAFile:
         )
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert error["message"] == (
-            f"Upload failed: the destination folder {file}/{below} doesn't exist: {file} is a file."
+            f"Upload failed: the destination folder {file}/{below} doesn't exist on the NAS: "
+            f"{file} is a file."
         )

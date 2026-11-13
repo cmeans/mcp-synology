@@ -23,10 +23,13 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation import MODULE_INFO, register
-from mcp_synology.modules.filestation.helpers import UNDER_FILE_ADVICE
+from mcp_synology.modules.filestation.helpers import (
+    RESTORE_UNDER_FILE_ADVICE,
+    UNDER_FILE_ADVICE,
+)
 from mcp_synology.modules.filestation.paths import (
     BIN_ITEM_PARAMS,
     LOCAL_PARAMS,
@@ -2075,7 +2078,7 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert (error["code"], error["retryable"]) == ("not_found", False)
         assert error["message"] == (
-            f"Get file info failed: {path}: doesn't exist: {_BLOCKED} (DSM error 401)."
+            f"Get file info failed: {path}: doesn't exist (DSM error 401): {_BLOCKED}."
         )
         assert error["suggestion"].startswith("Check the paths with list_files")
 
@@ -2083,7 +2086,7 @@ class TestPathUnderAFile:
         from mcp_synology.modules.filestation.metadata import get_file_info
 
         out = await get_file_info(_UnderFile(), paths=["/video/f.txt/x", "/video/a"])  # type: ignore[arg-type,list-item]
-        assert f"/video/f.txt/x: doesn't exist: {_BLOCKED} (DSM error 401)" in out
+        assert f"/video/f.txt/x: doesn't exist (DSM error 401): {_BLOCKED}" in out
 
     async def test_a_401_with_no_file_above_stays_dsms(self) -> None:
         """A 401 whose parents show no file isn't called missing."""
@@ -2108,8 +2111,8 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            f"{op.capitalize()} files refused: /video/f.txt/x: doesn't exist: {_BLOCKED} "
-            f"(DSM error 401). Nothing was {'copied' if op == 'copy' else 'moved'}."
+            f"{op.capitalize()} files refused: /video/f.txt/x: doesn't exist (DSM error 401): "
+            f"{_BLOCKED}. Nothing was {'copied' if op == 'copy' else 'moved'}."
         )
         assert "start" not in [m for m, _ in client.calls]
 
@@ -2127,7 +2130,7 @@ class TestPathUnderAFile:
         assert error["param"] == "dest_folder"
         assert error["message"] == (
             f"{op.capitalize()} files refused: the destination folder /video/f.txt/x doesn't "
-            f"exist: {_BLOCKED}. Nothing was {'copied' if op == 'copy' else 'moved'}."
+            f"exist on the NAS: {_BLOCKED}. Nothing was {'copied' if op == 'copy' else 'moved'}."
         )
         assert error["suggestion"] == UNDER_FILE_ADVICE
         assert "start" not in [m for m, _ in client.calls]
@@ -2141,7 +2144,7 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            f"Delete files refused: /video/f.txt/x: doesn't exist: {_BLOCKED} (DSM error 401). "
+            f"Delete files refused: /video/f.txt/x: doesn't exist (DSM error 401): {_BLOCKED}. "
             "Nothing was deleted."
         )
         assert "start" not in [m for m, _ in client.calls]
@@ -2155,7 +2158,7 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            f"Get directory size failed: /video/f.txt/x doesn't exist: {_BLOCKED}."
+            f"Get directory size failed: /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}."
         )
         assert "start" not in [m for m, _ in client.calls]
 
@@ -2171,7 +2174,10 @@ class TestPathUnderAFile:
             )
         error = _error(exc)
         assert error["code"] == "not_found"
-        assert error["message"] == f"Download failed: /video/f.txt/x doesn't exist: {_BLOCKED}."
+        assert (
+            error["message"]
+            == f"Download failed: /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}."
+        )
         assert not list(tmp_path.iterdir())
 
     @pytest.mark.parametrize("code", [1100, 1101])
@@ -2207,7 +2213,7 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            f"Rename failed (DSM error 1200): /video/f.txt/x doesn't exist: {_BLOCKED}."
+            f"Rename failed (DSM error 1200): /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}."
         )
 
     async def test_upload_another_code_keeps_dsms_answer(self, tmp_path: Path) -> None:
@@ -2258,7 +2264,8 @@ class TestPathUnderAFile:
         else:
             assert error["code"] == "not_found"
             assert error["message"] == (
-                f"Upload failed: the destination folder /video/f.txt/x doesn't exist: {_BLOCKED}."
+                "Upload failed: the destination folder /video/f.txt/x doesn't exist on the NAS: "
+                f"{_BLOCKED}."
             )
             assert error["suggestion"] == UNDER_FILE_ADVICE
 
@@ -2278,11 +2285,108 @@ class TestPathUnderAFile:
             await restore_from_recycle_bin(client, share="/video", **kwargs)  # type: ignore[arg-type]
         error = _error(exc)
         assert error["code"] == "not_found", error
+        which = "original folder" if to == "original" else "destination folder"
         assert error["message"] == (
-            f"Restore files refused: the destination folder /video/f.txt/x doesn't exist: "
+            f"Restore files refused: the {which} /video/f.txt/x doesn't exist on the NAS: "
             f"{_BLOCKED}. Nothing was restored."
         )
+        # QA r1 on #714: the advice names dest_folder, which the caller may not have given.
+        assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE
         assert "start" not in [m for m, _ in client.calls]
+
+    async def test_a_restore_to_several_folders_refuses_before_anything_moves(self) -> None:
+        """QA r1 on #714: an original folder under a file was found only at its item's turn,
+        after earlier items were restored."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        client = _UnderFile()
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                client,  # type: ignore[arg-type]
+                share="/video",  # type: ignore[arg-type]
+                paths=["ok/a.txt", "f.txt/x/b.txt", "f.txt/y/c.txt"],
+            )
+        error = _error(exc)
+        assert error["code"] == "not_found", error
+        assert error["message"] == (
+            "Restore files refused: original folders under a file:\n"
+            f"  /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}\n"
+            f"  /video/f.txt/y doesn't exist on the NAS: {_BLOCKED}\n"
+            "Nothing was restored."
+        ), error["message"]
+        assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE
+        assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            DsmHttpError("HTTP 502 from getinfo", 502),
+            DsmReplyError("A reply that isn't DSM's"),
+        ],
+        ids=["502", "not-dsm"],
+    )
+    async def test_a_proxys_answer_to_the_destination_check_ends_the_call(
+        self, raised: Exception
+    ) -> None:
+        """QA r1 on #714: a proxy's error status or a page that isn't DSM's (both
+        `SynologyError`s) started the copy anyway, though the docs say it ends the call."""
+        from mcp_synology.modules.filestation.operations import copy_files
+
+        class _Proxy(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise raised
+                return await super().request(api, method, **kwargs)
+
+        client = _Proxy()
+        with pytest.raises((DsmHttpError, DsmReplyError)):
+            await copy_files(client, paths=["/video/a"], dest_folder="/video/f.txt/x")  # type: ignore[arg-type,list-item]
+        assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize(
+        ("tool", "named"),
+        [
+            ("get_file_info", "Get file info failed"),
+            ("get_dir_size", "Get directory size failed"),
+            ("download_file", "Download failed"),
+        ],
+    )
+    async def test_a_proxys_answer_to_the_check_names_the_tool(
+        self, tool: str, named: str, tmp_path: Path
+    ) -> None:
+        """QA r1 on #714: the check's proxy error reached the server's backstop, named by the
+        tool's identifier (`get_file_info failed`), not as the tool's own errors are."""
+        from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        class _Proxy(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise DsmHttpError("HTTP 502 from getinfo", 502)
+                return await super().request(api, method, **kwargs)
+
+        client: Any = _Proxy()
+        path = "/video/f.txt/x"
+        with pytest.raises(ToolError) as exc:
+            if tool == "get_file_info":
+                await get_file_info(client, paths=[path])
+            elif tool == "get_dir_size":
+                await get_dir_size(client, path=path)
+            else:
+                await download_file(
+                    client, path=path, dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                )
+        error = _error(exc)
+        assert error["message"].startswith(named), error
+        assert error["code"] == "unavailable", error
+
+    async def test_create_folder_names_the_callers_own_path(self) -> None:
+        """QA r1 on #714: the refusal's value was the normalized path."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_UnderFile(fails={"create": 1100}), paths=["video/f.txt/x"])  # type: ignore[arg-type,list-item]
+        assert _error(exc)["value"] == "video/f.txt/x"
 
     async def test_download_a_401_with_no_file_above_stays_dsms(self, tmp_path: Path) -> None:
         """Pre-QA r1 on #702: only a file above makes a 401 "doesn't exist"."""

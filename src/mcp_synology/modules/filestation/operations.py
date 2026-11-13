@@ -42,6 +42,7 @@ from mcp_synology.modules.filestation.batch import (
     run_batch,
 )
 from mcp_synology.modules.filestation.helpers import (
+    RESTORE_UNDER_FILE_ADVICE,
     UNDER_FILE_ADVICE,
     _escaped_repr,
     _is_dot,
@@ -54,6 +55,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     missing_text,
     name_key,
+    no_answer,
     normalize_path,
     path_exists,
     paths_isdir,
@@ -123,7 +125,7 @@ async def create_folder(
     """
     normalized = [normalize_path(p) for p in paths]
     folders: list[dict[str, Any]] = []
-    for p in normalized:
+    for p, given in zip(normalized, paths, strict=True):
         parent = "/".join(p.split("/")[:-1]) or "/"
         name = p.split("/")[-1]
         try:
@@ -148,7 +150,7 @@ async def create_folder(
                         "is a file.",
                         retryable=False,
                         param="paths",
-                        value=p,
+                        value=given,  # the caller's own text (QA r1 on #714)
                         suggestion=UNDER_FILE_ADVICE,
                     )
             synology_error_response("Create folder", e)
@@ -504,7 +506,9 @@ async def _refuse_missing_destination(
         # In the same try, so no answer stops the call as the getinfo above does.
         under = await files_above(client, found)
     except Exception as e:
-        if not anything_done and not isinstance(e, SynologyError):
+        # No answer, a proxy's error status or a reply that isn't DSM's (a `SynologyError` too)
+        # ends a call with nothing started (QA r1 on #714).
+        if not anything_done and (no_answer(e) or not isinstance(e, SynologyError)):
             raise
         # A restore to several places runs this after earlier items finished: no reply it can use
         # mustn't lose them (#588). At WARNING, as DSM's 1002 that follows a missing folder points
@@ -547,7 +551,7 @@ async def _refuse_missing_destination(
             retryable=False,
             param="dest_folder",
             value=dest,
-            suggestion=UNDER_FILE_ADVICE,
+            suggestion=RESTORE_UNDER_FILE_ADVICE if operation == "Restore" else UNDER_FILE_ADVICE,
         )
     if 407 in codes:
         error_response(
@@ -2184,6 +2188,29 @@ async def _recreate_missing_folders(
                 "Restore them to a folder this DSM account can write to (dest_folder), or have "
                 "the folder's permissions changed in DSM."
             ),
+        )
+    # An original folder under a file is refused before anything moves too: found only at its
+    # item's turn, it came after earlier items were restored (QA r1 on #714).
+    try:
+        under = await files_above(client, found)
+    except SynologyError as e:
+        synology_error_response("Restore files", e)
+    blocked = [path for path in wanted if path in under]
+    if blocked:
+        texts = [under_file_text(path, under[path]) for path in blocked]
+        error_response(
+            ErrorCode.NOT_FOUND,
+            # One a line when two or more (#693).
+            f"Restore files refused: the original folder {texts[0]}. Nothing was restored."
+            if len(texts) == 1
+            else then(
+                path_list("Restore files refused: original folders under a file", texts),
+                "Nothing was restored.",
+            ),
+            retryable=False,
+            param="paths",
+            value=blocked[0],
+            suggestion=RESTORE_UNDER_FILE_ADVICE,
         )
     gone = {path for path, code in found if code == 408}
     missing = [path for path in wanted if path in gone]

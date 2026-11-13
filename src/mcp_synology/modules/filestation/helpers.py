@@ -1164,6 +1164,12 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
 _NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
 
 
+def no_answer(exc: BaseException) -> bool:
+    """Whether ``exc`` is how a NAS that doesn't answer shows (`_NO_ANSWER`), for a caller that
+    catches more (QA r1 on #714: `DsmHttpError` and `DsmReplyError` are `SynologyError`s)."""
+    return isinstance(exc, _NO_ANSWER)
+
+
 def _files(data: Any) -> list[dict[str, Any]]:
     """``getinfo``'s ``files`` entries that are objects; nothing for a malformed reply, which
     then reads as "can't tell" (pre-QA r5 on #517)."""
@@ -1313,11 +1319,17 @@ UNDER_FILE_ADVICE = (
     "A file can't hold files or folders: pick a folder that isn't below one (list_files shows "
     "what's there)."
 )
+# A restore's (QA r1 on #714): its folder may be the original one, which the caller never gave.
+RESTORE_UNDER_FILE_ADVICE = (
+    "A file can't hold files or folders: restore to a folder that isn't below one "
+    "(dest_folder; list_files shows what's there)."
+)
 
 
 def under_file_text(path: str, file: str) -> str:
-    """A path under a file, in words (#702), as `list_files` writes it (#517)."""
-    return f"{shown(path)} doesn't exist: {shown(file)} is a file"
+    """A path under a file, in words (#702), as `list_files` and `search_files` write it
+    (#517)."""
+    return f"{shown(path)} doesn't exist on the NAS: {shown(file)} is a file"
 
 
 def missing_text(path: str, code: int, under_file: str | None) -> str:
@@ -1326,7 +1338,9 @@ def missing_text(path: str, code: int, under_file: str | None) -> str:
     ``under_file``: the file above it (`files_above`), which means it doesn't exist (#702);
     required, so no caller forgets to look."""
     if under_file is not None:
-        return f"{shown(path)}: doesn't exist: {shown(under_file)} is a file (DSM error {code})"
+        # The code beside "doesn't exist", as for a 408, so it isn't read as the file's (QA r1
+        # on #714).
+        return f"{shown(path)}: doesn't exist (DSM error {code}): {shown(under_file)} is a file"
     why = (
         "no permission"
         if code in _NO_PERMISSION
