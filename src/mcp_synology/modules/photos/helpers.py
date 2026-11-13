@@ -80,7 +80,7 @@ def quoted_name(
       too, where U+037E and U+0387 become ``;`` and ``·``;
     - holds a character JSON escapes (a quote, a backslash, one that draws nothing);
     - has whitespace at an end, starts or ends with any quote mark `shown` counts
-      (`edge_quote`: typographic quotes and a backtick too), starts with ``(`` (it would
+      (`edge_quote`: Unicode's Quotation_Mark characters, #711, and a backtick), starts with ``(`` (it would
       read as the server's placeholder) or ends with ``:``;
     - with ``beside_id`` (the line writes it right after an ID: ``9 Trip``, ``person 12
       Jo``), starts with a digit of any script, or ``9 12`` would read as two IDs (the #614

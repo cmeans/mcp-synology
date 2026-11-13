@@ -668,6 +668,10 @@ class TestQuotedNamesAndFolders:
         assert quoted_name("\u201cTrip\u201d") == '"\u201cTrip\u201d"'  # typographic quotes
         assert quoted_name("\u2018a") == '"\u2018a"' and quoted_name("a\u2019") == '"a\u2019"'
         assert quoted_name("`Jo`") == '"`Jo`"'
+        # #711: guillemets, low quotes, CJK corner brackets (Unicode's Quotation_Mark).
+        assert quoted_name("\u00abAnn\u00bb") == '"\u00abAnn\u00bb"'
+        assert quoted_name("\u201eAnn") == '"\u201eAnn"'
+        assert quoted_name("\u300cAnn\u300d") == '"\u300cAnn\u300d"'
         assert quoted_name("Jo\u037e Ann") == '"Jo\u037e Ann"'  # NFC makes it "; "
         assert quoted_name("a \u0387 b") == '"a \u0387 b"'  # NFC makes it " · "
 

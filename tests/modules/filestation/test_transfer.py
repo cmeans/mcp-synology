@@ -1920,6 +1920,39 @@ class TestLocalPathsShown:
         for wrapped in ("`a.jpg`", "\u2018a.jpg\u2019", "\u201ca.jpg\u201d"):
             assert shown(wrapped) == repr(wrapped), wrapped
 
+    @pytest.mark.parametrize(
+        "mark",
+        # #711: every character with Unicode's Quotation_Mark property, at either end.
+        # Guillemets, low and reversed quotes, CJK corner brackets and their white forms, the
+        # double prime quotes, vertical and fullwidth forms, and U+2E42.
+        [chr(c) for c in (0x00AB, 0x00BB, 0x2039, 0x203A, 0x201A, 0x201B, 0x201E, 0x201F)]
+        + [chr(c) for c in (0x2E42, 0x300C, 0x300D, 0x300E, 0x300F, 0x301D, 0x301E, 0x301F)]
+        + [chr(c) for c in (0xFE41, 0xFE42, 0xFE43, 0xFE44, 0xFF02, 0xFF07, 0xFF62, 0xFF63)],
+    )
+    def test_every_quotation_mark_reads_as_quoting(self, mark: str) -> None:
+        from mcp_synology.core.display import edge_quote, shown, shown_local
+
+        # A bare name starting with one, a path ending with one (`edge_quote` reads the text's
+        # ends, as `shown` writes the whole path).
+        for text in (f"{mark}a.jpg", f"/s/a{mark}"):
+            assert edge_quote(text), text
+            assert shown(text) == repr(text), text
+        assert shown_local(f"/home/u/a{mark}") == repr(f"/home/u/a{mark}")
+        assert not edge_quote(f"/s/a{mark}b")  # inside a name it's part of it
+        assert not edge_quote(f"/s/a{mark}\n")  # the end is the text's, not before a newline
+
+    def test_quotation_marks_are_unicodes(self) -> None:
+        """#711: `edge_quote` follows Unicode's Quotation_Mark property, plus a backtick, so a
+        mark Unicode adds is counted without a list of ours to update."""
+        import regex
+
+        from mcp_synology.core.display import edge_quote
+
+        marks = [c for c in map(chr, range(0x110000)) if regex.match(r"\p{Quotation_Mark}", c)]
+        assert len(marks) >= 30
+        assert all(edge_quote(f"{m}a") and edge_quote(f"a{m}") for m in [*marks, "`"])
+        assert not edge_quote("a") and not edge_quote("a-b")
+
     @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
     @pytest.mark.parametrize(
         "path",

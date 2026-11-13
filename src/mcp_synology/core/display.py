@@ -513,14 +513,16 @@ def json_quoted(text: str) -> str:
     return "".join(out)
 
 
-# Marks a model reads as quoting or code: straight and typographic quotes, a backtick
-# (pre-QA r5 on #691).
-_QUOTES = ("'", '"', "`", "\u2018", "\u2019", "\u201c", "\u201d")
+# Marks a model reads as quoting or code: every character with Unicode's Quotation_Mark
+# property (straight and typographic quotes, guillemets, low and reversed quotes, CJK corner
+# brackets, their fullwidth and vertical forms: #711), and a backtick (pre-QA r5 on #691),
+# which isn't one.
+_EDGE_QUOTE = regex.compile(r"^[\p{Quotation_Mark}`]|[\p{Quotation_Mark}`]\Z")
 
 
 def edge_quote(text: str) -> bool:
-    """``text`` starts or ends with a quote, so written as is it could read as quoted."""
-    return text.startswith(_QUOTES) or text.endswith(_QUOTES)
+    """``text`` starts or ends with a quote mark, so written as is it could read as quoted."""
+    return _EDGE_QUOTE.search(text) is not None
 
 
 def _needs_escapes(part: str) -> bool:
