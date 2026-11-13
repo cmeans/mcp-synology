@@ -1201,7 +1201,7 @@ class CopyMoveAdapter:
         )
 
     def label(self, item: Item) -> str:
-        return f"{_PRESENT[self.operation]} {item.source}"
+        return f"{_PRESENT[self.operation]} {shown_beside(item.source, ': ')}"
 
     def read_finished(self, item: Item, status: dict[str, Any]) -> tuple[int, bool]:
         # What the call did before is the failure formatter's to add (#482).
@@ -1580,7 +1580,7 @@ class DeleteAdapter:
         return None
 
     def label(self, item: Item) -> str:
-        return f"Deleting {item.source}"
+        return f"Deleting {shown_beside(item.source, ': ')}"
 
     def read_finished(self, item: Item, status: dict[str, Any]) -> None:
         _delete_result(status, item.source, recursive=self.recursive)

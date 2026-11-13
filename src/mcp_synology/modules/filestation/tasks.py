@@ -599,7 +599,7 @@ async def poll_task(
                 )
                 return PollResult(status, "stalled", e)
 
-            logger.debug("%s status (%s): %s", api, label, status)
+            logger.debug("%s status (%r): %s", api, label, status)
 
             if status.get("finished", False):
                 return PollResult(status, "finished")

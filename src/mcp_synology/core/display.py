@@ -564,9 +564,9 @@ def shown_beside(path: str, marker: str) -> str:
 
 def _holds_marker(path: str, marker: str) -> bool:
     """Whether ``path`` would read as part of its line's ``marker``: it holds it, or, before
-    ``" ("``, it ends with ``":"``, which would read as the line's own ``": "`` (QA r1 on
-    #717; Photos' `shown_folder` quotes it the same way)."""
-    return marker in path or (marker == " (" and path.endswith(":"))
+    a marker starting ``" ("`` (``" (to "`` too), it ends with ``":"``, which would read as the
+    line's own ``": "`` (QA r1 on #717; Photos' `shown_folder` quotes it the same way)."""
+    return marker in path or (marker.startswith(" (") and path.endswith(":"))
 
 
 def shown_local_beside(path: str | os.PathLike[str], marker: str) -> str:

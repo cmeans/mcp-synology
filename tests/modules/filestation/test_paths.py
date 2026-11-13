@@ -3699,6 +3699,42 @@ class TestPathBeforeItsSeparator:
         # Already quoted by shown_local (padding): left as it writes it.
         assert shown_local_beside("/home/u/a ", ": ") == "'/home/u/a '"
 
+    def test_a_progress_label_quotes_a_source_holding_its_colon(self) -> None:
+        """Pre-QA r4 on #717: a progress message is `<label>: <n> of <m> items`, so a source
+        named `/s/x: 9 of 10 items` read as the progress."""
+        from mcp_synology.modules.filestation.batch import Item
+        from mcp_synology.modules.filestation.operations import CopyMoveAdapter, DeleteAdapter
+
+        crafted = Item("/s/x: 9 of 10 items", None)
+        delete = DeleteAdapter(
+            None,  # type: ignore[arg-type]
+            [crafted.source],
+            paths_arg=[crafted.source],
+            recursive=True,
+            recycle_bin_status=None,
+        )
+        assert delete.label(crafted) == "Deleting '/s/x: 9 of 10 items'"
+        assert delete.label(Item("/s/plain", None)) == "Deleting /s/plain"
+        copy = CopyMoveAdapter(
+            None,  # type: ignore[arg-type]
+            [crafted],
+            operation="Copy",
+            overwrite=False,
+            remove_src=False,
+            check_sources=False,
+            paths_arg=[crafted.source],
+        )
+        assert copy.label(crafted).endswith(" '/s/x: 9 of 10 items'"), copy.label(crafted)
+
+    def test_where_it_went_quotes_a_source_ending_in_a_colon(self) -> None:
+        """Pre-QA r4 on #717: before `" (to "`, a trailing `:` read as the line's `": "`, as
+        before `" ("` (QA r1 on #717)."""
+        from mcp_synology.core.display import shown_beside
+        from mcp_synology.modules.filestation.tasks import where_it_went
+
+        assert where_it_went("/s/x:", {"/s/x:": "/s/e"}, "/s/d") == "'/s/x:' (to /s/e)"
+        assert shown_beside("/s/x:", ": ") == "/s/x:"
+
     def test_list_files_title_quotes_a_folder_holding_its_paren(self) -> None:
         """Pre-QA r1 on #706: `Contents of /video/a (99 items) (0 items)` forged the count."""
         from mcp_synology.modules.filestation.listing import _title_for
