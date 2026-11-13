@@ -24,7 +24,6 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
-    file_above,
     files_above,
     missing_paths_suggestion,
     missing_text,
@@ -329,8 +328,9 @@ async def get_dir_size(
         entry = {}
     code = entry.get("code")
     if code == 401:
-        # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702).
-        blocker = await file_above(client, normalized)
+        # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). No answer
+        # ends the call, as the check above does.
+        blocker = (await files_above(client, [(normalized, 401)])).get(normalized)
         if blocker:
             error_response(
                 ErrorCode.NOT_FOUND,

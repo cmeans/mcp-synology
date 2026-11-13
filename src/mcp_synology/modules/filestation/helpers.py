@@ -1281,10 +1281,14 @@ async def files_above(client: DsmClient, missing: Sequence[tuple[str, int]]) -> 
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     found: dict[str, str] = {}
     for path, code in missing:
-        if code == 401 and path not in found:
-            blocker = await _file_above(client, path, version)
-            if blocker:
-                found[path] = blocker
+        if code != 401 or path in found:
+            continue
+        # A file already found above another path needs no second search (pre-QA r1 on #702:
+        # 40 paths under one file cost 160 requests).
+        known = next((f for f in found.values() if path.startswith(f + "/")), None)
+        blocker = known or await _file_above(client, path, version)
+        if blocker:
+            found[path] = blocker
     return found
 
 
@@ -1292,8 +1296,10 @@ async def file_above(client: DsmClient, path: str) -> str | None:
     """The file among ``path``'s parents, or None (#702): for a path DSM refused in a way that
     doesn't say why, which is how it answers one under a file (`…/f.txt/x`, vdsm 7.1): a 401
     getinfo entry, `get_dir_size`'s 0 B, a download's 404, a copy or move's 1002 into it,
-    `create_folder`'s 1100, `upload_file`'s 401, `rename`'s 1200. Only a diagnosis: whatever
-    the check hits (a DSM error, no answer) gives None, and DSM's own answer stands."""
+    `create_folder`'s 1100, `upload_file`'s 401, `rename`'s 1200. Only a diagnosis, after
+    DSM's own answer: whatever the check hits gives None and that answer stands (a DSM error
+    logged at DEBUG, no answer at WARNING). A check before a request uses `files_above`, which
+    lets no answer end the call."""
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     try:
         return await _file_above(client, path, version)

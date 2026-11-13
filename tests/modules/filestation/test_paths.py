@@ -2245,6 +2245,88 @@ class TestPathUnderAFile:
             )
             assert error["suggestion"] == UNDER_FILE_ADVICE
 
+    @pytest.mark.parametrize("to", ["original", "dest_folder"])
+    async def test_restore(self, to: str) -> None:
+        """Pre-QA r1 on #702: a restore to a folder under a file, its original folder or
+        ``dest_folder``, gets the destination check's refusal, before anything starts."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        client = _UnderFile()
+        kwargs: dict[str, Any] = (
+            {"paths": ["f.txt/x/a.txt"]}
+            if to == "original"
+            else {"paths": ["a.txt"], "dest_folder": "/video/f.txt/x"}
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(client, share="/video", **kwargs)  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "not_found", error
+        assert error["message"] == (
+            f"Restore files refused: the destination folder /video/f.txt/x doesn't exist: "
+            f"{_BLOCKED}. Nothing was restored."
+        )
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_download_a_401_with_no_file_above_stays_dsms(self, tmp_path: Path) -> None:
+        """Pre-QA r1 on #702: only a file above makes a 401 "doesn't exist"."""
+        from mcp_synology.core.errors import DownloadHttpError
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        class _No(_FakeClient):
+            async def download(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise DownloadHttpError("HTTP 404 from download API", 404)
+
+            async def download_binary(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise DownloadHttpError("HTTP 404 from download API", 404)
+
+        client = _No(codes={"/video/x/y": 401}, existing={"/video", "/video/x"})
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                client,  # type: ignore[arg-type]
+                path="/video/x/y",  # type: ignore[arg-type]
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        error = _error(exc)
+        assert error["code"] != "not_found", error
+        assert "is a file" not in error["message"], error
+
+    @pytest.mark.parametrize("tool", ["copy", "get_dir_size"])
+    async def test_a_check_before_a_request_ends_the_call_with_no_answer(self, tool: str) -> None:
+        """Pre-QA r1 on #702: a check before anything starts lets no answer end the call, as
+        the getinfo before it does; the copy then started after a full timeout."""
+        from mcp_synology.modules.filestation import operations
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        class _Stalls(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise httpx.ReadTimeout("no answer")
+                return await super().request(api, method, **kwargs)
+
+        client = _Stalls()
+        with pytest.raises(httpx.ReadTimeout):
+            if tool == "copy":
+                await operations.copy_files(
+                    client,  # type: ignore[arg-type]
+                    paths=["/video/a"],  # type: ignore[list-item]
+                    dest_folder="/video/f.txt/x",  # type: ignore[arg-type]
+                )
+            else:
+                await get_dir_size(client, path="/video/f.txt/x")  # type: ignore[arg-type]
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_paths_under_one_file_share_its_search(self) -> None:
+        """Pre-QA r1 on #702: 40 paths under one file cost 160 requests, one search each."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        client = _UnderFile()
+        missing = [(f"/video/f.txt/a/b/c/d/e/x{i}", 401) for i in range(40)]
+        found = await files_above(client, missing)  # type: ignore[arg-type]
+        assert set(found.values()) == {"/video/f.txt"}
+        assert len(found) == 40
+        assert len(client.calls) <= 4, client.calls
+
     async def test_a_check_that_fails_keeps_dsms_answer(self) -> None:
         """`file_above` is only a diagnosis: a check with no answer leaves DSM's error."""
         from mcp_synology.modules.filestation.operations import create_folder

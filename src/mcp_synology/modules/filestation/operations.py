@@ -492,13 +492,16 @@ async def _refuse_missing_destination(
 
     DSM answers a copy or move into a missing folder with 1002, "Destination error during
     copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408
-    is `not_found`, 407 `permission_denied`. Any other DSM answer leaves it to the task, as
-    before. No answer, or an unreadable one, stops a call with nothing started: starting then
+    is `not_found`, 407 `permission_denied`, and a 401 for a folder under a file `not_found`
+    naming the file (#702). Any other DSM answer leaves it to the task, as before. No answer, or an unreadable one, stops a call with nothing started: starting then
     would be with the duplicate-task guard down too, since it reads the same stalled DSM. With
     ``anything_done`` (a restore's later destination), it goes on, so finished items aren't lost.
     """
     try:
         found = await find_missing_paths(client, [dest])
+        # A folder under a file: getinfo's 401, where DSM's task answers 1002 (vdsm 7.1, #702).
+        # In the same try, so no answer stops the call as the getinfo above does.
+        under = await files_above(client, found)
     except Exception as e:
         if not anything_done and not isinstance(e, SynologyError):
             raise
@@ -534,8 +537,7 @@ async def _refuse_missing_destination(
                 "then retry."
             ),
         )
-    # A folder under a file: getinfo's 401, where DSM's task answers 1002 (vdsm 7.1, #702).
-    blocker = await file_above(client, dest) if 401 in codes else None
+    blocker = under.get(dest)
     if blocker:
         error_response(
             ErrorCode.NOT_FOUND,
