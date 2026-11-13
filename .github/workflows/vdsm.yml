@@ -58,7 +58,8 @@ jobs:
           fetch-depth: 2
 
       # A PR that changes no code (#284): only Markdown at the repository root
-      # (README, CHANGELOG, CLAUDE.md, ...), docs/, issue templates or LICENSE. Not
+      # (README, CHANGELOG, CLAUDE.md, ...), CHANGELOG fragments (changelog.d/*.md, #731,
+      # which every PR now adds), docs/, issue templates or LICENSE. Not
       # Markdown elsewhere: src/mcp_synology/instructions/*.md are the server's
       # instructions. The job still runs and passes with every later step skipped, so the
       # checks keep their names (a job skipped by `if:` loses its matrix name, which
@@ -75,9 +76,9 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             files=$(git diff --no-renames --name-only HEAD^1 HEAD)
             if [ -n "$files" ] \
-                && ! grep -qvE '(^[^/]+\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|^LICENSE$)' <<< "$files"; then
+                && ! grep -qvE '(^[^/]+\.md$|^changelog\.d/[^/]+\.md$|^docs/|^\.github/ISSUE_TEMPLATE/|^LICENSE$)' <<< "$files"; then
               code=false
-              echo "::notice::No code changed (only root Markdown, docs/, issue templates or LICENSE): vdsm skipped"
+              echo "::notice::No code changed (only root Markdown, CHANGELOG fragments, docs/, issue templates or LICENSE): vdsm skipped"
             fi
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"

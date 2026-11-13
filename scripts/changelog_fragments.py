@@ -21,6 +21,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 DIRECTORY = "changelog.d"
@@ -123,33 +124,39 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
         ).stdout.splitlines()
     except (OSError, subprocess.CalledProcessError) as error:
         return f"couldn't list this branch's changes against {base}: {type(error).__name__}"
-    removed = False
+    removed: list[str] = []
     for line in changed:
         status, _, path = line.partition("\t")
         name = Path(path).name
         if name in NOT_FRAGMENTS:
             continue
         if status == "D":
-            removed = True
+            removed.append(name)
             continue
         entry = _ENTRY.fullmatch(name)
         # A release's own text (+<name>.release.md) never counts: the release PR's build removes
         # it with the rest, so counting it only let any PR pass by adding one (pre-QA r2 on #731).
         if status in ("A", "M") and entry and entry.group("pr") == str(pr):
             return None
-    # A release PR's build assembles every fragment and removes them all; removing some and
-    # leaving others is no release (pre-QA r2 on #731).
-    left = _fragments_left(root)
-    if removed and not left:
-        return None
     if removed:
-        # Release-shaped: it removes fragments, but some are still here, most likely merged after
-        # its build. Adding one of its own would put a bogus entry in the next release.
+        # Only a release PR removes fragments: one that bumps the version and adds its section
+        # (pre-QA r3 on #731; "none left" alone let a PR delete another PR's last entry).
+        release = _release_version(root, base)
+        left = _fragments_left(root)
+        if release and not left:
+            return None
+        if release:
+            return (
+                f"this release PR ({release}) leaves {len(left)} CHANGELOG fragment(s) "
+                f"({', '.join(left)}), most likely merged after its build: merge main and run "
+                "the build again."
+            )
         return (
-            f"this PR removes CHANGELOG fragments but leaves {len(left)} ({', '.join(left)}): a "
-            "release PR assembles every one, so merge main and run the build again. For a "
-            "backport's carry-back or a fix made for a release before its tag, which add no "
-            f"entry of their own, ask the maintainer for the {SKIP_LABEL!r} label."
+            f"this PR removes CHANGELOG fragments ({', '.join(sorted(removed))}) but isn't a "
+            "release PR (it doesn't bump pyproject.toml's version and add that version's "
+            "section): restore them, then add its own entry as "
+            f"{DIRECTORY}/{pr}.<added|changed|fixed>.md. A backport's carry-back, which removes "
+            f"the entries it ships, takes the {SKIP_LABEL!r} label (ask the maintainer)."
         )
     return (
         "this PR adds no CHANGELOG fragment of its own: add "
@@ -167,34 +174,92 @@ def _fragments_left(root: Path) -> list[str]:
     return sorted(p.name for p in directory.iterdir() if p.name not in NOT_FRAGMENTS)
 
 
-MARKER = "<!-- towncrier release notes start -->"
+def _git_show(root: Path, revision: str, path: str) -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), "show", f"{revision}:{path}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _version(pyproject: str | None) -> str | None:
+    try:
+        version = tomllib.loads(pyproject or "")["project"]["version"]
+    except (tomllib.TOMLDecodeError, KeyError, TypeError):
+        return None
+    return version if isinstance(version, str) else None
+
+
+def _release_version(root: Path, base: str) -> str | None:
+    """The version this branch releases, or None: `pyproject.toml`'s version differs from the
+    base's, and `CHANGELOG.md` gains that version's `## <version> (` section."""
+    try:
+        head_pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+        head_changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    version = _version(head_pyproject)
+    if version is None or version == _version(_git_show(root, base, "pyproject.toml")):
+        return None
+    heading = re.compile(rf"^## {re.escape(version)} \(", re.MULTILINE)
+    if not heading.search(head_changelog) or heading.search(
+        _git_show(root, base, "CHANGELOG.md") or ""
+    ):
+        return None
+    return version
+
+
+def _start_string(root: Path) -> str | None:
+    """towncrier's `start_string` from `pyproject.toml`: where the build inserts the release.
+    Read, never copied, so the check and the build can't disagree (pre-QA r3 on #731)."""
+    try:
+        config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        value = config["tool"]["towncrier"]["start_string"]
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError, TypeError):
+        return None
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def changelog_problems(root: Path) -> list[str]:
-    """Why `CHANGELOG.md` isn't laid out as the build needs (pre-QA r2 on #731): one
-    `## Unreleased` heading with towncrier's start marker under it and nothing else in that
-    section. Without the marker the build writes the release above `# Changelog`; an entry
-    there would ship unchecked, and the release gate would refuse the tag only after the release
-    PR merged."""
+    """Why `CHANGELOG.md` isn't laid out as the build needs (pre-QA r2 and r3 on #731): one
+    `## Unreleased` heading, towncrier's `start_string` exactly once (newline included, as
+    towncrier matches it), inside that section, and nothing else there. Elsewhere, or with
+    trailing spaces, the build writes the release above `# Changelog` or into an older
+    version's notes; an entry there would reach only the tag gate, after the release PR
+    merged."""
+    start = _start_string(root)
+    if start is None:
+        return ["pyproject.toml has no [tool.towncrier] start_string, which the build needs."]
     try:
         text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         return [f"couldn't read CHANGELOG.md: {type(error).__name__}"]
+    marker = start.strip()
     found: list[str] = []
-    markers = text.count(MARKER)
-    if markers != 1:
+    headings = list(re.finditer(r"^## Unreleased[ \t]*$", text, re.MULTILINE))
+    if len(headings) != 1:
         found.append(
-            f"CHANGELOG.md holds {markers} of towncrier's start marker, {MARKER!r}; it needs "
-            "exactly one, on its own under '## Unreleased', where the release's section goes."
+            f"CHANGELOG.md has {len(headings)} '## Unreleased' headings; it needs exactly one, "
+            "above its releases, holding only towncrier's start marker."
         )
-    heading = re.search(r"^## Unreleased[ \t]*$", text, re.MULTILINE)
-    if heading is None:
-        found.append("CHANGELOG.md has no '## Unreleased' heading above its releases.")
+    if text.count(start) != 1:
+        found.append(
+            f"CHANGELOG.md holds {text.count(start)} of towncrier's start marker, {marker!r}, on "
+            "a line of its own; it needs exactly one, under '## Unreleased', where the "
+            "release's section goes."
+        )
+    if not headings:
         return found
-    rest = text[heading.end() :]
+    rest = text[headings[0].end() :]
     following = re.search(r"^## ", rest, re.MULTILINE)
     section = rest[: following.start() if following else None]
-    if section.replace(MARKER, "").strip():
+    if start not in section:
+        found.append(f"towncrier's start marker, {marker!r}, isn't under '## Unreleased'.")
+    if section.replace(start, "").replace(marker, "").strip():
         found.append(
             "CHANGELOG.md's '## Unreleased' holds something besides towncrier's marker: an "
             f"entry goes in a fragment, {DIRECTORY}/<PR>.<added|changed|fixed>.md ({_HOW})."

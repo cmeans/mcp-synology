@@ -28,7 +28,27 @@ def _dir(tmp_path: Path, files: dict[str, str]) -> Path:
         "# Changelog\n\n## Unreleased\n\n<!-- towncrier release notes start -->\n",
         encoding="utf-8",
     )
+    _pyproject(tmp_path, "1.0.0")
     return tmp_path
+
+
+_START = "<!-- towncrier release notes start -->"
+
+
+def _pyproject(root: Path, version: str) -> None:
+    (root / "pyproject.toml").write_text(
+        f'[project]\nversion = "{version}"\n\n[tool.towncrier]\nstart_string = "{_START}\\n"\n',
+        encoding="utf-8",
+    )
+
+
+def _release(root: Path, version: str) -> None:
+    """What a release PR's build leaves: the version bumped, its section under the marker."""
+    _pyproject(root, version)
+    (root / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n## Unreleased\n\n{_START}\n\n## {version} (2026-01-01)\n\n- x\n",
+        encoding="utf-8",
+    )
 
 
 def test_the_repos_own_fragments_pass() -> None:
@@ -144,11 +164,31 @@ def test_a_branch_that_adds_a_fragment_passes(branch: Path) -> None:
 
 
 def test_a_branch_that_removes_fragments_passes(branch: Path) -> None:
-    """A release PR's towncrier build deletes them."""
+    """A release PR's towncrier build deletes them, bumping the version and adding its section."""
     (branch / "changelog.d" / "700.fixed.md").unlink()
-    (branch / "CHANGELOG.md").write_text("## 1.0.0 (2026-01-01)\n", encoding="utf-8")
+    _release(branch, "1.1.0")
     _commit(branch)
     assert script.branch_problem(branch, "main", 731, []) is None
+
+
+def test_removing_the_last_fragment_without_a_release_is_refused(branch: Path) -> None:
+    """Pre-QA r3 on #731: "none left" alone let a PR delete another PR's last entry."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, [])
+    assert problem is not None and "isn't a release PR" in problem and "restore them" in problem
+
+
+def test_a_release_that_leaves_fragments_is_told_which(branch: Path) -> None:
+    (branch / "changelog.d" / "701.fixed.md").write_text("- **b** (#701): y\n", encoding="utf-8")
+    _commit(branch)
+    _git(branch, "branch", "-f", "base")
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    _release(branch, "1.1.0")
+    _commit(branch)
+    problem = script.branch_problem(branch, "base", 731, [])
+    assert problem is not None and "release PR (1.1.0) leaves 1" in problem, problem
+    assert "701.fixed.md" in problem and "merge main and run the build again" in problem
 
 
 def test_a_branch_that_only_edits_the_changelog_is_refused(branch: Path) -> None:
@@ -220,16 +260,16 @@ def test_a_release_fragment_isnt_a_prs_own(branch: Path) -> None:
 
 
 def test_removing_some_fragments_isnt_a_release(branch: Path) -> None:
-    """Pre-QA r2 on #731: only a release, which removes them all, passes by removing."""
+    """Without a version bump, removing fragments is refused and the advice is to restore them,
+    not to run the build (which would write a bogus release)."""
     (branch / "changelog.d" / "701.fixed.md").write_text("- **b** (#701): y\n", encoding="utf-8")
     _commit(branch)
     _git(branch, "branch", "-f", "base")
     (branch / "changelog.d" / "700.fixed.md").unlink()
     _commit(branch)
     problem = script.branch_problem(branch, "base", 731, [])
-    # Release-shaped: it names what's left and says to rebuild, not to add a fragment.
-    assert problem is not None and "leaves 1 (701.fixed.md)" in problem, problem
-    assert "merge main and run the build again" in problem
+    assert problem is not None and "restore them" in problem, problem
+    assert "run the build" not in problem
 
 
 def test_another_prs_fragment_renamed_to_ours_is_refused(branch: Path) -> None:
@@ -292,8 +332,27 @@ _HEAD = "# Changelog\n\n## Unreleased\n\n<!-- towncrier release notes start -->\
         ),
         (_HEAD + "- **stray** (#1): y\n\n## 1.0.0 (x)\n", "besides towncrier's marker"),
         (
+            "# Changelog\n\n## Unreleased\n\n"
+            "<!-- towncrier release notes start -->  \n\n## 1.0.0 (x)\n",
+            "0 of towncrier's start marker",
+        ),
+        (
+            "# Changelog\n\n"
+            "<!-- towncrier release notes start -->\n\n## Unreleased\n\n## 1.0.0 (x)\n",
+            "isn't under '## Unreleased'",
+        ),
+        (
+            "# Changelog\n\n## Unreleased\n\n## 1.0.0 (x)\n\n### Added\n\n"
+            "<!-- towncrier release notes start -->\n- y\n",
+            "isn't under '## Unreleased'",
+        ),
+        (
+            _HEAD + "## 1.0.0 (x)\n\n## Unreleased\n\n- **stray** (#1): y\n",
+            "2 '## Unreleased' headings",
+        ),
+        (
             "# Changelog\n\n<!-- towncrier release notes start -->\n\n## 1.0.0 (x)\n",
-            "no '## Unreleased'",
+            "0 '## Unreleased'",
         ),
     ],
 )
@@ -301,6 +360,7 @@ def test_the_changelogs_layout_is_checked(tmp_path: Path, text: str, says: str |
     """Pre-QA r2 on #731: without the marker the build writes above '# Changelog', and an entry
     under Unreleased would reach the tag gate only after the release PR merged."""
     (tmp_path / "CHANGELOG.md").write_text(text, encoding="utf-8")
+    _pyproject(tmp_path, "1.0.0")
     found = script.changelog_problems(tmp_path)
     if says is None:
         assert found == []
@@ -319,3 +379,40 @@ def test_check_runs_the_layout_check(tmp_path: Path, capsys: pytest.CaptureFixtu
     )
     assert script.main(["check"], root) == 1
     assert "start marker" in capsys.readouterr().out
+
+
+def test_the_towncrier_pins_agree() -> None:
+    """Pre-QA r3 on #731: CI's draft and the release build must run the same towncrier."""
+    import re as _re
+
+    pins = set()
+    for path in (
+        ROOT / ".github" / "workflows" / "ci.yml",
+        ROOT / "CLAUDE.md",
+        ROOT / "pyproject.toml",
+    ):
+        pins |= set(
+            _re.findall(r"towncrier==([0-9][0-9.]*[0-9])", path.read_text(encoding="utf-8"))
+        )
+    assert len(pins) == 1, pins
+
+
+def test_fragment_only_prs_skip_vdsm() -> None:
+    """Pre-QA r3 on #731: every PR adds a fragment, so a docs-only PR must still skip vdsm."""
+    vdsm = (ROOT / ".github" / "workflows" / "vdsm.yml").read_text(encoding="utf-8")
+    assert "^changelog\\.d/[^/]+\\.md$" in vdsm
+
+
+def test_a_version_bump_without_its_section_isnt_a_release(branch: Path) -> None:
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    _pyproject(branch, "1.1.0")
+    _commit(branch)
+    assert script.branch_problem(branch, "main", 731, []) is not None
+
+
+def test_a_section_without_a_version_bump_isnt_a_release(branch: Path) -> None:
+    """The version stays 1.0.0 (the base's), though the branch adds a '## 1.0.0 (' section."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    _release(branch, "1.0.0")
+    _commit(branch)
+    assert script.branch_problem(branch, "main", 731, []) is not None
