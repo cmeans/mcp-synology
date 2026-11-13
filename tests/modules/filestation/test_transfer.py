@@ -1943,15 +1943,25 @@ class TestLocalPathsShown:
 
     def test_quotation_marks_are_unicodes(self) -> None:
         """#711: `edge_quote` follows Unicode's Quotation_Mark property, plus a backtick, so a
-        mark Unicode adds is counted without a list of ours to update."""
+        mark Unicode adds is counted without a list of ours to update; a few look-alikes too."""
         import regex
 
         from mcp_synology.core.display import edge_quote
 
-        marks = [c for c in map(chr, range(0x110000)) if regex.match(r"\p{Quotation_Mark}", c)]
+        marks = regex.findall(r"\p{Quotation_Mark}", "".join(map(chr, range(0x110000))))
         assert len(marks) >= 30
-        assert all(edge_quote(f"{m}a") and edge_quote(f"a{m}") for m in [*marks, "`"])
+        # And the look-alikes Unicode doesn't give the property (pre-QA r1).
+        looks = [
+            "`",
+            "\uff40",
+            *map(chr, range(0x275B, 0x2761)),
+            *map(chr, range(0x1F676, 0x1F679)),
+        ]
+        assert all(edge_quote(f"{m}a") and edge_quote(f"a{m}") for m in [*marks, *looks])
         assert not edge_quote("a") and not edge_quote("a-b")
+        # A combining mark on a final quote doesn't hide it (pre-QA r1).
+        assert edge_quote("/s/a'\u0301") and edge_quote("/s/a\u00bb\u0301")
+        assert not edge_quote("/s/e\u0301")
 
     @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
     @pytest.mark.parametrize(
