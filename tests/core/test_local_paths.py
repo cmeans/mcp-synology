@@ -442,3 +442,60 @@ def test_a_loop_outside_is_refused_as_outside(
     text = str(exc.value)
     err = json.loads(text[text.index("{") :])["error"]
     assert err["code"] == code, err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_loop_in_a_root_spelled_through_a_link_stays_a_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA r2 on #712: `/home` -> `/var/home` (Fedora Atomic): a loop in the allowed folder,
+    spelled through the link, was refused as outside, with advice that couldn't help."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real_home = tmp_path / "var" / "home"
+    (real_home / "dl").mkdir(parents=True)
+    (tmp_path / "home").symlink_to(real_home)
+    real = Path.resolve
+
+    def resolve(self: Path, strict: bool = False) -> Path:
+        if "loopy" in self.parts:
+            raise RuntimeError(f"Symlink loop from {self!r}")
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    value = str(tmp_path / "home" / "dl" / "loopy" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots(
+            "Op", "local_path", value, Path(value), [real(real_home / "dl")], module="x"
+        )
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert "a symlink loop" in err["message"], err
+
+
+def test_a_relative_path_with_the_working_folder_gone_is_a_structured_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """QA r2 on #712: deciding inside or outside called getcwd() again, unguarded."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    def gone() -> str:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(os, "getcwd", gone)
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots(
+            "Op", "local_path", "rel/x", Path("rel/x"), [tmp_path.resolve()], module="x"
+        )
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err

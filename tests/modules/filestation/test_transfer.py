@@ -2107,15 +2107,17 @@ class TestLocalPathsShown:
                 if func.name == "_dest_name":
                     continue
                 for node in ast.walk(func):
-                    # A message argument (QA r1 on #712): `path_list`'s heading and items,
-                    # `refuse`'s text, `error_response`'s message (not `value=`, which is the
+                    # A message argument (QA r1 on #712), positional or by keyword (QA r2):
+                    # `path_list`'s heading and items, `refuse`'s text, `error_response`'s
+                    # message and suggestion (not `value=`, which is the
                     # caller's text as sent, nor `param=`), and in `server.py` a dict's values (the
                     # instructions' template variables, such as LOCAL MACHINE's `home_dir`).
                     sent: list[ast.expr] = []
+                    words = ("message", "suggestion", "what", "heading", "items")
                     if isinstance(node, ast.Call) and called(node) in ("path_list", "refuse"):
-                        sent = [*node.args]
+                        sent = [*node.args, *(k.value for k in node.keywords if k.arg in words)]
                     elif isinstance(node, ast.Call) and called(node) == "error_response":
-                        sent = [*node.args[1:]]
+                        sent = [*node.args[1:], *(k.value for k in node.keywords if k.arg in words)]
                     elif isinstance(node, ast.Dict) and module == "server.py":
                         sent = [v for v in node.values if v is not None]
                     for arg in sent:

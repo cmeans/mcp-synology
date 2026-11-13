@@ -295,13 +295,18 @@ def refuse_outside_roots(
     try:
         refused = outside_allowed_roots(path, roots)
     except ValueError as e:
-        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186). A path outside
-        # the allowed folders is refused as outside whatever it resolves to: a different
-        # error would tell the caller a loop exists there (#458; pre-QA r3 on #712).
+        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186). A path that
+        # leads outside the allowed folders is refused as outside: a different error would
+        # tell the caller a loop exists there (#458; pre-QA r3 on #712). Where it leads is
+        # `realpath`'s answer, which follows links as far as they go and stops at a loop
+        # without raising, so a loop in an allowed folder spelled through a link (`/home` for
+        # `/var/home`) stays a loop (QA r2). Anything it can't answer (an unknown ~user, the
+        # working folder gone) keeps the error below.
         if "\x00" not in value:
             try:
-                inside = lexically_inside(path, roots)
-            except (RuntimeError, ValueError):  # an unknown ~user: keep the error below
+                real = Path(os.path.realpath(Path(path).expanduser()))
+                inside = any(real == root or root in real.parents for root in roots)
+            except (OSError, RuntimeError, ValueError):
                 inside = True
             if not inside:
                 refuse(shown_local(value))
