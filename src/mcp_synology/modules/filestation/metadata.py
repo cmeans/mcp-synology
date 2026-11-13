@@ -321,10 +321,10 @@ async def get_dir_size(
     # files and 0 folders (seska, DSM 7.1.1), which reads as "empty"; so does a folder
     # the user is denied by an ACL or POSIX mode (vdsm 7.1, 7.2.2; #336), which getinfo
     # still reports, with read: false in its permissions. Check the path first.
-    # Best-effort: if getinfo gets a DSM error or an unreadable reply, or reports another
-    # code, DirSize runs; a finished status that carries errors is then mapped the same
-    # way, never read as 0 B. A network error ends the call, as it would at the DirSize
-    # start.
+    # If getinfo gets a DSM error code, or reports another entry code, it can't tell and
+    # DirSize runs; a finished status that carries errors is then mapped the same way,
+    # never read as 0 B. No answer (a transport error, a proxy's error status, a reply that
+    # isn't DSM's) ends the call (#705).
     try:
         entry = await _getinfo_entry(client, normalized)
     except SynologyError as e:

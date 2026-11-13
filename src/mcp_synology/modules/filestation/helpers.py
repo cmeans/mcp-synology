@@ -643,7 +643,9 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
         data = await client.request(
             "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
         )
-    except _NO_ANSWER:
+    except (*_NO_ANSWER, AuthenticationError):
+        # A refused re-login is the login's own answer, not "can't tell" (#448; pre-QA r1 on
+        # #705).
         raise
     except SynologyError as e:
         logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
@@ -685,7 +687,7 @@ async def _file_above(
                 data = await client.request(
                     "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
                 )
-            except _NO_ANSWER:
+            except (*_NO_ANSWER, AuthenticationError):
                 raise
             except SynologyError as e:
                 logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)

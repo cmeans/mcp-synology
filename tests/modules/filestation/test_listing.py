@@ -662,7 +662,20 @@ class TestListFiles:
 
     @respx.mock
     @pytest.mark.parametrize(
-        "getinfo", ["file", "folder", "missing", "502", "page", "connect", "dsm-error"]
+        "getinfo",
+        [
+            "file",
+            "folder",
+            "missing",
+            "502",
+            "page",
+            "connect",
+            "timeout",
+            "dsm-error",
+            "407",
+            "malformed",
+            "null",
+        ],
     )
     @pytest.mark.parametrize("path", ["/video/a.jpg", "video/a.jpg", "/video/a.jpg "])
     async def test_a_file_is_not_called_missing(
@@ -689,6 +702,16 @@ class TestListFiles:
                 return httpx.Response(200, json={"success": False, "error": {"code": 400}})
             if getinfo == "connect":
                 raise httpx.ConnectError("refused", request=request)
+            if getinfo == "timeout":
+                raise httpx.ReadTimeout("slow", request=request)
+            if getinfo == "407":  # an entry folder_kind can't read as file or missing
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [{"code": 407}]}}
+                )
+            if getinfo == "malformed":
+                return httpx.Response(200, json={"success": True, "data": {"files": ["x"]}})
+            if getinfo == "null":
+                return httpx.Response(200, json={"success": True, "data": {"files": None}})
             entry = (
                 {"code": 408}
                 if getinfo == "missing"
@@ -697,9 +720,9 @@ class TestListFiles:
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        caplog.set_level(logging.DEBUG, logger="mcp_synology.modules.filestation.listing")
-        if getinfo == "connect":
-            with pytest.raises(httpx.ConnectError):
+        caplog.set_level(logging.DEBUG, logger="mcp_synology.modules.filestation.helpers")
+        if getinfo in ("connect", "timeout"):
+            with pytest.raises(httpx.TransportError):
                 await list_files(mock_client, path=path)
             return
         with pytest.raises(ToolError) as exc_info:
@@ -712,9 +735,11 @@ class TestListFiles:
             return
         assert error["value"] == path
         # A check DSM refused is in the debug log (pre-QA on #515).
-        failed_check = "Couldn't check whether /video/a.jpg"
+        failed_check = "Couldn't check /video/a.jpg"  # folder_kind's (pre-QA r1 on #705)
         assert (failed_check in caplog.text) == (getinfo == "dsm-error")
-        if getinfo == "dsm-error":
+        # Pre-QA r1 on #705: an entry it can't read, or a malformed reply, can't tell either
+        # (it was "doesn't exist", or a raw AttributeError/TypeError).
+        if getinfo in ("dsm-error", "407", "malformed", "null"):
             assert error["code"] == "not_found"
             assert error["message"] == (
                 f"List files failed: DSM says {named} doesn't exist (DSM error 408), and "
@@ -738,6 +763,33 @@ class TestListFiles:
         else:
             assert error["code"] == "not_found"
             assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
+
+    @respx.mock
+    async def test_a_refused_relogin_during_the_408_check_is_the_logins_error(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r1 on #705: a refused re-login in the check read as "couldn't be checked",
+        not_found; it's the login's own error (#448)."""
+        from mcp_synology.core.errors import AuthenticationError
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 408}}
+        )
+        real = mock_client.request
+        checks: list[str] = []
+
+        async def request(api: str, method: str, **kwargs: Any) -> Any:
+            if method == "getinfo":  # only the check: List itself answers 408
+                checks.append(method)
+                raise AuthenticationError("Login refused", code=400)
+            return await real(api, method, **kwargs)
+
+        monkeypatch.setattr(mock_client, "request", request)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a")
+        error = json.loads(str(exc_info.value))["error"]
+        assert checks == ["getinfo"]
+        assert error["code"] == "auth_failed", error
 
     @pytest.mark.parametrize(
         ("getinfo", "code"),

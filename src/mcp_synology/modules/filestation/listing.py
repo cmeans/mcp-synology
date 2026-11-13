@@ -23,16 +23,15 @@ from mcp_synology.core.formatting import (
     then,
 )
 from mcp_synology.modules.filestation.helpers import (
+    FolderKind,
     correct_recycle_status_from_observation,
     dsm_str,
     ensure_recycle_status,
     file_type_icon,
     folder_kind,
     missing_paths_suggestion,
-    no_answer,
     normalize_path,
     path_exists,
-    paths_isdir,
     probe_recycle_status,
 )
 from mcp_synology.modules.filestation.paths import ResolvedPath
@@ -253,6 +252,14 @@ async def list_shares(
     return result
 
 
+async def _checked_kind(client: DsmClient, path: str) -> FolderKind | None:
+    """`folder_kind`, its no-answer and login errors named for list_files (#705)."""
+    try:
+        return await folder_kind(client, path)
+    except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's, a login
+        synology_error_response("List files", e)
+
+
 async def list_files(
     client: DsmClient,
     *,
@@ -310,7 +317,7 @@ async def list_files(
         # DSM answers 401 "Unknown error" for a path under a file (`…/file/child`, vdsm 7.1 to
         # 7.4.1, #517): one getinfo says it's missing, or a file, as for 408 below.
         if e.code == 401 and tell_files_apart and not isinstance(e, AuthenticationError):
-            kind = await folder_kind(client, normalized)
+            kind = await _checked_kind(client, normalized)
             if kind is not None and kind.kind == "missing":
                 blocked = f": {shown_path(kind.under_file)} is a file" if kind.under_file else ""
                 error_response(
@@ -336,24 +343,14 @@ async def list_files(
         if e.code == 408 and not isinstance(e, AuthenticationError):
             # DSM answers 408 for a file too, not only a missing path (seska DSM 7.1.1,
             # pre-QA on #515): one getinfo tells them apart.
-            isdir: bool | None = None
-            checked = not tell_files_apart  # nothing to tell apart: DSM's 408 stands
-            if tell_files_apart:
-                # No answer (a transport error, a proxy's error status or a reply that isn't
-                # DSM's) ends the call, as every check before a request does (#705, #704); a
-                # DSM error code can't tell, so the reply doesn't claim the path is missing.
-                try:
-                    isdir = (await paths_isdir(client, [normalized])).get(normalized)
-                    checked = True
-                except SynologyError as check_error:
-                    if no_answer(check_error):
-                        synology_error_response("List files", check_error)
-                    logger.debug(
-                        "Couldn't check whether %s is a file: %s: %s",
-                        normalized,
-                        type(check_error).__name__,
-                        check_error,
-                    )
+            # One check, `folder_kind`, as for 401 above (pre-QA r1 on #705): no answer (a
+            # transport error, a proxy's error status, a reply that isn't DSM's) or a refused
+            # re-login ends the call, as every check before a request does (#705, #704);
+            # anything it can't read (a DSM error code, another entry code, a malformed reply)
+            # can't tell, so the reply doesn't claim the path is missing.
+            kind = await _checked_kind(client, normalized) if tell_files_apart else None
+            checked = not tell_files_apart or kind is not None  # nothing to tell apart: 408
+            isdir = {"file": False, "folder": True}.get(kind.kind) if kind else None
             if isdir is False:
                 error_response(
                     ErrorCode.INVALID_PARAMETER,
