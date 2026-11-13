@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -176,7 +177,8 @@ def test_removing_the_last_fragment_without_a_release_is_refused(branch: Path) -
     (branch / "changelog.d" / "700.fixed.md").unlink()
     _commit(branch)
     problem = script.branch_problem(branch, "main", 731, [])
-    assert problem is not None and "isn't a release PR" in problem and "restore them" in problem
+    assert problem is not None and "only a release PR does" in problem and "restore them" in problem
+    assert "'no changelog' label" in problem
 
 
 def test_a_release_that_leaves_fragments_is_told_which(branch: Path) -> None:
@@ -188,7 +190,9 @@ def test_a_release_that_leaves_fragments_is_told_which(branch: Path) -> None:
     _commit(branch)
     problem = script.branch_problem(branch, "base", 731, [])
     assert problem is not None and "release PR (1.1.0) leaves 1" in problem, problem
-    assert "701.fixed.md" in problem and "merge main and run the build again" in problem
+    # towncrier won't rebuild a version already in CHANGELOG.md (pre-QA r4 on #731): by hand.
+    assert "701.fixed.md" in problem and "by hand" in problem
+    assert "run the build" not in problem
 
 
 def test_a_branch_that_only_edits_the_changelog_is_refused(branch: Path) -> None:
@@ -395,12 +399,20 @@ def test_the_towncrier_pins_agree() -> None:
             _re.findall(r"towncrier==([0-9][0-9.]*[0-9])", path.read_text(encoding="utf-8"))
         )
     assert len(pins) == 1, pins
+    for path in (ROOT / ".github" / "workflows" / "ci.yml", ROOT / "CLAUDE.md"):
+        assert "towncrier==" in path.read_text(encoding="utf-8"), path
 
 
 def test_fragment_only_prs_skip_vdsm() -> None:
     """Pre-QA r3 on #731: every PR adds a fragment, so a docs-only PR must still skip vdsm."""
     vdsm = (ROOT / ".github" / "workflows" / "vdsm.yml").read_text(encoding="utf-8")
-    assert "^changelog\\.d/[^/]+\\.md$" in vdsm
+    found = re.search(r"grep -qvE '([^']+)'", vdsm)
+    assert found is not None
+    docs_only = re.compile(found.group(1))
+    for path in ("changelog.d/731.fixed.md", "changelog.d/+security.release.md", "README.md"):
+        assert docs_only.search(path), path
+    for path in ("changelog.d/sub/731.fixed.md", "changelog.d/731.py", "src/x.md", "scripts/a.py"):
+        assert not docs_only.search(path), path
 
 
 def test_a_version_bump_without_its_section_isnt_a_release(branch: Path) -> None:
@@ -416,3 +428,33 @@ def test_a_section_without_a_version_bump_isnt_a_release(branch: Path) -> None:
     _release(branch, "1.0.0")
     _commit(branch)
     assert script.branch_problem(branch, "main", 731, []) is not None
+
+
+def test_its_own_fragment_doesnt_excuse_deleting_another(branch: Path) -> None:
+    """Pre-QA r4 on #731: the own-fragment pass ran before the removal rule."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    (branch / "changelog.d" / "731.fixed.md").write_text("- **x** (#731): y\n", encoding="utf-8")
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, [])
+    assert problem is not None and "700.fixed.md" in problem
+
+
+def test_a_release_section_already_on_the_base_isnt_a_release(branch: Path) -> None:
+    """Pre-QA r4 on #731: a step-7 follow-up (the base already holds '## 1.1.0 (') that
+    removes a fragment needs the label, not the release pass."""
+    _release(branch, "1.1.0")
+    (branch / "changelog.d" / "701.fixed.md").write_text("- **b** (#701): y\n", encoding="utf-8")
+    _commit(branch)
+    _git(branch, "branch", "-f", "base")
+    (branch / "changelog.d" / "701.fixed.md").unlink()
+    _commit(branch)
+    problem = script.branch_problem(branch, "base", 731, [])
+    assert problem is not None and "'no changelog' label" in problem
+    assert script.branch_problem(branch, "base", 731, ["no changelog"]) is None
+
+
+def test_long_lists_are_cut_short() -> None:
+    names = [f"{n}.fixed.md" for n in range(1, 13)]
+    assert script._named(names).endswith("and 2 more"), script._named(names)
+    assert "12.fixed.md" not in script._named(names)
+    assert "3.fixed.md" in script._named(names[:3])

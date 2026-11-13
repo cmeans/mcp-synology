@@ -134,6 +134,11 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
 _NOT_FRAGMENTS = frozenset({"README.md", "template.md"})
 
 
+def _named(names: list[str], limit: int = 10) -> str:
+    shown = ", ".join(names[:limit])
+    return shown if len(names) <= limit else f"{shown} and {len(names) - limit} more"
+
+
 def fragments_problem(root: Path) -> str | None:
     """Say which CHANGELOG fragments are still in `changelog.d/`, or None: the release PR's
     `towncrier build` assembles them into the version's notes and deletes them (#731), so one
@@ -145,10 +150,11 @@ def fragments_problem(root: Path) -> str | None:
     if not left:
         return None
     return (
-        f"changelog.d/ still holds {len(left)} fragment(s) ({', '.join(left)}), changes that "
+        f"changelog.d/ still holds {len(left)} fragment(s) ({_named(left)}), changes that "
         f"aren't in this version's notes: assemble them in the release PR (see {_RELEASE_STEPS}). "
         "If this is the release PR's own squash commit, they merged after its build: move them "
-        "into the version's notes in a PR that deletes them, and tag that PR's squash commit. If "
+        "into the version's notes in a PR that deletes them (it takes the 'no changelog' label), "
+        "and tag that PR's squash commit. If "
         "it's a later commit, tag the release PR's squash commit."
     )
 

@@ -5,8 +5,8 @@ Each PR writes its CHANGELOG entry as a file there, and the release PR assembles
 towncrier (CLAUDE.md, "Bumping the version for a release"). towncrier's own checks leave two gaps
 this one closes: `towncrier build` would leave a misnamed file out of the notes (here it's
 refused), and `towncrier check` passes any PR that edits `CHANGELOG.md` (here a PR passes only by
-adding or changing a fragment named for its own number, by removing fragments as a release PR
-does, or with the `no changelog` label).
+adding or changing a fragment named for its own number and removing none, as a release PR that
+assembled every fragment, or with the `no changelog` label).
 
 Standard library only. Each problem prints as a GitHub Actions error.
 
@@ -98,9 +98,9 @@ def _outside_code(lines: list[str]) -> list[str]:
 
 def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | None:
     """Why this branch needs a fragment it doesn't have, or None: it adds or changes one named for
-    PR ``pr`` (`<pr>.<type>[.N].md`), removes fragments (a release PR's build does), or has the
-    skip label. Another PR's fragment doesn't count: editing it would lose that entry, and one
-    named for an issue would cite the wrong number in the notes (pre-QA r1 on #731)."""
+    PR ``pr`` (`<pr>.<type>[.N].md`) and removes none, is a release PR that assembled them all,
+    or has the skip label. Another PR's fragment doesn't count: editing it would lose that entry,
+    and one named for an issue would cite the wrong number in the notes (pre-QA r1 on #731)."""
     if SKIP_LABEL in labels:
         return None
     try:
@@ -125,45 +125,65 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
     except (OSError, subprocess.CalledProcessError) as error:
         return f"couldn't list this branch's changes against {base}: {type(error).__name__}"
     removed: list[str] = []
+    own = False
     for line in changed:
         status, _, path = line.partition("\t")
         name = Path(path).name
         if name in NOT_FRAGMENTS:
             continue
-        if status == "D":
-            removed.append(name)
-            continue
         entry = _ENTRY.fullmatch(name)
+        if status == "D":
+            # Its own fragment, moved to another category or rewritten, is no other PR's loss.
+            if not (entry and entry.group("pr") == str(pr)):
+                removed.append(name)
+            continue
         # A release's own text (+<name>.release.md) never counts: the release PR's build removes
         # it with the rest, so counting it only let any PR pass by adding one (pre-QA r2 on #731).
         if status in ("A", "M") and entry and entry.group("pr") == str(pr):
-            return None
+            own = True
+    # Removals first: a PR's own fragment doesn't excuse deleting another's (pre-QA r4 on #731).
     if removed:
-        # Only a release PR removes fragments: one that bumps the version and adds its section
-        # (pre-QA r3 on #731; "none left" alone let a PR delete another PR's last entry).
-        release = _release_version(root, base)
-        left = _fragments_left(root)
-        if release and not left:
-            return None
-        if release:
-            return (
-                f"this release PR ({release}) leaves {len(left)} CHANGELOG fragment(s) "
-                f"({', '.join(left)}), most likely merged after its build: merge main and run "
-                "the build again."
-            )
-        return (
-            f"this PR removes CHANGELOG fragments ({', '.join(sorted(removed))}) but isn't a "
-            "release PR (it doesn't bump pyproject.toml's version and add that version's "
-            "section): restore them, then add its own entry as "
-            f"{DIRECTORY}/{pr}.<added|changed|fixed>.md. A backport's carry-back, which removes "
-            f"the entries it ships, takes the {SKIP_LABEL!r} label (ask the maintainer)."
-        )
+        return _removal_problem(root, base, removed)
+    if own:
+        return None
     return (
         "this PR adds no CHANGELOG fragment of its own: add "
         f"{DIRECTORY}/{pr}.<added|changed|fixed>.md "
         f"({_HOW}; an entry in CHANGELOG.md, or another PR's fragment, doesn't count), or, for a "
         f"change that needs no entry, ask the maintainer for the {SKIP_LABEL!r} label, then rerun "
         "this job."
+    )
+
+
+def _named(names: list[str], limit: int = 10) -> str:
+    """``names`` for a message, the first ``limit`` and a count of the rest."""
+    shown = ", ".join(names[:limit])
+    return shown if len(names) <= limit else f"{shown} and {len(names) - limit} more"
+
+
+def _removal_problem(root: Path, base: str, removed: list[str]) -> str | None:
+    """Why a PR that removes fragments can't pass as it is, or None for a release PR that
+    assembled them all. Only a release removes fragments without the label (pre-QA r3 and r4 on
+    #731): a release is a branch that bumps `pyproject.toml`'s version and adds its
+    `## <version> (` section. Every other removal (a revert, a backport's carry-back, moving
+    late fragments into a release's notes) is a judgment the maintainer makes with the label."""
+    release = _release_version(root, base)
+    left = _fragments_left(root)
+    if release and not left:
+        return None
+    if release:
+        # A rebuild is refused (towncrier: "already produced newsfiles for this version").
+        return (
+            f"this release PR ({release}) leaves {len(left)} CHANGELOG fragment(s) "
+            f"({_named(left)}), most likely merged to main after its build: merge main, move each "
+            f"one's entry into the '## {release}' section by hand and delete the file."
+        )
+    return (
+        f"this PR removes CHANGELOG fragments ({_named(sorted(removed))}), which only a release "
+        "PR does (one that bumps pyproject.toml's version and adds its section). If that was a "
+        "mistake, restore them. If it's meant (a revert dropping the reverted PR's entry, a "
+        "backport's carry-back, or moving fragments that merged after a release's build into its "
+        f"notes), ask the maintainer for the {SKIP_LABEL!r} label, then rerun this job."
     )
 
 
