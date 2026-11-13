@@ -709,14 +709,15 @@ class TestGetPhoto:
                 "razr · lens — · f/1.5 · 1/30 s · ISO 500",
             ),
             ({"camera": "SeedCam"}, "SeedCam · lens — · aperture — · exposure — · ISO —"),
-            # Not a bare number: shown as sent, never a doubled unit.
+            # Not a bare number: never a doubled unit; not DSM's own form either, so quoted
+            # (these slots have no label: pre-QA r1 on #710).
             (
                 {"camera": "x", "aperture": "2.8 (max)"},
-                "x · lens — · 2.8 (max) · exposure — · ISO —",
+                'x · lens — · "2.8 (max)" · exposure — · ISO —',
             ),
             (
                 {"camera": "x", "exposure_time": "0.5 sec"},
-                "x · lens — · aperture — · 0.5 sec · ISO —",
+                'x · lens — · aperture — · "0.5 sec" · ISO —',
             ),
             ({"aperture": "", "exposure_time": ""}, "—"),
         ],
@@ -741,6 +742,28 @@ class TestGetPhoto:
                 {"camera": "x", "aperture": "F2 · 1 s", "exposure_time": 'a"b'},
                 'x · lens — · "F2 · 1 s" · "a\\"b" · ISO —',
             ),
+            # Pre-QA r1: an unlabeled slot holding another field's text, a value that makes
+            # the separator with the label or the join beside it, and the placeholders.
+            (
+                {"camera": "x", "aperture": "lens EF 50mm", "exposure_time": "ISO 3200"},
+                'x · lens — · "lens EF 50mm" · "ISO 3200" · ISO —',
+            ),
+            (
+                {"camera": "x", "lens": "· F1.0"},
+                'x · lens "· F1.0" · aperture — · exposure — · ISO —',
+            ),
+            (
+                {"camera": "x", "iso": "· 1/8000 s"},
+                'x · lens — · aperture — · exposure — · ISO "· 1/8000 s"',
+            ),
+            (
+                {"camera": "Canon ·", "lens": "EF"},
+                '"Canon ·" · lens EF · aperture — · exposure — · ISO —',
+            ),
+            (
+                {"camera": "x", "lens": "—", "aperture": "aperture —"},
+                'x · lens "—" · "aperture —" · exposure — · ISO —',
+            ),
             # NFC: U+0387 normalizes to "·" (as quoted_name checks names).
             ({"camera": "a \u0387 b"}, '"a \u0387 b" · lens — · aperture — · exposure — · ISO —'),
         ],
@@ -761,6 +784,10 @@ class TestGetPhoto:
         }
         assert _location(add) == '48.85, 2.35 · "Paris · 0, 0", France'
         assert _location({"address": {"city": "Paris", "country": "France"}}) == "Paris, France"
+        # Pre-QA r1: ", " alone, and the coordinates.
+        washington = {"address": {"city": "Washington, D.C.", "country": "USA"}}
+        assert _location(washington) == '"Washington, D.C.", USA'
+        assert _location({"gps": {"latitude": "1, 2", "longitude": 3}}) == '"1, 2", 3'
 
     @respx.mock
     async def test_favorite_on_191(self) -> None:

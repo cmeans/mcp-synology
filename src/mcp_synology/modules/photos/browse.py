@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import TYPE_CHECKING, Any
 
+from mcp_synology.core.display import json_quoted
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
     cut_escaped,
@@ -740,6 +742,22 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
 # quoted, so it can't read as parts of its own (#710).
 _LOCATION_MARKS = (", ", " · ")
 _CAMERA_MARKS = (" · ",)
+_MISSING = "—"
+
+
+def _part(value: object, marks: tuple[str, ...], *placeholders: str) -> str:
+    """One part of the Location or Camera line, JSON-quoted as `quoted_name` quotes a name
+    when it's needed (#710): when it holds one of the line's ``marks``, also with the space
+    the line writes around it (`· F1.0` after `lens ` makes a separator of its own, pre-QA
+    r1), or is one of the line's placeholders (``—``, ``aperture —``), which would read as
+    missing. ``""`` for no value."""
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    padded = unicodedata.normalize("NFC", f" {text} ")
+    if text in (_MISSING, *placeholders) or any(m in padded for m in marks):
+        return json_quoted(text)
+    return quoted_name(text, "", marks=marks)
 
 
 def _location(add: dict[str, Any]) -> str:
@@ -747,28 +765,26 @@ def _location(add: dict[str, Any]) -> str:
     address = add.get("address") or {}
     parts = []
     if gps.get("latitude") is not None and gps.get("longitude") is not None:
-        lat, lon = (
-            quoted_name(gps[k], "—", marks=_LOCATION_MARKS) for k in ("latitude", "longitude")
-        )
+        lat, lon = (_part(gps[k], _LOCATION_MARKS) for k in ("latitude", "longitude"))
         parts.append(f"{lat}, {lon}")
     names = [str(address[k]) for k in _ADDRESS_PARTS if address.get(k)]
     if names:
-        parts.append(", ".join(quoted_name(n, marks=_LOCATION_MARKS) for n in dict.fromkeys(names)))
-    return " · ".join(parts) or "—"
+        parts.append(", ".join(_part(n, _LOCATION_MARKS) for n in dict.fromkeys(names)))
+    return " · ".join(parts) or _MISSING
 
 
-# A number or fraction with no unit ("1.5", "1/30"); anything else is shown as DSM sent it.
+# A number or fraction with no unit ("1.5", "1/30"), which gets one.
 _BARE_NUMBER = re.compile(r"[0-9]+(?:[./][0-9]+)?")
+# DSM's own forms, after the unit is added: "F1.5", "f/1.5"; "1/30 s", "2 s". The aperture
+# and exposure slots have no label, so any other value is quoted: `lens EF 50mm` there
+# would read as a second lens field (pre-QA r1 on #710).
+_APERTURE_FORM = re.compile(r"(?:F|f/)[0-9]+(?:\.[0-9]+)?")
+_EXPOSURE_FORM = re.compile(r"[0-9]+(?:[./][0-9]+)? s")
 
 
 def _camera(exif: dict[str, Any]) -> str:
     """The Camera line. Each value is EXIF text from the file, which whoever made it chose, so
-    one holding the line's ` · ` (or a quote) is quoted (#710)."""
-
-    def text(value: str) -> str:
-        return quoted_name(value, "", marks=_CAMERA_MARKS)
-
-    camera = str(exif.get("camera") or "")
+    one that could read as the line's structure is quoted (#710)."""
     # Photos sends these formatted: "F1.5", "1/30 s" on 1.3.4 (DSM 7.1.1); "F2.8", "1/2 s"
     # on 1.9.1 (vdsm DSM 7.2.2). Add the unit only when it's missing, so a bare number
     # still reads right.
@@ -778,15 +794,23 @@ def _camera(exif: dict[str, Any]) -> str:
     exposure = str(exif.get("exposure_time") or "")
     if _BARE_NUMBER.fullmatch(exposure):
         exposure = f"{exposure} s"
+
+    def unlabeled(value: str, form: re.Pattern[str], placeholder: str) -> str:
+        if not value:
+            return placeholder
+        return value if form.fullmatch(value) else json_quoted(value)
+
     details = [
-        f"lens {text(str(exif.get('lens') or '')) or '—'}",
-        text(aperture) or "aperture —",
-        text(exposure) or "exposure —",
-        f"ISO {text(str(exif.get('iso') or '')) or '—'}",
+        f"lens {_part(exif.get('lens') or '', _CAMERA_MARKS) or _MISSING}",
+        unlabeled(aperture, _APERTURE_FORM, "aperture —"),
+        unlabeled(exposure, _EXPOSURE_FORM, "exposure —"),
+        f"ISO {_part(exif.get('iso') or '', _CAMERA_MARKS) or _MISSING}",
     ]
-    if not camera and not any(exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")):
-        return "—"
-    return " · ".join([text(camera) or "—", *details])
+    if not exif.get("camera") and not any(
+        exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")
+    ):
+        return _MISSING
+    return " · ".join([_part(exif.get("camera") or "", _CAMERA_MARKS) or _MISSING, *details])
 
 
 async def _exif_table(ph: Photos, item_id: int) -> str:

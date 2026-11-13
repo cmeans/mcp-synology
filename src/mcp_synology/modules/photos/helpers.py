@@ -76,7 +76,9 @@ def quoted_name(
     beside_id: bool = False,
     marks: tuple[str, ...] = _NAME_MARKS,
 ) -> str:
-    """An album's, person's, tag's, place's or request's name in a line of a reply: as is,
+    """An album's, person's, tag's, place's or request's name in a line of a reply (or another
+    value a line writes beside its own separators, such as get_photo's EXIF and address parts,
+    #710, with ``marks``): as is,
     or JSON-quoted (`json_quoted`, #695) only when it's needed (maintainer, 2026-11-12, on
     #709), as `shown_folder` does for a folder. Needed when the name:
 
