@@ -1265,8 +1265,9 @@ from Photos: name what will go and confirm with the user first. A long copy, mov
 hands off with a photos:<id> handle; follow up with photo_task."""
 
 
-# Only without File Station, whose PATH FORMAT says it of every reply (#708): Download
-# Station's replies quote a destination folder or a file name through `shown()` too.
+# Only when the Download Station WRITE tools are registered (#708): create_download and
+# edit_download quote a destination folder or a .torrent file's name through `shown()`, and
+# File Station's PATH FORMAT speaks of its own /share/... paths, so it's sent beside it too.
 _DOWNLOADSTATION_NOTICE = """
 
 DOWNLOAD STATION:
@@ -1284,11 +1285,11 @@ free space, start with get_storage_overview."""
 
 
 def _downloadstation_notice(plan: _ModulePlan) -> str:
-    """What a quoted folder or file name in a Download Station reply means, when the module is
-    enabled without File Station (#708)."""
-    names = {name for name, *_ in plan}
-    if "downloadstation" in names and "filestation" not in names:
-        return _DOWNLOADSTATION_NOTICE
+    """What a quoted folder or file name in a Download Station reply means, when its WRITE
+    tools, the ones that quote, are registered (#708)."""
+    for name, module, _, allowed in plan:
+        if name == "downloadstation" and _writes_registered(module, allowed):
+            return _DOWNLOADSTATION_NOTICE
     return ""
 
 
