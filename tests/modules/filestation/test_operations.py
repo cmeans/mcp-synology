@@ -149,6 +149,98 @@ class TestCreateFolder:
         assert "Created 2 folder(s)" in result
 
 
+class TestCreateFolderPartWay:
+    """#713: a later path's failure left the earlier folders on the NAS, and the error named only
+    the failing path, so a model read it as nothing created."""
+
+    @staticmethod
+    def _dsm(fail: dict[str, int], files: tuple[str, ...] = ()) -> Any:
+        """CreateFolder refuses a name in ``fail`` with its code; getinfo shows ``files`` as files
+        and answers 401 under them (vdsm 7.1, #702), any other path as a folder."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "create":
+                name = json.loads(params["name"])
+                if name in fail:
+                    return httpx.Response(
+                        200, json={"success": False, "error": {"code": fail[name]}}
+                    )
+                path = f"{params['folder_path'].rstrip('/')}/{name}"
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": path}]}}
+                )
+            path = params.get("path", "")
+            if path in files:
+                entry: dict[str, Any] = {"path": path, "isdir": False}
+            elif any(path.startswith(f + "/") for f in files):
+                entry = {"path": path, "code": 401}
+            else:
+                entry = {"path": path, "isdir": True}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        return side_effect
+
+    @respx.mock
+    async def test_a_dsm_error_names_what_was_created_and_not_tried(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": 418}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a", "/video/b", "/video/c"])
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "invalid_parameter"
+        assert error["retryable"] is False
+        assert error["message"] == (
+            "Create folder failed (DSM error 418): Illegal name or path. "
+            "Already created before this failure: /video/a. Not tried: /video/c."
+        )
+
+    @respx.mock
+    async def test_the_under_a_file_refusal_names_them_too(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"x": 1100}, files=("/video/f.txt",))
+        )
+        paths = ["/video/new1", "/video/new2", "/video/f.txt/x", "/video/d", "/video/e"]
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=paths)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            "Create folder failed: /video/f.txt/x can't be created: /video/f.txt is a file.\n"
+            "Already created before this failure:\n  /video/new1\n  /video/new2\n"
+            "Not tried:\n  /video/d\n  /video/e"
+        )
+
+    @respx.mock
+    async def test_the_first_path_failing_names_the_rest(self, mock_client: DsmClient) -> None:
+        """Nothing was created: retryable stays DSM's, and the rest are named as not tried."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"a": 418}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a", "/video/b"])
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "Already created" not in message
+        assert message.endswith(". Not tried: /video/b."), message
+
+    @respx.mock
+    async def test_one_path_keeps_the_error_as_it_was(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"a": 418}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a"])
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "Already created" not in message and "Not tried" not in message
+
+    @respx.mock
+    async def test_a_created_folder_holding_a_separator_is_quoted(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": 418}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a, z", "/video/b"])
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "Already created before this failure: '/video/a, z'." in message, message
+
+
 class TestNewNamesWithPadding:
     """#488 (C): a name the tool would create with whitespace at its start or end is
     refused. DSM keeps it exactly, so `report.pdf ` would be a different file, which a model

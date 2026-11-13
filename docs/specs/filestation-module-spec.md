@@ -589,6 +589,8 @@ Create one or more new folders.
   📁 /video/TV Shows/New Show/Season 1
 ```
 
+**A later path refused (#713):** the folders are created one request at a time, in order (#95), so a refusal leaves the earlier ones on the NAS. The error (DSM's, or the under-a-file refusal, #702) then names them, `Already created before this failure:`, and the paths it didn't try, `Not tried:`, each through `path_list` (one inline, two or more one a line, #693), and isn't retryable once something was created: the same list again would meet those as existing. A transport error (no answer from the NAS) on a later path still escapes as the server's own error, without the lists (the folder it was creating may or may not exist).
+
 ---
 
 ### 11. `rename`
