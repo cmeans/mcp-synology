@@ -27,7 +27,7 @@
   as it would read in CHANGELOG.md (per CLAUDE.md § "Adding a CHANGELOG entry
   on every PR" and changelog.d/README.md). Never edit CHANGELOG.md itself: the
   release PR assembles the fragments. CI checks the fragment; a PR that needs
-  no entry gets the `no changelog` label.
+  no entry asks the maintainer for the `no changelog` label.
 -->
 
 - [ ] Added `changelog.d/<PR>.<added|changed|fixed>.md` (or, for a release PR, assembled the fragments into the version's notes)

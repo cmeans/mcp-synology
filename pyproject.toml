@@ -137,7 +137,8 @@ issue_format = ""
 wrap = false
 all_bullets = false
 orphan_prefix = "+"
-# Not fragments: anything else in changelog.d makes `towncrier build` fail, not skip it.
+# Not fragments. For most other names `towncrier build` fails; a few (a `.txt`, a leading zero)
+# it drops silently, which scripts/changelog_fragments.py refuses.
 ignore = ["README.md", "template.md"]
 
 # A release's free text (a `**Security release:** …` line, an Upgrading block), written before

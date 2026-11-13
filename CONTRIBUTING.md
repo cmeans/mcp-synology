@@ -111,12 +111,15 @@ Every PR must:
   feature, cover the new code paths. Test files mirror source files
   (`src/mcp_synology/modules/filestation/listing.py` →
   `tests/modules/filestation/test_listing.py`).
-- **Add a CHANGELOG entry** under `## Unreleased` in
-  [`CHANGELOG.md`](CHANGELOG.md), categorized `### Added` (new
-  feature, including tests and docs), `### Changed` (behavior change),
-  or `### Fixed` (bug fix). Reference the PR number and any closed
-  issue: `- ... (#NN) — closes #MM`. A release PR, and any fix made for
-  it before the tag, puts its entries in the version's notes instead.
+- **Add a CHANGELOG entry** as a fragment, a file of its own in
+  [`changelog.d/`](changelog.d/README.md), never in `CHANGELOG.md`
+  itself: `changelog.d/<PR number>.added.md` (new feature, including
+  tests and docs), `.changed.md` (behavior change) or `.fixed.md` (bug
+  fix), holding one line, `- **Title** (#NN): ... — closes #MM`. Open
+  the PR first if you need its number, then add the file. CI checks it;
+  a PR that needs no entry can ask the maintainer for the `no changelog`
+  label. A release PR, and any fix made for it before the tag, puts its
+  entries in the version's notes instead.
 - **Link the issue** with `Closes #N` in the PR body so merging
   auto-closes it.
 - **Pass CI locally first** — run `uv run pytest -n auto`, `uv run ruff
@@ -147,9 +150,8 @@ Two required sections:
 
     ## CHANGELOG
 
-    - [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the
-      appropriate Keep-a-Changelog category (Added / Changed / Fixed), or
-      for a release PR, in the version's notes
+    - [ ] Added `changelog.d/<PR>.<added|changed|fixed>.md` (or, for a
+      release PR, assembled the fragments into the version's notes)
 
     Closes #N
 

@@ -48,10 +48,13 @@ jobs:
         run: python scripts/sync-server-json.py --check
 
   # CHANGELOG fragments (#731): every file in changelog.d is a fragment towncrier will assemble,
-  # a PR adds one (or has the `no changelog` label: add it, then rerun this job), and the next
-  # release's notes still build with the pinned towncrier.
+  # a PR adds one named for its own number (or has the `no changelog` label: the maintainer adds
+  # it, then reruns this job), and the next release's notes still build with the pinned towncrier.
   changelog:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,10 +66,15 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$EVENT" = "pull_request" ]; then
-            python scripts/changelog_fragments.py check --base "$BASE" --labels "$LABELS"
+            # The PR's labels as they are now, not the event's: a rerun after the label is added
+            # replays the old payload (as qa-gate.yml reads them).
+            LABELS=$(gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name] | join(",")')
+            python scripts/changelog_fragments.py check --base "$BASE" --pr "$PR" --labels "$LABELS"
           else
             python scripts/changelog_fragments.py check
           fi

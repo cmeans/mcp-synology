@@ -86,6 +86,8 @@ def test_a_folder_is_refused(tmp_path: Path) -> None:
         ("**Title** (#731): no bullet\n", "starts with `- `"),
         ("### Fixed\n\n- **x** (#731): y\n", "heading"),
         ("- **x** (#731): y\n- **z** (#731): w\n", "more than one entry"),
+        ("- **x** (#731): y\n* **z** (#731): w\n", "more than one entry"),
+        ("- **x** (#731): y\n+ **z** (#731): w\n", "more than one entry"),
         ("- **x** (#732): the wrong PR\n", "isn't #731"),
         ("- **x**: no number at all\n", "isn't #731"),
     ],
@@ -134,7 +136,7 @@ def _commit(root: Path) -> None:
 def test_a_branch_that_adds_a_fragment_passes(branch: Path) -> None:
     (branch / "changelog.d" / "731.fixed.md").write_text("- **x** (#731): y\n", encoding="utf-8")
     _commit(branch)
-    assert script.branch_problem(branch, "main", []) is None
+    assert script.branch_problem(branch, "main", 731, []) is None
 
 
 def test_a_branch_that_removes_fragments_passes(branch: Path) -> None:
@@ -142,40 +144,122 @@ def test_a_branch_that_removes_fragments_passes(branch: Path) -> None:
     (branch / "changelog.d" / "700.fixed.md").unlink()
     (branch / "CHANGELOG.md").write_text("## 1.0.0 (2026-01-01)\n", encoding="utf-8")
     _commit(branch)
-    assert script.branch_problem(branch, "main", []) is None
+    assert script.branch_problem(branch, "main", 731, []) is None
 
 
 def test_a_branch_that_only_edits_the_changelog_is_refused(branch: Path) -> None:
     """towncrier check passes this; the entry belongs in a fragment."""
     (branch / "CHANGELOG.md").write_text("- **x** (#731): y\n", encoding="utf-8")
     _commit(branch)
-    problem = script.branch_problem(branch, "main", [])
+    problem = script.branch_problem(branch, "main", 731, [])
     assert problem is not None and "adds no CHANGELOG fragment" in problem
 
 
 def test_the_readme_or_template_alone_isnt_a_fragment(branch: Path) -> None:
     (branch / "changelog.d" / "README.md").write_text("more\n", encoding="utf-8")
     _commit(branch)
-    assert script.branch_problem(branch, "main", []) is not None
+    assert script.branch_problem(branch, "main", 731, []) is not None
 
 
 def test_the_skip_label_passes(branch: Path) -> None:
     (branch / "x.txt").write_text("x\n", encoding="utf-8")
     _commit(branch)
-    assert script.branch_problem(branch, "main", ["bug", "no changelog"]) is None
+    assert script.branch_problem(branch, "main", 731, ["bug", "no changelog"]) is None
 
 
 def test_an_unknown_base_is_refused_not_passed(branch: Path) -> None:
-    problem = script.branch_problem(branch, "no-such-ref", [])
+    problem = script.branch_problem(branch, "no-such-ref", 731, [])
     assert problem is not None and "couldn't list" in problem
 
 
 def test_main_reports_every_problem(branch: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (branch / "changelog.d" / "bad.md").write_text("x\n", encoding="utf-8")
     _commit(branch)
-    assert script.main(["check", "--base", "main", "--labels", ""], branch) == 1
+    assert script.main(["check", "--base", "main", "--pr", "731", "--labels", ""], branch) == 1
     out = capsys.readouterr().out
-    assert out.count("::error::") == 1  # bad.md counts as a change, so the branch check passes
+    # bad.md is misnamed, and isn't the PR's own fragment either.
+    assert out.count("::error::") == 2
     ok = branch.parent / "ok"
     ok.mkdir()
     assert script.main(["check"], _dir(ok, {})) == 0
+
+
+def test_another_prs_fragment_doesnt_count(branch: Path) -> None:
+    """Pre-QA r1 on #731: rewriting 700.fixed.md would lose #700's entry."""
+    (branch / "changelog.d" / "700.fixed.md").write_text("- **new** (#700): y\n", encoding="utf-8")
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, [])
+    assert problem is not None and "of its own" in problem
+
+
+def test_a_fragment_named_for_an_issue_doesnt_count(branch: Path) -> None:
+    """The notes would cite #730, the issue, not the PR."""
+    (branch / "changelog.d" / "730.fixed.md").write_text("- **x** (#730): y\n", encoding="utf-8")
+    _commit(branch)
+    assert script.branch_problem(branch, "main", 731, []) is not None
+
+
+def test_a_second_entry_of_its_own_counts(branch: Path) -> None:
+    (branch / "changelog.d" / "731.added.1.md").write_text("- **x** (#731): y\n", encoding="utf-8")
+    _commit(branch)
+    assert script.branch_problem(branch, "main", 731, []) is None
+
+
+def test_a_release_fragment_counts(branch: Path) -> None:
+    """A release PR writes +security.release.md before its build."""
+    (branch / "changelog.d" / "+security.release.md").write_text(
+        "**Security release:** x\n", encoding="utf-8"
+    )
+    _commit(branch)
+    assert script.branch_problem(branch, "main", 731, []) is None
+
+
+def test_removing_some_fragments_isnt_a_release(branch: Path) -> None:
+    """Pre-QA r2 on #731: only a release, which removes them all, passes by removing."""
+    (branch / "changelog.d" / "701.fixed.md").write_text("- **b** (#701): y\n", encoding="utf-8")
+    _commit(branch)
+    _git(branch, "branch", "-f", "base")
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    _commit(branch)
+    assert script.branch_problem(branch, "base", 731, []) is not None
+
+
+def test_another_prs_fragment_renamed_to_ours_is_refused(branch: Path) -> None:
+    """The renamed file still cites #700, so the content check refuses it."""
+    (branch / "changelog.d" / "700.fixed.md").rename(branch / "changelog.d" / "731.fixed.md")
+    _commit(branch)
+    found = script.fragment_problems(branch)
+    assert any("isn't #731" in problem for problem in found), found
+
+
+def test_base_needs_pr(branch: Path) -> None:
+    with pytest.raises(SystemExit):
+        script.main(["check", "--base", "main"], branch)
+
+
+def test_the_three_lists_of_non_fragments_agree() -> None:
+    """Pre-QA r1 on #731: towncrier's ignore list and the two scripts' copies drift apart only
+    at release time, when the gate would refuse the tag."""
+    import tomllib
+
+    _gate_spec = importlib.util.spec_from_file_location(
+        "check_release_for_lists", ROOT / "scripts" / "check_release.py"
+    )
+    assert _gate_spec and _gate_spec.loader
+    gate = importlib.util.module_from_spec(_gate_spec)
+    _gate_spec.loader.exec_module(gate)
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    ignored = frozenset(pyproject["tool"]["towncrier"]["ignore"])
+    assert ignored == script.NOT_FRAGMENTS == gate._NOT_FRAGMENTS
+
+
+def test_moving_its_own_entry_to_another_category_counts(branch: Path) -> None:
+    """--no-renames: git would call 731.added.md -> 731.fixed.md a rename, which matches
+    nothing; as a removal plus an addition, the addition is the PR's own fragment."""
+    _git(branch, "branch", "-f", "base")
+    (branch / "changelog.d" / "731.added.md").write_text("- **x** (#731): y\n", encoding="utf-8")
+    _commit(branch)
+    _git(branch, "branch", "-f", "base")
+    (branch / "changelog.d" / "731.added.md").rename(branch / "changelog.d" / "731.fixed.md")
+    _commit(branch)
+    assert script.branch_problem(branch, "base", 731, []) is None

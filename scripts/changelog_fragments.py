@@ -5,13 +5,14 @@ Each PR writes its CHANGELOG entry as a file there, and the release PR assembles
 towncrier (CLAUDE.md, "Bumping the version for a release"). towncrier's own checks leave two gaps
 this one closes: `towncrier build` would leave a misnamed file out of the notes (here it's
 refused), and `towncrier check` passes any PR that edits `CHANGELOG.md` (here a PR passes only by
-adding, changing or removing a fragment, or with the `no changelog` label).
+adding or changing a fragment named for its own number, by removing fragments as a release PR
+does, or with the `no changelog` label).
 
 Standard library only. Each problem prints as a GitHub Actions error.
 
 Usage:
     python scripts/changelog_fragments.py check
-    python scripts/changelog_fragments.py check --base <base commit> --labels "<label>,<label>"
+    python scripts/changelog_fragments.py check --base <base commit> --pr <N> --labels "<a>,<b>"
 """
 
 from __future__ import annotations
@@ -74,7 +75,7 @@ def _content_problem(text: str, pr: str | None) -> str | None:
         return None
     if not lines[0].startswith("- "):
         return "an entry starts with `- `, as it would under its heading in CHANGELOG.md."
-    if any(line.startswith("- ") for line in _outside_code(lines[1:])):
+    if any(re.match(r"[-*+] ", line) for line in _outside_code(lines[1:])):
         return f"it holds more than one entry; give each its own file ({_HOW})."
     number = re.search(r"\(#([0-9]+)", lines[0])
     if number is None or number.group(1) != pr:
@@ -94,30 +95,64 @@ def _outside_code(lines: list[str]) -> list[str]:
     return kept
 
 
-def branch_problem(root: Path, base: str, labels: list[str]) -> str | None:
-    """Why this branch needs a fragment it doesn't have, or None: it adds, changes or removes one
-    (a release PR removes them), or has the skip label."""
+def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | None:
+    """Why this branch needs a fragment it doesn't have, or None: it adds or changes one named for
+    PR ``pr`` (`<pr>.<type>[.N].md`), removes fragments (a release PR's build does), or has the
+    skip label. Another PR's fragment doesn't count: editing it would lose that entry, and one
+    named for an issue would cite the wrong number in the notes (pre-QA r1 on #731)."""
     if SKIP_LABEL in labels:
         return None
     try:
+        # --no-renames: a fragment moved out of changelog.d is its removal and another file's
+        # addition, not a change to a fragment.
         changed = subprocess.run(
-            ["git", "-C", str(root), "diff", "--name-only", "--no-renames", f"{base}...HEAD"],
+            [
+                "git",
+                "-C",
+                str(root),
+                "diff",
+                "--name-status",
+                "--no-renames",
+                f"{base}...HEAD",
+                "--",
+                DIRECTORY,
+            ],
             capture_output=True,
             text=True,
             check=True,
         ).stdout.splitlines()
     except (OSError, subprocess.CalledProcessError) as error:
         return f"couldn't list this branch's changes against {base}: {type(error).__name__}"
-    if any(
-        path.startswith(f"{DIRECTORY}/") and Path(path).name not in NOT_FRAGMENTS
-        for path in changed
-    ):
+    removed = False
+    for line in changed:
+        status, _, path = line.partition("\t")
+        name = Path(path).name
+        if name in NOT_FRAGMENTS:
+            continue
+        if status == "D":
+            removed = True
+            continue
+        entry = _ENTRY.fullmatch(name)
+        if status in ("A", "M") and (
+            entry and entry.group("pr") == str(pr) or _RELEASE.fullmatch(name)
+        ):
+            return None
+    # A release PR's build assembles every fragment and removes them all; removing some and
+    # leaving others is no release (pre-QA r2 on #731).
+    if removed and not _fragments_left(root):
         return None
     return (
-        f"this PR adds no CHANGELOG fragment: add {DIRECTORY}/<PR>.<added|changed|fixed>.md "
-        f"({_HOW}; an entry in CHANGELOG.md itself doesn't count), or, for a change that needs "
-        f"no entry, the {SKIP_LABEL!r} label, then rerun this job."
+        "this PR adds no CHANGELOG fragment of its own: add "
+        f"{DIRECTORY}/{pr}.<added|changed|fixed>.md "
+        f"({_HOW}; an entry in CHANGELOG.md, or another PR's fragment, doesn't count), or, for a "
+        f"change that needs no entry, ask the maintainer for the {SKIP_LABEL!r} label, then rerun "
+        "this job."
     )
+
+
+def _fragments_left(root: Path) -> bool:
+    directory = root / DIRECTORY
+    return directory.is_dir() and any(p.name not in NOT_FRAGMENTS for p in directory.iterdir())
 
 
 def _annotation(message: str) -> str:
@@ -130,12 +165,15 @@ def main(argv: list[str], root: Path = Path()) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="check the fragments (and a PR's, with --base)")
     check.add_argument("--base", help="the PR's base commit: also require a fragment")
+    check.add_argument("--pr", type=int, help="the PR's number (with --base)")
     check.add_argument("--labels", default="", help="the PR's labels, comma-separated")
     args = parser.parse_args(argv)
     found = fragment_problems(root)
     if args.base:
+        if args.pr is None:
+            parser.error("--base needs --pr")
         labels = [label.strip() for label in args.labels.split(",") if label.strip()]
-        problem = branch_problem(root, args.base, labels)
+        problem = branch_problem(root, args.base, args.pr, labels)
         if problem:
             found.append(problem)
     for problem in found:
