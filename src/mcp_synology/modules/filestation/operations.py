@@ -145,8 +145,8 @@ async def create_folder(
                 if blocker:
                     error_response(
                         ErrorCode.NOT_FOUND,
-                        f"Create folder failed: {shown(p)} can't be created: {shown(blocker)} "
-                        "is a file.",
+                        f"Create folder failed: {shown(p)} can't be created: "
+                        f"{shown_beside(blocker, ': ')} is a file.",
                         retryable=False,
                         param="paths",
                         value=given,  # the caller's own text (QA r1 on #714)
@@ -338,7 +338,8 @@ def _already_running(operation: str, path: str, dest: str | None = None) -> str:
     """
     to = f" (to {shown(dest)}/)" if dest else ""
     return (
-        f"A {operation.lower()} of {shown(path)}{to} was already running on the NAS, so no second "
+        f"A {operation.lower()} of {shown_beside(path, ' (')}{to} was already running on the NAS, "
+        "so no second "
         "one was started."
     )
 
@@ -612,7 +613,8 @@ def _partial_note(
         else ""
     )
     return (
-        f"Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
+        f"Part of it may already be in {shown_beside(str(dest), ': ')}{gone}: DSM doesn't say how "
+        "much was "
         f"{past} before it stopped, so check there before trying again."
     )
 
@@ -676,7 +678,7 @@ def _copy_move_result(
                     # One a line when two or more failed (#693).
                     path_list(
                         f"{operation} files failed",
-                        [f"{shown(p)} ({_code_text(code)})" for p, code in failed],
+                        [f"{shown_beside(p, ' (')} ({_code_text(code)})" for p, code in failed],
                     ),
                     _partial_note(status, failed, operation, path, dest),
                 ),
@@ -791,7 +793,8 @@ async def _skip_report(
         where = f" (skipped items are still in {shown(src_dir)}/)"
         if p in unknown:
             where = " (skipped items are still at this path or under it)"
-        return f"  {shown(p)}" + (where if remove_src else "")
+        # Before its " (skipped items …)" note, a `+` join the AST guard can't see (QA r1 on #717).
+        return f"  {shown_beside(p, ' (')}" + (where if remove_src else "")
 
     if ok:
         lines.append(f"{verb}:")
@@ -1198,7 +1201,7 @@ class CopyMoveAdapter:
         )
 
     def label(self, item: Item) -> str:
-        return f"{_PRESENT[self.operation]} {item.source}"
+        return f"{_PRESENT[self.operation]} {shown_beside(item.source, ': ')}"
 
     def read_finished(self, item: Item, status: dict[str, Any]) -> tuple[int, bool]:
         # What the call did before is the failure formatter's to add (#482).
@@ -1368,7 +1371,7 @@ class CopyMoveAdapter:
                 ErrorCode.TIMEOUT
                 if isinstance(e, httpx.TimeoutException)
                 else ErrorCode.UNAVAILABLE,
-                f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                f"{operation} files failed: DSM didn't answer for {shown_beside(p, ' (')} "
                 f"({describe_transport_error(e)}); its {operation.lower()} may have started.",
                 retryable=False,
                 param="paths",
@@ -1577,7 +1580,7 @@ class DeleteAdapter:
         return None
 
     def label(self, item: Item) -> str:
-        return f"Deleting {item.source}"
+        return f"Deleting {shown_beside(item.source, ': ')}"
 
     def read_finished(self, item: Item, status: dict[str, Any]) -> None:
         _delete_result(status, item.source, recursive=self.recursive)
@@ -1643,7 +1646,7 @@ class DeleteAdapter:
                 ErrorCode.TIMEOUT
                 if isinstance(e, httpx.TimeoutException)
                 else ErrorCode.UNAVAILABLE,
-                f"Delete files failed: DSM didn't answer for {shown(p)} "
+                f"Delete files failed: DSM didn't answer for {shown_beside(p, ' (')} "
                 f"({describe_transport_error(e)}); its delete may have started.",
                 retryable=False,
                 param="paths",
@@ -1711,7 +1714,8 @@ def _delete_result(status: dict[str, Any], path: str, *, recursive: bool) -> Non
             mapped.error_code,
             # One a line when two or more failed (#693).
             path_list(
-                "Delete files failed", [f"{shown(p)} (DSM error {code})" for p, code in failed]
+                "Delete files failed",
+                [f"{shown_beside(p, ' (')} (DSM error {code})" for p, code in failed],
             ),
             retryable=mapped.retryable,
             param="paths",
@@ -2083,7 +2087,10 @@ async def restore_from_recycle_bin(
         # One a line when two or more (#693).
         note = ""
         if len(recreated) == 1:
-            note = f"\nRe-created {shown(recreated[0])} (no longer there) to restore into."
+            note = (
+                f"\nRe-created {shown_beside(recreated[0], ' (')} (no longer there) to restore "
+                "into."
+            )
         elif recreated:
             note = "\n" + path_list(
                 "Re-created to restore into (they were no longer there)",

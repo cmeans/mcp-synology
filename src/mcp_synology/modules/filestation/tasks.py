@@ -362,7 +362,7 @@ class MonotonicProgress:
         try:
             await self._callback(value, total, message)
         except Exception:
-            logger.debug("Progress notification failed (%s), ignoring", message, exc_info=True)
+            logger.debug("Progress notification failed (%r), ignoring", message, exc_info=True)
 
 
 @dataclass
@@ -558,7 +558,7 @@ async def poll_task(
                 # it; the stop would go through the same broken path anyway (#282). A
                 # status URL is short, so a 414 comes from a proxy too (#325).
                 logger.warning(
-                    "%s status (%s) failed, handing off: %s", api, label, type(e).__name__
+                    "%s status (%r) failed, handing off: %s", api, label, type(e).__name__
                 )
                 return PollResult(status, "stalled", e)
             except SynologyError as e:
@@ -568,7 +568,7 @@ async def poll_task(
                 last_missing = e
                 # At WARNING so CI's logs keep what's needed to find the cause (#521).
                 logger.warning(
-                    "%s status (%s) answered 599 for %s, read %d of %d, %s",
+                    "%s status (%r) answered 599 for %s, read %d of %d, %s",
                     api,
                     label,
                     taskid,
@@ -588,18 +588,18 @@ async def poll_task(
             except httpx.TransportError as e:
                 # No answer: DSM is probably busy with this very task. Leave it running
                 # and hand it off; never stop it (#245, maintainer decision 2026-10-17).
-                logger.debug("%s status (%s) unanswered, handing off: %r", api, label, e)
+                logger.debug("%s status (%r) unanswered, handing off: %r", api, label, e)
                 return PollResult(status, "stalled", e)
             except Exception as e:
                 # Any other unexpected answer (a proxy's page is a DsmReplyError, above):
                 # the task may well still be running, so hand it off like a stall rather
                 # than lose it (QA R1 on #251).
                 logger.warning(
-                    "%s status (%s) unreadable, handing off: %s", api, label, type(e).__name__
+                    "%s status (%r) unreadable, handing off: %s", api, label, type(e).__name__
                 )
                 return PollResult(status, "stalled", e)
 
-            logger.debug("%s status (%s): %s", api, label, status)
+            logger.debug("%s status (%r): %s", api, label, status)
 
             if status.get("finished", False):
                 return PollResult(status, "finished")
@@ -744,13 +744,15 @@ def handoff_reply(
     if lost:
         last = f" Last progress: {progress_text(status)}." if status else ""
         first = (
-            f"DSM answered that it has no task {gerund} {shown(path)} (error 599), so how it ended "
+            f"DSM answered that it has no task {gerund} {shown_beside(path, ' (')} (error 599), "
+            "so how it ended "
             f"isn't known: it may have finished, failed or still be running.{last} It wasn't "
             f"stopped, so check before starting it again. {_RUNNING_HINT}"
         )
     elif stall is None:
         first = (
-            f"{verb} on the NAS: {shown(path)} ({progress_text(status)}). This operation keeps "
+            f"{verb} on the NAS: {shown_beside(path, ' (')} ({progress_text(status)}). "
+            "This operation keeps "
             "running after this reply, so nothing more needs to be done to finish it."
         )
     else:
@@ -766,7 +768,8 @@ def handoff_reply(
         else:
             what, why = "The NAS's status reply couldn't be read", type(stall).__name__
         first = (
-            f"{what} while {gerund} {shown(path)} ({why}{last}). It's probably still running "
+            f"{what} while {gerund} {shown_beside(path, ' (')} ({why}{last}). "
+            "It's probably still running "
             "there; don't start it again."
         )
     lines = [
@@ -1094,9 +1097,18 @@ def _where_to_look(gerund: str, dest: str, sources: list[str]) -> str:
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     """``deleting /s/a`` or ``moving /s/b to /s/d/``; ``moving 2 items to /s/d/`` for more than
     one path, which the caller lists one a line (#693)."""
-    where = shown(paths[0]) if len(paths) == 1 else f"{len(paths)} items" if paths else ""
+    # Its lines put " (<progress>)" right after it (pre-QA r1 on #706).
+    where = (
+        # " to <dest>" follows it when there's a destination, " (<progress>)" when not (QA r1
+        # on #717).
+        shown_beside(paths[0], " to " if dest and kind != "delete" else " (")
+        if len(paths) == 1
+        else f"{len(paths)} items"
+        if paths
+        else ""
+    )
     # The folder quoted, then its slash, as the tools' summaries write it (#688).
-    to = f" to {shown(dest)}/" if dest and kind != "delete" else ""
+    to = f" to {shown_beside(dest, ' (')}/" if dest and kind != "delete" else ""
     return f"{_GERUND[kind]} {where or '(path unknown)'}{to}"
 
 
@@ -1295,7 +1307,7 @@ def _generic_final(handle: Handle, status: dict[str, Any]) -> str:
     if failed:
         # One a line when two or more (#693).
         text = path_list(
-            "DSM reported errors", [f"{shown(p)} ({_code_text(c)})" for p, c in failed]
+            "DSM reported errors", [f"{shown_beside(p, ' (')} ({_code_text(c)})" for p, c in failed]
         )
         if handle.kind != "delete":
             # No record of the source here, so a 408 can't be told apart: say it anyway.
@@ -1401,7 +1413,12 @@ async def file_task(
     # (#693), so no separator inside a name can read as another path.
     many = len(paths) > 1
     what = (
-        f"{len(paths)} items (listed last)" if many else shown(paths[0]) if paths else f"`{parsed}`"
+        f"{len(paths)} items (listed last)"
+        if many
+        # Its lost-task line puts ": " after it (pre-QA r2 on #706).
+        else shown_beside(paths[0], ": ")
+        if paths
+        else f"`{parsed}`"
     )
     reply = await _file_task_reply(client, records, parsed, record, action, paths, what)
     if many:
