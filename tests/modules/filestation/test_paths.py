@@ -24,9 +24,13 @@ import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core import display
-from mcp_synology.core.errors import ErrorCode
+from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE
 from mcp_synology.modules.filestation import MODULE_INFO, register
+from mcp_synology.modules.filestation.helpers import (
+    RESTORE_UNDER_FILE_ADVICE,
+    UNDER_FILE_ADVICE,
+)
 from mcp_synology.modules.filestation.paths import (
     BIN_ITEM_PARAMS,
     LOCAL_PARAMS,
@@ -1329,7 +1333,7 @@ class TestOnePathPerLine:
         from mcp_synology.core.formatting import error_response, path_list
         from mcp_synology.modules.filestation.helpers import missing_text
 
-        assert path_list("Get file info failed", [missing_text("/s/a", 408)]) == (
+        assert path_list("Get file info failed", [missing_text("/s/a", 408, None)]) == (
             "Get file info failed: /s/a: doesn't exist (DSM error 408)."
         )
         del error_response  # imported to keep the names the refusals use in one place
@@ -2045,6 +2049,640 @@ class TestMoreShownSites:
 
 
 # -- the tools' wiring (pre-QA on #510) ---------------------------------------------------
+
+
+class _UnderFile(_FakeClient):
+    """``/video/f.txt`` is a file; getinfo answers 401 below it (vdsm 7.1, #702) and shows
+    everything else as a folder. ``fails``: a method's DSM error."""
+
+    FILE = "/video/f.txt"
+
+    def __init__(self, fails: dict[str, int] | None = None) -> None:
+        super().__init__()
+        self.fails = fails or {}
+
+    async def upload(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        from mcp_synology.core.errors import error_from_code
+
+        if "upload" in self.fails:
+            raise error_from_code(self.fails["upload"], "SYNO.FileStation.Upload")
+        return {}
+
+    async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+        from mcp_synology.core.errors import error_from_code
+
+        params = kwargs.get("params") or {}
+        if method in self.fails:
+            self.calls.append((method, params))
+            raise error_from_code(self.fails[method], api)
+        if method == "getinfo":
+            self.calls.append((method, params))
+            path = params["path"]
+            if path == self.FILE:
+                return {"files": [{"path": path, "isdir": False}]}
+            if path.startswith(self.FILE + "/"):
+                return {"files": [{"path": path, "code": 401}]}
+            return {"files": [{"path": path, "isdir": True}]}
+        return await super().request(api, method, **kwargs)
+
+
+_BLOCKED = "/video/f.txt is a file"
+_SPLIT = (
+    " dest_folder puts every item of a call in that one folder, so restore the items from "
+    "other folders in a call of their own first: those go back where they were."
+)
+
+
+class TestPathUnderAFile:
+    """#702: a path under a file reads as such in every File Station tool, not as DSM's 401
+    "can't be read", a 0 B directory, a 404, 1002, 1100 or 1200 (vdsm 7.1, pinned for all four
+    in `tests/vdsm/test_vdsm_under_file.py`)."""
+
+    @pytest.mark.parametrize("below", ["x", "x/y/z"])
+    async def test_get_file_info(self, below: str) -> None:
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        path = f"/video/f.txt/{below}"
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(_UnderFile(), paths=[path])  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("not_found", False)
+        assert error["message"] == (
+            f"Get file info failed: {path}: doesn't exist (DSM error 401): {_BLOCKED}."
+        )
+        assert error["suggestion"].startswith("Check the paths with list_files")
+
+    async def test_get_file_info_beside_one_found(self) -> None:
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        out = await get_file_info(_UnderFile(), paths=["/video/f.txt/x", "/video/a"])  # type: ignore[arg-type,list-item]
+        assert f"/video/f.txt/x: doesn't exist (DSM error 401): {_BLOCKED}" in out
+
+    async def test_a_401_with_no_file_above_stays_dsms(self) -> None:
+        """A 401 whose parents show no file isn't called missing."""
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        client = _FakeClient(codes={"/video/x": 401}, existing={"/video"})
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(client, paths=["/video/x"])  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        assert error["code"] == "filestation_error"
+        assert error["message"] == "Get file info failed: /video/x: can't be read (DSM error 401)."
+
+    @pytest.mark.parametrize("op", ["copy", "move"])
+    async def test_copy_or_move_a_source(self, op: str) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        client = _UnderFile()
+        with pytest.raises(ToolError) as exc:
+            await getattr(operations, f"{op}_files")(
+                client, paths=["/video/f.txt/x"], dest_folder="/video/d"
+            )
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            f"{op.capitalize()} files refused: /video/f.txt/x: doesn't exist (DSM error 401): "
+            f"{_BLOCKED}. Nothing was {'copied' if op == 'copy' else 'moved'}."
+        )
+        assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize("op", ["copy", "move"])
+    async def test_copy_or_move_into_it(self, op: str) -> None:
+        from mcp_synology.modules.filestation import operations
+
+        client = _UnderFile()
+        with pytest.raises(ToolError) as exc:
+            await getattr(operations, f"{op}_files")(
+                client, paths=["/video/a"], dest_folder="/video/f.txt/x"
+            )
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["param"] == "dest_folder"
+        assert error["message"] == (
+            f"{op.capitalize()} files refused: the destination folder /video/f.txt/x doesn't "
+            f"exist on the NAS: {_BLOCKED}. Nothing was {'copied' if op == 'copy' else 'moved'}."
+        )
+        assert error["suggestion"] == UNDER_FILE_ADVICE
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_delete_files(self) -> None:
+        from mcp_synology.modules.filestation.operations import delete_files
+
+        client = _UnderFile()
+        with pytest.raises(ToolError) as exc:
+            await delete_files(client, paths=["/video/f.txt/x"])  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            f"Delete files refused: /video/f.txt/x: doesn't exist (DSM error 401): {_BLOCKED}. "
+            "Nothing was deleted."
+        )
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_get_dir_size(self) -> None:
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        client = _UnderFile()
+        with pytest.raises(ToolError) as exc:
+            await get_dir_size(client, path="/video/f.txt/x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            f"Get directory size failed: /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}."
+        )
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_download_file(self, tmp_path: Path) -> None:
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                _UnderFile(),  # type: ignore[arg-type]
+                path="/video/f.txt/x",  # type: ignore[arg-type]
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert (
+            error["message"]
+            == f"Download failed: /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}."
+        )
+        assert not list(tmp_path.iterdir())
+
+    @pytest.mark.parametrize("code", [1100, 1101])
+    async def test_create_folder(self, code: int) -> None:
+        """Only DSM's 1100 is checked: another code keeps DSM's own answer."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_UnderFile(fails={"create": code}), paths=["/video/f.txt/x/y"])  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        if code == 1100:
+            assert error["code"] == "not_found"
+            assert error["message"] == (
+                f"Create folder failed: /video/f.txt/x/y can't be created: {_BLOCKED}."
+            )
+            assert error["suggestion"] == UNDER_FILE_ADVICE
+        else:
+            assert f"DSM error {code}" in error["message"]
+
+    async def test_create_folder_1100_with_no_file_above(self) -> None:
+        """A real permission refusal keeps DSM's 1100."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_UnderFile(fails={"create": 1100}), paths=["/video/a/b"])  # type: ignore[arg-type,list-item]
+        assert "DSM error 1100" in _error(exc)["message"]
+
+    async def test_rename(self) -> None:
+        from mcp_synology.modules.filestation.operations import rename
+
+        with pytest.raises(ToolError) as exc:
+            await rename(_UnderFile(fails={"rename": 1200}), path="/video/f.txt/x", new_name="z")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "not_found"
+        assert error["message"] == (
+            f"Rename failed (DSM error 1200): /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}."
+        )
+
+    async def test_upload_another_code_keeps_dsms_answer(self, tmp_path: Path) -> None:
+        """Pre-QA r2 on #702: only Upload's 401 is checked; another code is DSM's own."""
+        from mcp_synology.modules.filestation.transfer import upload_file
+
+        local = tmp_path / "up.txt"
+        local.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                _UnderFile(fails={"upload": 1100}),  # type: ignore[arg-type]
+                local_path=str(local),
+                dest_folder="/video/f.txt/x",  # type: ignore[arg-type]
+                allowed_roots=[tmp_path],
+            )
+        error = _error(exc)
+        assert "DSM error 1100" in error["message"], error
+        assert "is a file" not in error["message"], error
+
+    @pytest.mark.parametrize("auth", [False, True])
+    async def test_upload_file(self, tmp_path: Path, auth: bool) -> None:
+        """DSM's 401 for a destination under a file; a re-login's 401 (a disabled account,
+        `AuthenticationError`) isn't read as one."""
+        from mcp_synology.core.errors import AuthenticationError
+        from mcp_synology.modules.filestation.transfer import upload_file
+
+        local = tmp_path / "up.txt"
+        local.write_text("x")
+        client = _UnderFile()
+        if auth:
+
+            async def refused(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+                raise AuthenticationError("Disabled account", code=401)
+
+            client.upload = refused  # type: ignore[method-assign]
+        else:
+            client.fails = {"upload": 401}
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                client,  # type: ignore[arg-type]
+                local_path=str(local),
+                dest_folder="/video/f.txt/x",  # type: ignore[arg-type]
+                allowed_roots=[tmp_path],
+            )
+        error = _error(exc)
+        if auth:
+            assert error["code"] != "not_found", error
+        else:
+            assert error["code"] == "not_found"
+            assert error["message"] == (
+                "Upload failed: the destination folder /video/f.txt/x doesn't exist on the NAS: "
+                f"{_BLOCKED}."
+            )
+            assert error["suggestion"] == UNDER_FILE_ADVICE
+
+    @pytest.mark.parametrize("to", ["original", "dest_folder"])
+    async def test_restore(self, to: str) -> None:
+        """Pre-QA r1 on #702: a restore to a folder under a file, its original folder or
+        ``dest_folder``, gets the destination check's refusal, before anything starts."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        client = _UnderFile()
+        kwargs: dict[str, Any] = (
+            {"paths": ["f.txt/x/a.txt"]}
+            if to == "original"
+            else {"paths": ["a.txt"], "dest_folder": "/video/f.txt/x"}
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(client, share="/video", **kwargs)  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "not_found", error
+        which = "original folder" if to == "original" else "destination folder"
+        assert error["message"] == (
+            f"Restore files refused: the {which} /video/f.txt/x doesn't exist on the NAS: "
+            f"{_BLOCKED}. Nothing was restored."
+        )
+        # QA r1 on #714: the advice names dest_folder, which the caller may not have given.
+        assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_a_restore_to_several_folders_refuses_before_anything_moves(self) -> None:
+        """QA r1 on #714: an original folder under a file was found only at its item's turn,
+        after earlier items were restored."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        client = _UnderFile()
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                client,  # type: ignore[arg-type]
+                share="/video",  # type: ignore[arg-type]
+                paths=["ok/a.txt", "f.txt/x/b.txt", "f.txt/y/c.txt"],
+            )
+        error = _error(exc)
+        assert error["code"] == "not_found", error
+        assert error["message"] == (
+            "Restore files refused: original folders under a file:\n"
+            f"  /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}\n"
+            f"  /video/f.txt/y doesn't exist on the NAS: {_BLOCKED}\n"
+            "Nothing was restored."
+        ), error["message"]
+        # QA r2 on #714: ok/a.txt is fine, and dest_folder would move it too: split the call.
+        assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE + _SPLIT, error
+        # Pre-QA r3 on #714: where it would restore to, as the 407 refusal names it.
+        assert (error["param"], error["value"]) == ("dest_folder", "/video/f.txt/x"), error
+        assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize("others", [False, True])
+    async def test_a_restores_refusal_splits_the_call_only_when_others_are_fine(
+        self, others: bool
+    ) -> None:
+        """QA r2 on #714: with every original folder refused, dest_folder for all is the
+        answer; with others fine, they go in a call of their own (407 and under a file)."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        paths = ["f.txt/x/b.txt", *(["ok/a.txt"] if others else [])]
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(_UnderFile(), share="/video", paths=paths)  # type: ignore[arg-type]
+        assert _error(exc)["suggestion"].endswith(_SPLIT) is others
+
+        denied = _FakeClient(
+            codes={"/video/no": 407},
+            existing={
+                "/video",
+                "/video/ok",
+                "/video/#recycle/no/b.txt",
+                "/video/#recycle/ok/a.txt",
+            },
+        )
+        paths = ["no/b.txt", *(["ok/a.txt"] if others else [])]
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(denied, share="/video", paths=paths)  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "permission_denied", error
+        assert error["suggestion"].endswith(_SPLIT) is others
+
+    async def test_a_restore_refused_for_both_reasons_counts_both_as_stuck(self) -> None:
+        """Pre-QA r5 on #714: with items from a denied folder and from one under a file, and
+        none from a fine folder, the 407 refusal told the model to restore "the items from
+        other folders" in a call of their own, though those can't go back either."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        class _Both(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/no":
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [{"path": "/video/no", "code": 407}]}
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                _Both(), share="/video", paths=["no/b.txt", "f.txt/x/c.txt"]
+            )  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "permission_denied", error
+        assert not error["suggestion"].endswith(_SPLIT), error
+        # Pre-QA r6 on #714: fixing permissions wouldn't help the folder under a file.
+        assert error["suggestion"].endswith(
+            " Changing permissions won't help the folders under a file: restore their items "
+            "with dest_folder."
+        ), error
+        # QA r3 on #714: the folders under a file are named too.
+        assert error["message"] == (
+            "Restore files refused: no permission to use the original folder /video/no. "
+            f"Under a file too: /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}. "
+            "Nothing was restored."
+        ), error["message"]
+
+        # Two of them, one a line (#693).
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                _Both(),  # type: ignore[arg-type]
+                share="/video",  # type: ignore[arg-type]
+                paths=["no/b.txt", "f.txt/x/c.txt", "f.txt/y/d.txt"],
+            )
+        assert _error(exc)["message"] == (
+            "Restore files refused: no permission to use the original folder /video/no.\n"
+            "Under a file too:\n"
+            f"  /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}\n"
+            f"  /video/f.txt/y doesn't exist on the NAS: {_BLOCKED}\n"
+            "Nothing was restored."
+        )
+
+    async def test_a_dsm_error_in_the_search_finds_nothing(self) -> None:
+        """Pre-QA r4 on #714: a DSM error code on a parent's getinfo ends the search with no
+        file found, so the path keeps DSM's own 401."""
+        from mcp_synology.core.errors import error_from_code
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        class _Refused(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise error_from_code(105, "SYNO.FileStation.List")
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(_Refused(), paths=["/video/f.txt/x"])  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        assert error["message"] == (
+            "Get file info failed: /video/f.txt/x: can't be read (DSM error 401)."
+        ), error
+
+    async def test_a_restore_matches_the_paths_it_sent(self) -> None:
+        """Pre-QA r4 on #714: the restore's up-front checks matched DSM's echoed spelling
+        against the paths it sent, so an echo in another case (`/Video`) let the first item
+        start before the refusal."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        class _Echo(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                answer = await super().request(api, method, **kwargs)
+                if method == "getinfo":
+                    for entry in answer.get("files", []):
+                        if "code" in entry:
+                            entry["path"] = entry["path"].replace("/video", "/Video", 1)
+                return answer
+
+        client = _Echo()
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                client,  # type: ignore[arg-type]
+                share="/video",  # type: ignore[arg-type]
+                paths=["ok/a.txt", "f.txt/x/b.txt"],
+            )
+        assert _error(exc)["code"] == "not_found"
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_paths_in_the_same_folders_share_the_parents_read(self) -> None:
+        """Pre-QA r3 on #714: 50 paths whose 401 isn't from a file (their parents all
+        folders) each searched again, rereading the same parents: 200 requests."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        client = _FakeClient(existing={"/video/d", "/video/d/g", "/video/d/g/h", "/video/d/g/h/i"})
+        missing = [(f"/video/d/g/h/i/k{i}/leaf", 401) for i in range(50)]
+        found = await files_above(client, missing)  # type: ignore[arg-type]
+        assert found == {}
+        reads = [p["path"] for m, p in client.calls if m == "getinfo"]
+        assert len(reads) == len(set(reads)), reads  # no parent read twice
+        assert len(reads) <= 4 + 50, len(reads)  # the shared parents once, each k{i} once
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            DsmHttpError("HTTP 502 from getinfo", 502),
+            DsmReplyError("A reply that isn't DSM's"),
+        ],
+        ids=["502", "not-dsm"],
+    )
+    async def test_a_proxys_answer_to_the_destination_check_ends_the_call(
+        self, raised: Exception
+    ) -> None:
+        """QA r1 on #714: a proxy's error status or a page that isn't DSM's (both
+        `SynologyError`s) started the copy anyway, though the docs say it ends the call."""
+        from mcp_synology.modules.filestation.operations import copy_files
+
+        class _Proxy(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise raised
+                return await super().request(api, method, **kwargs)
+
+        client = _Proxy()
+        with pytest.raises(ToolError) as exc:
+            await copy_files(client, paths=["/video/a"], dest_folder="/video/f.txt/x")  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        # Named as the source check's is (pre-QA r3 on #714).
+        assert error["message"].startswith("Copy files failed"), error
+        assert error["code"] == "unavailable", error
+        assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize(
+        ("tool", "named"),
+        [
+            ("get_file_info", "Get file info failed"),
+            ("get_dir_size", "Get directory size failed"),
+            ("download_file", "Download failed"),
+            ("restore", "Restore files failed"),
+        ],
+    )
+    async def test_a_proxys_answer_to_the_check_names_the_tool(
+        self, tool: str, named: str, tmp_path: Path
+    ) -> None:
+        """QA r1 on #714: the check's proxy error reached the server's backstop, named by the
+        tool's identifier (`get_file_info failed`), not as the tool's own errors are."""
+        from mcp_synology.modules.filestation.metadata import get_dir_size, get_file_info
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        class _Proxy(_UnderFile):
+            reads = 0
+
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    self.reads += 1
+                    # A restore reads the folders' parents before the search: fail the
+                    # search's read, not the first (pre-QA r3 on #714).
+                    if tool != "restore" or self.reads > 1:
+                        raise DsmHttpError("HTTP 502 from getinfo", 502)
+                return await super().request(api, method, **kwargs)
+
+        client: Any = _Proxy()
+        path = "/video/f.txt/x"
+        with pytest.raises(ToolError) as exc:
+            if tool == "get_file_info":
+                await get_file_info(client, paths=[path])
+            elif tool == "get_dir_size":
+                await get_dir_size(client, path=path)
+            elif tool == "restore":
+                from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+                await restore_from_recycle_bin(client, share="/video", paths=["f.txt/x/a.txt"])
+            else:
+                await download_file(
+                    client, path=path, dest_folder=str(tmp_path), allowed_roots=[tmp_path]
+                )
+        error = _error(exc)
+        assert error["message"].startswith(named), error
+        assert error["code"] == "unavailable", error
+
+    async def test_create_folder_names_the_callers_own_path(self) -> None:
+        """QA r1 on #714: the refusal's value was the normalized path."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_UnderFile(fails={"create": 1100}), paths=["video/f.txt/x"])  # type: ignore[arg-type,list-item]
+        assert _error(exc)["value"] == "video/f.txt/x"
+
+    async def test_download_a_401_with_no_file_above_stays_dsms(self, tmp_path: Path) -> None:
+        """Pre-QA r1 on #702: only a file above makes a 401 "doesn't exist"."""
+        from mcp_synology.core.errors import DownloadHttpError
+        from mcp_synology.modules.filestation.transfer import download_file
+
+        class _No(_FakeClient):
+            async def download(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise DownloadHttpError("HTTP 404 from download API", 404)
+
+            async def download_binary(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise DownloadHttpError("HTTP 404 from download API", 404)
+
+        client = _No(codes={"/video/x/y": 401}, existing={"/video", "/video/x"})
+        with pytest.raises(ToolError) as exc:
+            await download_file(
+                client,  # type: ignore[arg-type]
+                path="/video/x/y",  # type: ignore[arg-type]
+                dest_folder=str(tmp_path),
+                allowed_roots=[tmp_path],
+            )
+        error = _error(exc)
+        assert error["code"] != "not_found", error
+        assert "is a file" not in error["message"], error
+
+    @pytest.mark.parametrize("tool", ["copy", "get_dir_size", "download"])
+    async def test_a_check_before_a_request_ends_the_call_with_no_answer(
+        self, tool: str, tmp_path: Path
+    ) -> None:
+        """Pre-QA r1 on #702: a check before anything starts lets no answer end the call, as
+        the getinfo before it does; the copy then started after a full timeout."""
+        from mcp_synology.modules.filestation import operations
+        from mcp_synology.modules.filestation.metadata import get_dir_size
+
+        class _Stalls(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise httpx.ReadTimeout("no answer")
+                return await super().request(api, method, **kwargs)
+
+        client = _Stalls()
+        with pytest.raises(httpx.ReadTimeout):
+            if tool == "download":
+                from mcp_synology.modules.filestation.transfer import download_file
+
+                await download_file(
+                    client,  # type: ignore[arg-type]
+                    path="/video/f.txt/x",  # type: ignore[arg-type]
+                    dest_folder=str(tmp_path),
+                    allowed_roots=[tmp_path],
+                )
+            elif tool == "copy":
+                await operations.copy_files(
+                    client,  # type: ignore[arg-type]
+                    paths=["/video/a"],  # type: ignore[list-item]
+                    dest_folder="/video/f.txt/x",  # type: ignore[arg-type]
+                )
+            else:
+                await get_dir_size(client, path="/video/f.txt/x")  # type: ignore[arg-type]
+        assert "start" not in [m for m, _ in client.calls]
+
+    async def test_paths_under_one_file_share_its_search(self) -> None:
+        """Pre-QA r1 on #702: 40 paths under one file cost 160 requests, one search each."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        client = _UnderFile()
+        missing = [(f"/video/f.txt/a/b/c/d/e/x{i}", 401) for i in range(40)]
+        found = await files_above(client, missing)  # type: ignore[arg-type]
+        assert set(found.values()) == {"/video/f.txt"}
+        assert len(found) == 40
+        assert len(client.calls) == 2, client.calls  # one search: halving finds it in two
+
+    async def test_paths_at_different_depths_under_one_file_share_its_search(self) -> None:
+        """Pre-QA r5 on #714: without the shortcut, paths at rising depth under one file each
+        searched again (n/2 requests for n paths), since halving reads other parents."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        client = _UnderFile()
+        missing = [("/video/f.txt/" + "/".join(["d"] * depth), 401) for depth in range(1, 41)]
+        found = await files_above(client, missing)  # type: ignore[arg-type]
+        assert set(found.values()) == {"/video/f.txt"} and len(found) == 40
+        assert len(client.calls) <= 2, client.calls
+
+    async def test_a_file_named_like_its_prefix_gets_its_own_search(self) -> None:
+        """Pre-QA r2 on #702: the shared search is for paths under the file found, not for one
+        whose name only starts with it (`/video/f.txt2/y` isn't under `/video/f.txt`)."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        class _Two(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                path = (kwargs.get("params") or {}).get("path", "")
+                if method == "getinfo" and path == "/video/f.txt2":
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [{"path": path, "isdir": False}]}
+                if method == "getinfo" and path.startswith("/video/f.txt2/"):
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [{"path": path, "code": 401}]}
+                return await super().request(api, method, **kwargs)
+
+        found = await files_above(_Two(), [("/video/f.txt/x", 401), ("/video/f.txt2/y", 401)])  # type: ignore[arg-type]
+        assert found == {"/video/f.txt/x": "/video/f.txt", "/video/f.txt2/y": "/video/f.txt2"}
+
+    async def test_a_check_that_fails_keeps_dsms_answer(self) -> None:
+        """`diagnose_under_file` is only a diagnosis: a check with no answer leaves DSM's error."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        class _Stalls(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    raise httpx.ReadTimeout("no answer")
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_Stalls(fails={"create": 1100}), paths=["/video/f.txt/x"])  # type: ignore[arg-type,list-item]
+        assert "DSM error 1100" in _error(exc)["message"]
 
 
 async def _tool(tool: str, client: _FakeClient | None = None, **settings: Any) -> Any:

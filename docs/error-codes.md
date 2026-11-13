@@ -213,7 +213,7 @@ Common causes:
 - Typo in the share name. Case doesn't matter to the File Station tools: they send a share name as `list_shares` lists it (`/Home` goes to DSM as `/home`). Only if DSM won't list shares does the name go as given, and then the user home service takes only `/home` in lowercase.
 - Share name omitted: paths must start with a real share, e.g. `/volume1` is wrong, `/photos` is right.
 - A stray space or other whitespace in the path: paths are taken exactly, so `/video/Movies ` names an item called `Movies ` (#488). The message quotes such a path (`'/video/Movies '`), so the whitespace shows.
-- A path under a file (`/video/a.jpg/child`): `list_files` and `search_files` name the file in the way (`… doesn't exist on the NAS: /video/a.jpg is a file.`), and `search_files` on a missing folder says so before any search starts (#517).
+- A path under a file (`/video/a.jpg/child`): every File Station tool names the file in the way as `not_found`, or as a note where `get_file_info` found other paths (`… doesn't exist on the NAS: /video/a.jpg is a file.`; `/video/a.jpg/child: doesn't exist (DSM error 401): /video/a.jpg is a file` in a list of paths, as `get_file_info`, `delete_files` and a copy's or move's sources give; `… can't be created: /video/a.jpg is a file.` in `create_folder`; #702), where DSM gives 401, 404, 1002, 1100, 1200 or an empty folder of 0 B, and `search_files` on a missing folder says so before any search starts (#517).
 - The user lacks list permission on a parent directory, so DSM reports "not
   found" rather than "denied" — DSM does this deliberately to avoid leaking
   directory existence.

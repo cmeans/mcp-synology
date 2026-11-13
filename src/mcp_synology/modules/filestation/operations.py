@@ -43,18 +43,24 @@ from mcp_synology.modules.filestation.batch import (
     run_batch,
 )
 from mcp_synology.modules.filestation.helpers import (
+    RESTORE_UNDER_FILE_ADVICE,
+    UNDER_FILE_ADVICE,
     _is_dot,
     describe_transport_error,
+    diagnose_under_file,
     dsm_str,
     ensure_recycle_status,
+    files_above,
     find_missing_paths,
     missing_paths_suggestion,
     missing_text,
     name_key,
+    no_answer,
     normalize_path,
     path_exists,
     paths_isdir,
     probe_recycle_status,
+    under_file_text,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -117,7 +123,7 @@ async def create_folder(
     """
     normalized = [normalize_path(p) for p in paths]
     folders: list[dict[str, Any]] = []
-    for p in normalized:
+    for p, given in zip(normalized, paths, strict=True):
         parent = "/".join(p.split("/")[:-1]) or "/"
         name = p.split("/")[-1]
         try:
@@ -131,6 +137,20 @@ async def create_folder(
                 },
             )
         except SynologyError as e:
+            # DSM's 1100 "Insufficient filesystem permissions" for a folder under a file (vdsm
+            # 7.1, #702), which points at permissions.
+            if e.code == 1100:
+                blocker = await diagnose_under_file(client, p)
+                if blocker:
+                    error_response(
+                        ErrorCode.NOT_FOUND,
+                        f"Create folder failed: {shown(p)} can't be created: {shown(blocker)} "
+                        "is a file.",
+                        retryable=False,
+                        param="paths",
+                        value=given,  # the caller's own text (QA r1 on #714)
+                        suggestion=UNDER_FILE_ADVICE,
+                    )
             synology_error_response("Create folder", e)
         folders.extend(data.get("folders", []))
 
@@ -166,6 +186,17 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
         # Only a diagnostic: whatever it hits, DSM's own 1200 is still the answer.
         logger.warning("Couldn't check why DSM refused to rename %s (1200)", path, exc_info=True)
         return
+    # getinfo's 401 entry, no answer either way: a path under a file (vdsm 7.1, #702).
+    blocker = await diagnose_under_file(client, path) if source is None else None
+    if blocker:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Rename failed (DSM error 1200): {under_file_text(path, blocker)}.",
+            retryable=False,
+            param="path",
+            value=original,
+            suggestion=missing_paths_suggestion([(path, 408)]),
+        )
     if source is False:
         error_response(
             ErrorCode.NOT_FOUND,
@@ -367,16 +398,20 @@ async def _refuse_missing_sources(
     """Refuse the whole call before anything moves if any source is missing (#162 policy)."""
     try:
         missing = await find_missing_paths(client, checked)
+        under = await files_above(client, missing)  # a path under a file (#702)
     except SynologyError as e:
         synology_error_response(f"{operation} files", e)
     if missing:
         # Each path in words, and the code DSM gave (#620: a 407 was called "not found").
-        err_code, suggestion = unreadable_paths_error(missing)
+        err_code, suggestion = unreadable_paths_error(missing, under)
         error_response(
             err_code,
             # One a line when two or more (#693).
             then(
-                path_list(f"{operation} files refused", [missing_text(p, c) for p, c in missing]),
+                path_list(
+                    f"{operation} files refused",
+                    [missing_text(p, c, under.get(p)) for p, c in missing],
+                ),
                 f"Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
             ),
             retryable=False,
@@ -456,17 +491,26 @@ async def _refuse_missing_destination(
     """Refuse before anything starts if the destination folder is missing or refused (#344).
 
     DSM answers a copy or move into a missing folder with 1002, "Destination error during
-    copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408
-    is `not_found`, 407 `permission_denied`. Any other DSM answer leaves it to the task, as
-    before. No answer, or an unreadable one, stops a call with nothing started: starting then
-    would be with the duplicate-task guard down too, since it reads the same stalled DSM. With
-    ``anything_done`` (a restore's later destination), it goes on, so finished items aren't lost.
+    copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408 is
+    `not_found`, 407 `permission_denied`, and a 401 for a folder under a file `not_found` naming
+    the file (#702). Any other DSM answer leaves it to the task, as before. No answer, or an
+    unreadable one, stops a call with nothing started: starting then would be with the
+    duplicate-task guard down too, since it reads the same stalled DSM. With ``anything_done``
+    (a restore's later destination), it goes on, so finished items aren't lost.
     """
     try:
         found = await find_missing_paths(client, [dest])
+        # A folder under a file: getinfo's 401, where DSM's task answers 1002 (vdsm 7.1, #702).
+        # In the same try, so no answer stops the call as the getinfo above does.
+        under = await files_above(client, found)
     except Exception as e:
+        # No answer, a proxy's error status or a reply that isn't DSM's (a `SynologyError` too)
+        # ends a call with nothing started (QA r1 on #714).
         if not anything_done and not isinstance(e, SynologyError):
-            raise
+            raise  # a transport error or another error that isn't DSM's: the server's own
+        if not anything_done and isinstance(e, SynologyError) and no_answer(e):
+            # Named as the source check's is (pre-QA r3 on #714).
+            synology_error_response(f"{operation} files", e)
         # A restore to several places runs this after earlier items finished: no reply it can use
         # mustn't lose them (#588). At WARNING, as DSM's 1002 that follows a missing folder points
         # at permissions.
@@ -498,6 +542,17 @@ async def _refuse_missing_destination(
                 else "Create it first with create_folder, or check the path with list_files, "
                 "then retry."
             ),
+        )
+    blocker = next(iter(under.values()), None)  # one path checked, however DSM spells it
+    if blocker:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"{operation} files refused: the destination folder "
+            f"{under_file_text(dest, blocker)}.{nothing}",
+            retryable=False,
+            param="dest_folder",
+            value=dest,
+            suggestion=RESTORE_UNDER_FILE_ADVICE if operation == "Restore" else UNDER_FILE_ADVICE,
         )
     if 407 in codes:
         error_response(
@@ -1478,15 +1533,19 @@ class DeleteAdapter:
         # without an error, and a partial delete of a mistyped list is worse than none.
         try:
             missing = await find_missing_paths(client, self.normalized)
+            under = await files_above(client, missing)  # a path under a file (#702)
         except SynologyError as e:
             synology_error_response("Delete files", e)
         if missing:
-            err_code, suggestion = unreadable_paths_error(missing)
+            err_code, suggestion = unreadable_paths_error(missing, under)
             error_response(
                 err_code,
                 # One a line when two or more (#693).
                 then(
-                    path_list("Delete files refused", [missing_text(p, c) for p, c in missing]),
+                    path_list(
+                        "Delete files refused",
+                        [missing_text(p, c, under.get(p)) for p, c in missing],
+                    ),
                     "Nothing was deleted.",
                 ),
                 retryable=False,
@@ -2080,6 +2139,18 @@ async def restore_from_recycle_bin(
         return result + note
 
 
+def _restore_split_advice(stuck: list[str], wanted: list[str]) -> str:
+    """The advice to add when a restore is refused for some of its original folders and others
+    are fine (QA r2 on #714): `dest_folder` puts every item of a call in that one folder, so
+    the plain retry with it would move the fine ones out of their own folders too."""
+    if not set(wanted) - set(stuck):
+        return ""
+    return (
+        " dest_folder puts every item of a call in that one folder, so restore the items from "
+        "other folders in a call of their own first: those go back where they were."
+    )
+
+
 async def _recreate_missing_folders(
     client: DsmClient, folders: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -2103,23 +2174,37 @@ async def _recreate_missing_folders(
         - set(wanted)
     )
     try:
-        found = await find_missing_paths(client, wanted + parents)
+        # As sent: the checks below match against these paths, however DSM spells its entries
+        # (pre-QA r4 on #714).
+        found = await find_missing_paths(client, wanted + parents, as_sent=True)
     except SynologyError as e:
         synology_error_response("Restore files", e)
+    # An original folder under a file is found first, so either refusal's advice knows every
+    # folder that can't take its items back (pre-QA r5 on #714).
+    try:
+        under = await files_above(client, found)
+    except SynologyError as e:
+        synology_error_response("Restore files", e)
+    blocked = [path for path in wanted if path in under]
+    texts = [under_file_text(path, under[path]) for path in blocked]
     # A destination this account can't use is refused before anything moves: found only at its
     # item's turn, it came after earlier items were restored (#482).
     denied = [path for path, code in found if code == 407 and path in wanted]
     if denied:
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            # One a line when two or more (#693).
-            f"Restore files refused: no permission to use the original folder {shown(denied[0])}. "
-            "Nothing was restored."
-            if len(denied) == 1
-            else then(
-                path_list(
-                    "Restore files refused: no permission to use the original folders",
-                    [shown(p) for p in denied],
+            # One a line when two or more (#693). The folders under a file are named too, as the
+            # advice counts them as stuck (QA r3 on #714).
+            then(
+                then(
+                    f"Restore files refused: no permission to use the original folder "
+                    f"{shown(denied[0])}."
+                    if len(denied) == 1
+                    else path_list(
+                        "Restore files refused: no permission to use the original folders",
+                        [shown(p) for p in denied],
+                    ),
+                    path_list("Under a file too", texts) if texts else "",
                 ),
                 "Nothing was restored.",
             ),
@@ -2129,7 +2214,32 @@ async def _recreate_missing_folders(
             suggestion=(
                 "Restore them to a folder this DSM account can write to (dest_folder), or have "
                 "the folder's permissions changed in DSM."
+                # Permissions can't help a folder under a file (pre-QA r6 on #714).
+                + (
+                    " Changing permissions won't help the folders under a file: restore their "
+                    "items with dest_folder."
+                    if blocked
+                    else ""
+                )
+                + _restore_split_advice(denied + blocked, wanted)
             ),
+        )
+    # An original folder under a file is refused before anything moves too: found only at its
+    # item's turn, it came after earlier items were restored (QA r1 on #714).
+    if blocked:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            # One a line when two or more (#693).
+            f"Restore files refused: the original folder {texts[0]}. Nothing was restored."
+            if len(texts) == 1
+            else then(
+                path_list("Restore files refused: original folders under a file", texts),
+                "Nothing was restored.",
+            ),
+            retryable=False,
+            param="dest_folder",  # as the 407 refusal above: where it would restore to
+            value=blocked[0],
+            suggestion=RESTORE_UNDER_FILE_ADVICE + _restore_split_advice(blocked, wanted),
         )
     gone = {path for path, code in found if code == 408}
     missing = [path for path in wanted if path in gone]
