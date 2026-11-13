@@ -15,6 +15,7 @@ from mcp_synology.core.display import shown, shown_local
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
     NO_FILE_NOTE,
+    AuthenticationError,
     DownloadHttpError,
     DsmHttpError,
     DsmReplyError,
@@ -31,9 +32,13 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
+    UNDER_FILE_ADVICE,
+    diagnose_under_file,
+    files_above,
     missing_paths_suggestion,
     normalize_path,
     paths_isdir,
+    under_file_text,
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 
@@ -191,6 +196,19 @@ async def upload_file(
     except SynologyFileExistsError:
         already_exists()
     except SynologyError as e:
+        # DSM's 401 "Unknown error" for a destination under a file (vdsm 7.1, #702); a re-login
+        # refused with its own 401 (a disabled account) isn't this path.
+        if e.code == 401 and not isinstance(e, AuthenticationError):
+            blocker = await diagnose_under_file(client, dest)
+            if blocker:
+                error_response(
+                    ErrorCode.NOT_FOUND,
+                    f"Upload failed: the destination folder {under_file_text(dest, blocker)}.",
+                    retryable=False,
+                    param="dest_folder",
+                    value=dest_folder,
+                    suggestion=UNDER_FILE_ADVICE,
+                )
         synology_error_response("Upload", e)
     except OSError as e:
         error_response(
@@ -330,8 +348,16 @@ async def download_file(
             isinstance(e, DsmHttpError) and e.status >= 500
         )
 
+    blocker: str | None = None  # the file a path under one is below (#702)
     if entry.get("code") == 408:  # getinfo's entry for a missing path (#161)
         exists = False
+    elif entry.get("code") == 401:  # a path under a file (vdsm 7.1), which DSM answers 404
+        # No answer ends the call, as before a request elsewhere (pre-QA r2 on #702).
+        try:
+            blocker = (await files_above(client, [(nas_path, 401)])).get(nas_path)
+        except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's
+            synology_error_response("Download", e)
+        exists = False if blocker else None
     elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
         error_response(
             ErrorCode.PERMISSION_DENIED,
@@ -350,7 +376,9 @@ async def download_file(
     if exists is False:
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Download failed: {shown(nas_path)} doesn't exist on the NAS.",
+            f"Download failed: {under_file_text(nas_path, blocker)}."
+            if blocker
+            else f"Download failed: {shown(nas_path)} doesn't exist on the NAS.",
             retryable=False,
             param="path",
             value=nas_path,

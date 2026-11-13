@@ -25,11 +25,13 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    files_above,
     missing_paths_suggestion,
     missing_text,
     normalize_path,
     task_request,
     unanswered_status_response,
+    under_file_text,
     unreadable_paths_error,
     validate_additional,
 )
@@ -120,15 +122,22 @@ async def get_file_info(
             else:
                 files.append(entry)
 
+    # A 401 entry for a path under a file means it doesn't exist (#702).
+    try:
+        under = await files_above(client, missing)
+    except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's (QA r1 on #714)
+        synology_error_response("Get file info", e)
     if missing and not files:
         # The code and advice follow what DSM said for each path (#620); a missing one gets
         # the shared suggestion, which leads with the escaped-name advice when the paths hold
         # escapes instead of "check with list_files" (#606).
-        err_code, suggestion = unreadable_paths_error(missing)
+        err_code, suggestion = unreadable_paths_error(missing, under)
         error_response(
             err_code,
             # One a line when two or more (#693).
-            path_list("Get file info failed", [missing_text(p, c) for p, c in missing]),
+            path_list(
+                "Get file info failed", [missing_text(p, c, under.get(p)) for p, c in missing]
+            ),
             retryable=False,
             param="paths",
             value=paths,
@@ -136,7 +145,8 @@ async def get_file_info(
         )
 
     notes = "".join(
-        "\n" + format_status(missing_text(path, code), success=False) for path, code in missing
+        "\n" + format_status(missing_text(path, code, under.get(path)), success=False)
+        for path, code in missing
     )
     if any(holds_escape(path) for path, _ in missing):
         # Some paths found: the missing ones get only a note, and listing again would show the
@@ -320,6 +330,22 @@ async def get_dir_size(
         logger.debug("Get directory size: path check failed: %s", e)
         entry = {}
     code = entry.get("code")
+    if code == 401:
+        # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). A transport
+        # error ends the call, as in the check above.
+        try:
+            blocker = (await files_above(client, [(normalized, 401)])).get(normalized)
+        except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's
+            synology_error_response("Get directory size", e)
+        if blocker:
+            error_response(
+                ErrorCode.NOT_FOUND,
+                f"Get directory size failed: {under_file_text(normalized, blocker)}.",
+                retryable=False,
+                param="path",
+                value=path,
+                suggestion=missing_paths_suggestion([(normalized, 408)]),
+            )
     if isinstance(code, int) and not isinstance(code, bool):
         _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
     if _read_denied(entry):

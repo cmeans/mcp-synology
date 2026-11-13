@@ -8,7 +8,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
@@ -28,6 +28,9 @@ from mcp_synology.core.formatting import (
     holds_escape,
 )
 from mcp_synology.core.redaction import redact_urls
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -554,13 +557,17 @@ def correct_recycle_status_from_observation(
 _WILDCARD_CHARS = ("*", "?")
 
 
-async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[str, int]]:
+async def find_missing_paths(
+    client: DsmClient, paths: list[str], *, as_sent: bool = False
+) -> list[tuple[str, int]]:
     """Return ``(path, dsm_code)`` for each path that ``getinfo`` reports as missing.
 
     DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
     than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
     path proves nothing either way, so that path isn't reported. A failed request raises
     ``SynologyError``, or a transport error with no answer, for the caller to map.
+    ``as_sent``: each path as it was sent, not as DSM's entry spells it, for a caller that
+    matches the result against its own paths (pre-QA r4 on #714).
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     missing: list[tuple[str, int]] = []
@@ -570,7 +577,8 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
         )
         for entry in data.get("files", []):
             if "code" in entry:
-                missing.append((str(entry.get("path") or path), int(entry["code"])))
+                shown_as = path if as_sent else str(entry.get("path") or path)
+                missing.append((shown_as, int(entry["code"])))
     return missing
 
 
@@ -597,6 +605,12 @@ async def path_exists(client: DsmClient, path: str) -> bool | None:
 # isn't DSM's (`DsmHttpError`, `DsmReplyError`). `DsmTimeoutError` and `DsmUnavailableError`
 # come only from the POST helpers, which these checks don't use.
 _NO_ANSWER = (httpx.TransportError, DsmHttpError, DsmReplyError)
+
+
+def no_answer(exc: BaseException) -> bool:
+    """Whether ``exc`` is how a NAS that doesn't answer shows (`_NO_ANSWER`), for a caller that
+    catches more (QA r1 on #714: `DsmHttpError` and `DsmReplyError` are `SynologyError`s)."""
+    return isinstance(exc, _NO_ANSWER)
 
 
 def _files(data: Any) -> list[dict[str, Any]]:
@@ -647,30 +661,38 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     return None
 
 
-async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
+async def _file_above(
+    client: DsmClient, path: str, version: int, seen: dict[str, dict[str, Any]] | None = None
+) -> str | None:
     """The file among ``path``'s parents, when one is; None when none is found or DSM answers
     a parent with an error code (#517). A NAS that doesn't answer raises, as in `folder_kind`.
 
     The parents read folders down to the file, then 401 below it (vdsm 7.1: `f0.txt` a file,
     `f0.txt/x` and `f0.txt/x/y` 401), so the file is found by halving the levels: about
     log2(depth) requests, not one per level, which a deep path would make outlast a client's
-    60 s (pre-QA r2)."""
+    60 s (pre-QA r2). ``seen``: the entries of parents already read in this call, shared across
+    paths, so paths in the same folders don't read them again (pre-QA r3 on #714: 50 paths
+    with 401 for another reason cost 200 requests)."""
     parts = path.rstrip("/").split("/")
     # Parent lengths below the share (never a file) to the nearest parent (pre-QA r5).
     low, high = 3, len(parts) - 1
     while low <= high:
         end = (low + high) // 2
         parent = "/".join(parts[:end])
-        try:
-            data = await client.request(
-                "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
-            )
-        except _NO_ANSWER:
-            raise
-        except SynologyError as e:
-            logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
-            return None
-        entry: dict[str, Any] = next(iter(_files(data)), {})
+        entry: dict[str, Any] | None = None if seen is None else seen.get(parent)
+        if entry is None:
+            try:
+                data = await client.request(
+                    "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
+                )
+            except _NO_ANSWER:
+                raise
+            except SynologyError as e:
+                logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
+                return None
+            entry = next(iter(_files(data)), {})
+            if seen is not None:
+                seen[parent] = entry
         if entry.get("isdir") is False:
             return parent
         if entry.get("isdir") is True:
@@ -706,9 +728,72 @@ _CHECK_ACCESS = "check it and the account's access to it in DSM."
 _OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."
 
 
-def missing_text(path: str, code: int) -> str:
+async def files_above(client: DsmClient, missing: Sequence[tuple[str, int]]) -> dict[str, str]:
+    """``{path: file}`` for each path ``getinfo`` answered 401 for that lies under a file (#702).
+
+    DSM answers a path under a file (`…/f.txt/x`) with a 401 entry (vdsm 7.1 to 7.4.1), which
+    `missing_text` alone would call "can't be read". `_file_above` finds the file; a path whose
+    parents don't show one is left out, so its 401 stands. A NAS that doesn't answer raises, as
+    in `folder_kind`."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    found: dict[str, str] = {}
+    seen: dict[str, dict[str, Any]] = {}  # parents read, shared by the paths' searches
+    for path, code in missing:
+        if code != 401 or path in found:
+            continue
+        # A file already found above another path needs no search (pre-QA r1 on #702: 40 paths
+        # under one file cost 160 requests). `seen` alone covers paths at one depth, not ones
+        # at different depths, whose halving reads other parents (pre-QA r5 on #714).
+        known = next((f for f in found.values() if path.startswith(f + "/")), None)
+        blocker = known or await _file_above(client, path, version, seen)
+        if blocker:
+            found[path] = blocker
+    return found
+
+
+async def diagnose_under_file(client: DsmClient, path: str) -> str | None:
+    """The file among ``path``'s parents, or None (#702), after DSM refused a request in a way
+    that doesn't say why, which is how it answers a path under a file (`…/f.txt/x`, vdsm 7.1):
+    `create_folder`'s 1100, `upload_file`'s 401, `rename`'s 1200. Only a diagnosis of that
+    answer: whatever the check hits gives None and DSM's answer stands (a DSM error logged at
+    DEBUG, no answer at WARNING). A check *before* a request (a getinfo 401 entry, as in
+    `get_dir_size`, `download_file` and the copy or move destination) uses `files_above`
+    instead, which lets no answer end the call (pre-QA r2 on #702)."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    try:
+        return await _file_above(client, path, version)
+    except Exception:
+        logger.warning("Couldn't check whether %s is under a file", path, exc_info=True)
+        return None
+
+
+# The advice for a destination or new folder under a file (#702): nothing can be made there.
+UNDER_FILE_ADVICE = (
+    "A file can't hold files or folders: pick a folder that isn't below one (list_files shows "
+    "what's there)."
+)
+# A restore's (QA r1 on #714): its folder may be the original one, which the caller never gave.
+RESTORE_UNDER_FILE_ADVICE = (
+    "A file can't hold files or folders: restore to a folder that isn't below one "
+    "(dest_folder; list_files shows what's there)."
+)
+
+
+def under_file_text(path: str, file: str) -> str:
+    """A path under a file, in words (#702), as `list_files` and `search_files` write it
+    (#517)."""
+    return f"{shown(path)} doesn't exist on the NAS: {shown(file)} is a file"
+
+
+def missing_text(path: str, code: int, under_file: str | None) -> str:
     """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
-    model to translate DSM's code; a 407 was called "not found"), keeping the code."""
+    model to translate DSM's code; a 407 was called "not found"), keeping the code.
+    ``under_file``: the file above it (`files_above`), which means it doesn't exist (#702);
+    required, so no caller forgets to look."""
+    if under_file is not None:
+        # The code beside "doesn't exist", as for a 408, so it isn't read as the file's (QA r1
+        # on #714).
+        return f"{shown(path)}: doesn't exist (DSM error {code}): {shown(under_file)} is a file"
     why = (
         "no permission"
         if code in _NO_PERMISSION
@@ -717,14 +802,18 @@ def missing_text(path: str, code: int) -> str:
     return f"{shown(path)}: {why} (DSM error {code})"
 
 
-def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, str]:
+def unreadable_paths_error(
+    missing: list[tuple[str, int]], under: Mapping[str, str]
+) -> tuple[ErrorCode, str]:
     """The error code and suggestion for paths ``getinfo`` answered with a code (#620): every
     path refused for permission is ``permission_denied``, every missing one ``not_found``;
     a mix gets each kind's own advice (not the shared "retry with paths that exist", which a
     path refused for permission can't follow: QA round 3 on #606). A per-path code other
     than 408, 105 or 407 gets one fixed message under ``filestation_error``: the generic
     mapping of such a code (a session code's "re-authentication will be attempted", 599's
-    "background task") doesn't fit a path's entry (QA round 1 on #623)."""
+    "background task") doesn't fit a path's entry (QA round 1 on #623). A path in ``under``
+    (`files_above`: under a file) is missing, whatever its code (#702)."""
+    missing = [(path, 408 if path in under else code) for path, code in missing]
     codes = [code for _, code in missing]
     perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
     if codes and all(code in _NO_PERMISSION for code in codes):
