@@ -20,8 +20,6 @@ if TYPE_CHECKING:
 
     from tests.vdsm.container import VirtualDsmContainer
 
-from tests.vdsm.test_vdsm_dirsize import denied_folders  # noqa: F401 - the fixture
-
 pytestmark = pytest.mark.vdsm
 
 _BASE = 1_700_000_000  # 2023-11-14 22:13:20 UTC
@@ -180,7 +178,7 @@ class TestVdsmUnreadableFolder:
     async def test_refused_as_permission_denied(
         self,
         nas_client: Any,
-        denied_folders: str,  # noqa: F811
+        denied_folders: str,
         sub: str,
     ) -> None:
         import json
@@ -202,7 +200,7 @@ class TestVdsmUnreadableFolder:
     async def test_searched_for_admin(
         self,
         admin_client: Any,
-        denied_folders: str,  # noqa: F811
+        denied_folders: str,
         sub: str,
     ) -> None:
         """The check doesn't misfire for an account that can read the folder."""
@@ -214,7 +212,7 @@ class TestVdsmUnreadableFolder:
     async def test_the_readable_parent_is_searched(
         self,
         nas_client: Any,
-        denied_folders: str,  # noqa: F811
+        denied_folders: str,
     ) -> None:
         """The folder holding the denied ones is readable: it's searched, not refused."""
         from mcp_synology.modules.filestation.search import search_files

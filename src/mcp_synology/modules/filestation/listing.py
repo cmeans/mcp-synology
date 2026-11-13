@@ -309,6 +309,8 @@ async def list_files(
         # DSM answers 401 "Unknown error" for a path under a file (`…/file/child`, vdsm 7.1 to
         # 7.4.1, #517): one getinfo says it's missing, or a file, as for 408 below.
         if e.code == 401 and tell_files_apart and not isinstance(e, AuthenticationError):
+            # Only "missing" and "file" are read here: a denied folder is left to List's own
+            # answer (#703 refuses it in search_files, which DSM answers worse).
             kind = await folder_kind(client, normalized)
             if kind is not None and kind.kind == "missing":
                 blocked = f": {shown_path(kind.under_file)} is a file" if kind.under_file else ""

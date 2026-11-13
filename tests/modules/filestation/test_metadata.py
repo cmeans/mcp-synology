@@ -506,6 +506,21 @@ class TestGetDirSize:
         assert calls[:2] == ["getinfo", "start"]
 
     @respx.mock
+    @pytest.mark.parametrize("code", [105, 407])
+    async def test_dir_size_refuses_a_path_getinfo_denies(
+        self, mock_client: DsmClient, code: int
+    ) -> None:
+        """QA r1 on #716: a per-path 105 was measured as 0 B while search_files refused it;
+        both read `NO_PERMISSION_CODES`."""
+        calls: list[str] = []
+        self._getinfo_then_dirsize({"code": code, "path": "/video"}, calls)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/video")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "permission_denied", err
+        assert calls == ["getinfo"]
+
+    @respx.mock
     async def test_dir_size_runs_when_getinfo_reports_another_code(
         self, mock_client: DsmClient
     ) -> None:

@@ -8,7 +8,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import httpx
 
@@ -637,7 +637,7 @@ class FolderKind:
     #703); ``under_file`` is the file that makes a missing path impossible, for a path under a
     file."""
 
-    kind: str
+    kind: Literal["folder", "file", "missing", "denied"]
     under_file: str | None = None
 
 
@@ -669,7 +669,7 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
             return FolderKind("missing")
         # 105 and 407 per path, as `missing_text` reads them (pre-QA r1 on #703).
         code = entry.get("code")
-        if code in _NO_PERMISSION or (entry.get("isdir") is True and read_denied(entry)):
+        if code in NO_PERMISSION_CODES or (entry.get("isdir") is True and read_denied(entry)):
             return FolderKind("denied")
         if entry.get("code") == 401:
             # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm
@@ -743,7 +743,9 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
     return kinds
 
 
-_NO_PERMISSION = frozenset({105, 407})
+# A per-path getinfo code that means no permission (DSM's 105, File Station's 407), read the
+# same way everywhere: missing_text, folder_kind, get_dir_size (QA r1 on #716).
+NO_PERMISSION_CODES = frozenset({105, 407})
 _CHECK_ACCESS = "check it and the account's access to it in DSM."
 _OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."
 
@@ -816,7 +818,7 @@ def missing_text(path: str, code: int, under_file: str | None) -> str:
         return f"{shown(path)}: doesn't exist (DSM error {code}): {shown(under_file)} is a file"
     why = (
         "no permission"
-        if code in _NO_PERMISSION
+        if code in NO_PERMISSION_CODES
         else {408: "doesn't exist"}.get(code, "can't be read")
     )
     return f"{shown(path)}: {why} (DSM error {code})"
@@ -836,7 +838,7 @@ def unreadable_paths_error(
     missing = [(path, 408 if path in under else code) for path, code in missing]
     codes = [code for _, code in missing]
     perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
-    if codes and all(code in _NO_PERMISSION for code in codes):
+    if codes and all(code in NO_PERMISSION_CODES for code in codes):
         return ErrorCode.PERMISSION_DENIED, perm
     if all(code == 408 for code in codes):
         return ErrorCode.NOT_FOUND, missing_paths_suggestion(missing)
@@ -849,9 +851,9 @@ def unreadable_paths_error(
             parts.append(wildcard)
         if any(holds_escape(path) for path, _ in gone):
             parts.append(ESCAPED_NAME_ADVICE)
-    if any(code in _NO_PERMISSION for code in codes):
+    if any(code in NO_PERMISSION_CODES for code in codes):
         parts.append(f"For one with no permission: {perm}")
-    if any(code != 408 and code not in _NO_PERMISSION for code in codes):
+    if any(code != 408 and code not in NO_PERMISSION_CODES for code in codes):
         parts.append(
             _OTHER_CODE
             if len(parts) == 0
@@ -859,7 +861,7 @@ def unreadable_paths_error(
         )
     if gone:
         return ErrorCode.NOT_FOUND, " ".join(parts)
-    if any(code in _NO_PERMISSION for code in codes):
+    if any(code in NO_PERMISSION_CODES for code in codes):
         return ErrorCode.PERMISSION_DENIED, " ".join(parts)
     return ErrorCode.FILESTATION_ERROR, " ".join(parts)
 

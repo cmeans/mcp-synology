@@ -2082,23 +2082,24 @@ class TestMoreShownSites:
             await search_files(_File(), folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
         assert _error(exc)["code"] == "invalid_parameter"
 
-    async def test_search_a_folder_the_account_can_read(self) -> None:
-        """#703: read: true (or no permissions shown) is searched as before."""
+    @pytest.mark.parametrize(
+        "perm",
+        [{"acl": {"read": True}}, {"acl": {}}, {"acl": {"read": None}}, {}, None],
+        ids=["read-true", "no-read", "read-none", "no-acl", "no-perm"],
+    )
+    async def test_search_a_folder_the_account_can_read(self, perm: dict[str, Any] | None) -> None:
+        """#703: read: true, or no permissions shown, is searched as before (QA r1 on #716:
+        only read: true was tested)."""
         from mcp_synology.modules.filestation.search import search_files
 
         class _Readable(_FakeClient):
             async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
                 if method == "getinfo":
                     self.calls.append((method, kwargs["params"]))
-                    return {
-                        "files": [
-                            {
-                                "path": "/video/x",
-                                "isdir": True,
-                                "additional": {"perm": {"acl": {"read": True}}},
-                            }
-                        ]
-                    }
+                    entry: dict[str, Any] = {"path": "/video/x", "isdir": True}
+                    if perm is not None:
+                        entry["additional"] = {"perm": perm}
+                    return {"files": [entry]}
                 return await super().request(api, method, **kwargs)
 
         client = _Readable(

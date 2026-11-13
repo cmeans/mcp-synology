@@ -25,6 +25,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    NO_PERMISSION_CODES,
     files_above,
     missing_paths_suggestion,
     missing_text,
@@ -234,7 +235,8 @@ def _format_single_info(file_data: dict[str, Any]) -> str:
 
 
 def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str, int]]) -> None:
-    """Refuse get_dir_size for a path DSM reports as missing (408) or unreadable (407)."""
+    """Refuse get_dir_size for a path DSM reports as missing (408) or unreadable (105 or 407,
+    `NO_PERMISSION_CODES`, as `folder_kind` reads them for search_files, QA r1 on #716)."""
     if code == 408:
         error_response(
             ErrorCode.NOT_FOUND,
@@ -244,7 +246,7 @@ def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str,
             value=path,
             suggestion=missing_paths_suggestion(missing),
         )
-    if code == 407:  # no permission for it
+    if code in NO_PERMISSION_CODES:  # no permission for it
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"Get directory size failed: no permission to read {shown(normalized)} on the NAS.",
