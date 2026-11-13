@@ -727,8 +727,10 @@ Fix:
 5. **Code 600 ("Search folder access denied") from `search_files`:** before
    0.10.0, a search with no pattern, extension, size or date got this from
    DSM (with the default `filetype=all`), whatever the folder's permissions.
-   It now sends `pattern="*"` in that case and lists everything (#306). If it
-   still appears, check that the account can read the folder.
+   It now sends `pattern="*"` in that case and lists everything (#306). A folder
+   the account can't read is refused before the search starts, as
+   `permission_denied` (#703). If 600 still appears, check that the account can
+   read the folder.
 6. **"DSM couldn't list … (DSM error 408), though it's a folder that exists"
    from `list_files`:** DSM refused the listing as missing, but a check right
    after found the folder (it was probably created in between). Retry; if it
