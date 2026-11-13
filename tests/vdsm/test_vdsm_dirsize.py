@@ -13,21 +13,11 @@ Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_dirsize.py
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
-
-from tests.vdsm.conftest import _ssh
-from tests.vdsm.golden_image import load_golden_meta
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from tests.vdsm.container import VirtualDsmContainer
 
 pytestmark = pytest.mark.vdsm
 
@@ -83,29 +73,6 @@ async def test_unreadable_path_without_the_check(
         await metadata.get_dir_size(nas_client[0], path="/homes/admin")
     error = json.loads(str(exc.value))["error"]
     assert error["code"] == "permission_denied", error
-
-
-@pytest.fixture
-def denied_folders(vdsm_container: VirtualDsmContainer, dsm_version: str) -> Iterator[str]:
-    """A folder in /testshare holding a.txt (4 B), acl/ (an ACL entry denies the test user)
-    and posix/ (root's, mode 700, no ACL), each with one 8-byte file. Made over SSH."""
-    password = str(load_golden_meta(dsm_version).get("admin_password", ""))
-    name = f"mcp336-{os.urandom(3).hex()}"
-    vol = f"/volume1/testshare/{name}"
-    acl = "/usr/syno/bin/synoacltool"
-    cmd = (
-        f"mkdir -p {vol}/acl {vol}/posix && printf aaaa > {vol}/a.txt && "
-        f"printf bbbbbbbb > {vol}/acl/b.txt && printf cccccccc > {vol}/posix/c.txt && "
-        f"chmod -R a+rX {vol} && {acl} -add {vol}/acl user:mcptest:deny:rwxpdDaARWcCo:fd-- && "
-        f"({acl} -del {vol}/posix || true) && chown -R root:root {vol}/posix && "
-        f"chmod -R 700 {vol}/posix"
-    )
-    try:
-        rc, out = _ssh(vdsm_container, password, f"sh -c {shlex.quote(cmd)}", 60)
-        assert rc == 0, out
-        yield f"/testshare/{name}"
-    finally:
-        _ssh(vdsm_container, password, f"rm -rf {vol}", 60)
 
 
 @pytest.mark.parametrize("sub", ["acl", "posix"])

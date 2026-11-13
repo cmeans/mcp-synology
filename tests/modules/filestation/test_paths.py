@@ -2018,16 +2018,96 @@ class TestMoreShownSites:
             await search_files(client, folder_path="/video/a/child", pattern="x")  # type: ignore[arg-type]
         assert "start" not in [m for m, _ in client.calls]
 
-    async def test_search_starts_when_the_check_cant_tell(self) -> None:
-        """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
+    @pytest.mark.parametrize("code", [400, [105], {"a": 1}, True, "407"], ids=str)
+    async def test_search_starts_when_the_check_cant_tell(self, code: Any) -> None:
+        """#517: a check DSM doesn't answer leaves the search to DSM, as before. (A 407 is
+        no longer "can't tell": it's refused as denied, #703.)"""
         from mcp_synology.modules.filestation.search import search_files
 
         client = _FakeClient(
-            codes={"/video/x": 407},
+            codes={"/video/x": code},
             methods={
                 "start": {"taskid": "T1"},
                 "list": {"finished": True, "total": 0, "files": []},
             },
+        )
+        await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        assert "start" in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"path": "/video/x", "isdir": True, "additional": {"perm": {"acl": {"read": False}}}},
+            {"path": "/video/x", "code": 407},
+            {"path": "/video/x", "code": 105},
+        ],
+        ids=["read-false", "407", "105"],
+    )
+    async def test_search_a_folder_the_account_cant_read(self, entry: dict[str, Any]) -> None:
+        """#703: DSM answered an ACL-denied folder with 600 and a POSIX-denied one with a task
+        it lost (retryable); getinfo's permissions refuse it first, nothing started."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Denied(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [entry]}
+                return await super().request(api, method, **kwargs)
+
+        client = _Denied(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("permission_denied", False), error
+        assert error["message"] == "Search files failed: no permission to read /video/x on the NAS."
+        assert "start" not in [m for m, _ in client.calls]
+        # The check asks for the permissions.
+        assert client.calls[0][1].get("additional") == '["perm"]', client.calls
+
+    async def test_search_a_file_the_account_cant_read_is_a_file(self) -> None:
+        """Pre-QA r1 on #703: only a folder is refused for read: false; a file stays "is a file,
+        not a folder", which is what the caller needs to change."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _File(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    self.calls.append((method, kwargs["params"]))
+                    entry = {"path": "/video/x", "isdir": False}
+                    entry["additional"] = {"perm": {"acl": {"read": False}}}
+                    return {"files": [entry]}
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await search_files(_File(), folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        assert _error(exc)["code"] == "invalid_parameter"
+
+    @pytest.mark.parametrize(
+        "perm",
+        [{"acl": {"read": True}}, {"acl": {}}, {"acl": {"read": None}}, {}, None],
+        ids=["read-true", "no-read", "read-none", "no-acl", "no-perm"],
+    )
+    async def test_search_a_folder_the_account_can_read(self, perm: dict[str, Any] | None) -> None:
+        """#703: read: true, or no permissions shown, is searched as before (QA r1 on #716:
+        only read: true was tested)."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Readable(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    self.calls.append((method, kwargs["params"]))
+                    entry: dict[str, Any] = {"path": "/video/x", "isdir": True}
+                    if perm is not None:
+                        entry["additional"] = {"perm": perm}
+                    return {"files": [entry]}
+                return await super().request(api, method, **kwargs)
+
+        client = _Readable(
+            methods={
+                "start": {"taskid": "T1"},
+                "list": {"finished": True, "total": 0, "files": []},
+            }
         )
         await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
         assert "start" in [m for m, _ in client.calls]
@@ -3476,6 +3556,18 @@ class TestPlanIsTheOnlyWayIntoABatch:
                 budget=Budget(1.0),
                 records=None,
             )
+
+
+@pytest.mark.parametrize("code", [105, 407])
+async def test_a_copy_into_a_destination_getinfo_denies_is_refused(code: int) -> None:
+    """Pre-QA r4 on #716: the destination check refused only 407; a 105 started the copy."""
+    from mcp_synology.modules.filestation.operations import copy_files
+
+    client = _FakeClient(existing={"/video/a"}, codes={"/video/dst": code})
+    with pytest.raises(ToolError) as exc:
+        await copy_files(client, paths=["/video/a"], dest_folder="/video/dst")  # type: ignore[arg-type,list-item]
+    assert _error(exc)["code"] == "permission_denied"
+    assert "start" not in [m for m, _ in client.calls]
 
 
 async def test_search_a_refused_relogin_on_the_check_is_named_for_search() -> None:
