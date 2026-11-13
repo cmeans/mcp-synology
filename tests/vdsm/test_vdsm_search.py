@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
     from tests.vdsm.container import VirtualDsmContainer
 
+from tests.vdsm.test_vdsm_dirsize import denied_folders  # noqa: F401 - the fixture
+
 pytestmark = pytest.mark.vdsm
 
 _BASE = 1_700_000_000  # 2023-11-14 22:13:20 UTC
@@ -166,3 +168,56 @@ class TestVdsmFolderChecks:
             f"Search files failed: {dated_folder}/f0.txt/{below} doesn't exist on the NAS: "
             f"{dated_folder}/f0.txt is a file."
         ), error
+
+
+class TestVdsmUnreadableFolder:
+    """#703: search_files on a folder the account can't read. DSM answered an ACL-denied
+    folder with 600 "Search folder access denied" (filestation_error) and a POSIX-denied one
+    (root's, mode 700) with a task it then lost, which read as retryable. getinfo's permissions
+    tell first, as get_dir_size reads them (#336)."""
+
+    @pytest.mark.parametrize("sub", ["acl", "posix"])
+    async def test_refused_as_permission_denied(
+        self,
+        nas_client: Any,
+        denied_folders: str,  # noqa: F811
+        sub: str,
+    ) -> None:
+        import json
+
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.modules.filestation.search import search_files
+
+        folder = f"{denied_folders}/{sub}"
+        with pytest.raises(ToolError) as exc:
+            await search_files(nas_client[0], folder_path=folder, pattern="x")
+        error = json.loads(str(exc.value))["error"]
+        assert (error["code"], error["retryable"]) == ("permission_denied", False), error
+        assert error["message"] == (
+            f"Search files failed: no permission to read {folder} on the NAS."
+        ), error
+
+    @pytest.mark.parametrize("sub", ["acl", "posix"])
+    async def test_searched_for_admin(
+        self,
+        admin_client: Any,
+        denied_folders: str,  # noqa: F811
+        sub: str,
+    ) -> None:
+        """The check doesn't misfire for an account that can read the folder."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        result = await search_files(admin_client[0], folder_path=f"{denied_folders}/{sub}")
+        assert {"acl": "b.txt", "posix": "c.txt"}[sub] in result, result
+
+    async def test_the_readable_parent_is_searched(
+        self,
+        nas_client: Any,
+        denied_folders: str,  # noqa: F811
+    ) -> None:
+        """The folder holding the denied ones is readable: it's searched, not refused."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        result = await search_files(nas_client[0], folder_path=denied_folders, pattern="a.txt")
+        assert "a.txt" in result, result

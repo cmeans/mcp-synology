@@ -2033,6 +2033,64 @@ class TestMoreShownSites:
         await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
         assert "start" in [m for m, _ in client.calls]
 
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"path": "/video/x", "isdir": True, "additional": {"perm": {"acl": {"read": False}}}},
+            {"path": "/video/x", "code": 407},
+        ],
+        ids=["read-false", "407"],
+    )
+    async def test_search_a_folder_the_account_cant_read(self, entry: dict[str, Any]) -> None:
+        """#703: DSM answered an ACL-denied folder with 600 and a POSIX-denied one with a task
+        it lost (retryable); getinfo's permissions refuse it first, nothing started."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Denied(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [entry]}
+                return await super().request(api, method, **kwargs)
+
+        client = _Denied(methods={"start": {"taskid": "T1"}})
+        with pytest.raises(ToolError) as exc:
+            await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        error = _error(exc)
+        assert (error["code"], error["retryable"]) == ("permission_denied", False), error
+        assert error["message"] == "Search files failed: no permission to read /video/x on the NAS."
+        assert "start" not in [m for m, _ in client.calls]
+        # The check asks for the permissions.
+        assert client.calls[0][1].get("additional") == '["perm"]', client.calls
+
+    async def test_search_a_folder_the_account_can_read(self) -> None:
+        """#703: read: true (or no permissions shown) is searched as before."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Readable(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    self.calls.append((method, kwargs["params"]))
+                    return {
+                        "files": [
+                            {
+                                "path": "/video/x",
+                                "isdir": True,
+                                "additional": {"perm": {"acl": {"read": True}}},
+                            }
+                        ]
+                    }
+                return await super().request(api, method, **kwargs)
+
+        client = _Readable(
+            methods={
+                "start": {"taskid": "T1"},
+                "list": {"finished": True, "total": 0, "files": []},
+            }
+        )
+        await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        assert "start" in [m for m, _ in client.calls]
+
     async def test_upload_already_exists(self, tmp_path: Any) -> None:
         from mcp_synology.modules.filestation.transfer import upload_file
 
