@@ -94,7 +94,7 @@ code — fix the underlying credential or 2FA state before re-running.
 Station's 407, "Operation not permitted").**
 
 `search_files` and `get_dir_size` also refuse a folder up front, without asking DSM to
-do anything, when `getinfo` (asked with `additional=["perm"]`) gives a 105 or 407 entry
+do anything (and `list_files` after List answers 408 for one), when `getinfo` (asked with `additional=["perm"]`) gives a 105 or 407 entry
 for it or reports `acl.read: false`: a folder an ACL or POSIX mode denies, which DSM would otherwise answer with 600,
 a lost search task or 0 B (#336, #703). At debug level the log shows that `getinfo` reply.
 
