@@ -521,6 +521,19 @@ class TestGetDirSize:
         assert calls == ["getinfo"]
 
     @respx.mock
+    @pytest.mark.parametrize("code", [[407], {"a": 1}, "407", True])
+    async def test_dir_size_runs_when_the_check_code_is_malformed(
+        self, mock_client: DsmClient, code: Any
+    ) -> None:
+        """QA r3 on #716: get_dir_size reads the code through entry_code; a malformed one
+        can't tell, so the task runs (it raised TypeError on a list or dict)."""
+        calls: list[str] = []
+        self._getinfo_then_dirsize({"code": code, "path": "/video"}, calls)
+        result = await get_dir_size(mock_client, path="/video")
+        assert "Total size" in result
+        assert calls[:2] == ["getinfo", "start"]
+
+    @respx.mock
     async def test_dir_size_runs_when_getinfo_reports_another_code(
         self, mock_client: DsmClient
     ) -> None:
