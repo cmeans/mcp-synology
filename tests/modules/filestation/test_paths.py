@@ -2380,9 +2380,15 @@ class TestPathUnderAFile:
         from mcp_synology.modules.filestation.transfer import download_file
 
         class _Proxy(_UnderFile):
+            reads = 0
+
             async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
                 if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
-                    raise DsmHttpError("HTTP 502 from getinfo", 502)
+                    self.reads += 1
+                    # A restore reads the folders' parents before the search: fail the
+                    # search's read, not the first (pre-QA r3 on #714).
+                    if tool != "restore" or self.reads > 1:
+                        raise DsmHttpError("HTTP 502 from getinfo", 502)
                 return await super().request(api, method, **kwargs)
 
         client: Any = _Proxy()
