@@ -2186,20 +2186,25 @@ async def _recreate_missing_folders(
     except SynologyError as e:
         synology_error_response("Restore files", e)
     blocked = [path for path in wanted if path in under]
+    texts = [under_file_text(path, under[path]) for path in blocked]
     # A destination this account can't use is refused before anything moves: found only at its
     # item's turn, it came after earlier items were restored (#482).
     denied = [path for path, code in found if code == 407 and path in wanted]
     if denied:
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            # One a line when two or more (#693).
-            f"Restore files refused: no permission to use the original folder {shown(denied[0])}. "
-            "Nothing was restored."
-            if len(denied) == 1
-            else then(
-                path_list(
-                    "Restore files refused: no permission to use the original folders",
-                    [shown(p) for p in denied],
+            # One a line when two or more (#693). The folders under a file are named too, as the
+            # advice counts them as stuck (QA r3 on #714).
+            then(
+                then(
+                    f"Restore files refused: no permission to use the original folder "
+                    f"{shown(denied[0])}."
+                    if len(denied) == 1
+                    else path_list(
+                        "Restore files refused: no permission to use the original folders",
+                        [shown(p) for p in denied],
+                    ),
+                    path_list("Under a file too", texts) if texts else "",
                 ),
                 "Nothing was restored.",
             ),
@@ -2215,7 +2220,6 @@ async def _recreate_missing_folders(
     # An original folder under a file is refused before anything moves too: found only at its
     # item's turn, it came after earlier items were restored (QA r1 on #714).
     if blocked:
-        texts = [under_file_text(path, under[path]) for path in blocked]
         error_response(
             ErrorCode.NOT_FOUND,
             # One a line when two or more (#693).

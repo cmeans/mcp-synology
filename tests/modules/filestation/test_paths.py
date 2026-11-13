@@ -2398,6 +2398,27 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert error["code"] == "permission_denied", error
         assert not error["suggestion"].endswith(_SPLIT), error
+        # QA r3 on #714: the folders under a file are named too.
+        assert error["message"] == (
+            "Restore files refused: no permission to use the original folder /video/no. "
+            f"Under a file too: /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}. "
+            "Nothing was restored."
+        ), error["message"]
+
+        # Two of them, one a line (#693).
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                _Both(),  # type: ignore[arg-type]
+                share="/video",  # type: ignore[arg-type]
+                paths=["no/b.txt", "f.txt/x/c.txt", "f.txt/y/d.txt"],
+            )
+        assert _error(exc)["message"] == (
+            "Restore files refused: no permission to use the original folder /video/no.\n"
+            "Under a file too:\n"
+            f"  /video/f.txt/x doesn't exist on the NAS: {_BLOCKED}\n"
+            f"  /video/f.txt/y doesn't exist on the NAS: {_BLOCKED}\n"
+            "Nothing was restored."
+        )
 
     async def test_a_dsm_error_in_the_search_finds_nothing(self) -> None:
         """Pre-QA r4 on #714: a DSM error code on a parent's getinfo ends the search with no
