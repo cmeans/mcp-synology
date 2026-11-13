@@ -3556,7 +3556,7 @@ class TestShareRootSourcesRefused:
         message = json.loads(str(exc.value))["error"]["message"]
         # A padded path is shown quoted, so the stray whitespace is visible (#489); the
         # quoting rule itself is tested in test_helpers (TestShown).
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
 
         assert f"{shown(checked)}: doesn't exist (DSM error 408)" in message
 

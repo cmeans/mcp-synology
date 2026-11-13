@@ -29,10 +29,10 @@ import httpx
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.display import shown
 from mcp_synology.core.errors import DsmReplyError, RequestTooLongError
 from mcp_synology.modules.filestation import batch, operations, tasks
 from mcp_synology.modules.filestation.batch import BATCH_TOOLS, BatchOutcome
-from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.filestation.tasks import TaskRecords, parse_handle
 from tests.modules.filestation.fake_dsm import (
     CANCEL,

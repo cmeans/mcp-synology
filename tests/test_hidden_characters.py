@@ -19,13 +19,13 @@ from typing import Any
 import pytest
 import regex
 
-from mcp_synology.modules.filestation import helpers
+from mcp_synology.core import display
 
 ROOT = Path(__file__).resolve().parent.parent
 
 # Default-ignorable code points (zero-width characters, joiners, variation selectors,
 # tags, soft hyphen, BOM, Hangul fillers; the bidi controls are among them), the other
-# characters the File Station checks say draw nothing (helpers' `_BRAILLE_BLANK` and
+# characters the File Station checks say draw nothing (`core/display.py`'s `_BRAILLE_BLANK` and
 # `_ANNOTATION`: a test keeps this in step), the line and paragraph separators, every
 # space but U+0020 (NBSP, U+3000, ...), and every control character but tab, LF and CR
 # (ESC draws nothing on GitHub, and in a terminal `ESC[2J` clears the screen).
@@ -158,7 +158,7 @@ def test_the_pattern_finds_each_kind(char: str) -> None:
 
 
 def test_the_pattern_covers_what_the_checks_call_drawing_nothing() -> None:
-    for char in helpers._BRAILLE_BLANK + "".join(helpers._ANNOTATION):
+    for char in display._BRAILLE_BLANK + "".join(display._ANNOTATION):
         assert _HIDDEN.fullmatch(char), hex(ord(char))
 
 

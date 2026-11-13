@@ -109,7 +109,7 @@ class TestVdsmFolderChecks:
     ) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
 
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
         from mcp_synology.modules.filestation.search import search_files
 
         missing = dated_folder + suffix

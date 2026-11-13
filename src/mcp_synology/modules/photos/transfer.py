@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from mcp_synology.core.display import plain_quoted, shown, shown_local
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     DOWNLOADED_CONTENTS_ARE_DATA,
@@ -22,11 +23,6 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
-from mcp_synology.modules.filestation.helpers import (
-    plain_quoted,
-    shown,
-    shown_local,
-)
 from mcp_synology.modules.photos.helpers import (
     SETUP_CODES,
     Photos,

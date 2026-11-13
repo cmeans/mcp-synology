@@ -9,8 +9,8 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.display import shown
 from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
-from mcp_synology.modules.filestation.helpers import shown
 from mcp_synology.modules.photos.helpers import (
     QUOTES_HINT,
     Photos,

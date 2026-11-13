@@ -27,8 +27,9 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
+from mcp_synology.core.display import shown_local
 from mcp_synology.core.errors import ErrorCode
-from mcp_synology.core.formatting import error_response
+from mcp_synology.core.formatting import error_response, path_list
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -80,20 +81,89 @@ def default_downloads_dir(platform: str = sys.platform) -> Path:
 
 def _resolve(path: str | Path) -> Path:
     """Resolve ``~``, ``..`` and symlinks. Raises ``ValueError`` when that's impossible:
-    a NUL byte (every Python), or a symlink loop (``RuntimeError`` on 3.11/3.12)."""
+    a NUL byte (every Python), an unknown ``~user`` or no home directory (``expanduser``'s
+    ``RuntimeError``), or a symlink loop or a chain of links too long to follow (``resolve``'s
+    ``RuntimeError`` and ``RecursionError`` on 3.11/3.12)."""
     try:
-        return Path(path).expanduser().resolve(strict=False)
+        expanded = Path(path).expanduser()
+    except RuntimeError as e:
+        # Python's text ("Could not determine home directory.") has no path in it; a loop is
+        # resolve()'s, below (pre-QA r3 on #712: both were called a loop).
+        msg = f"{shown_local(str(path))} can't be resolved: {str(e).rstrip('.')}"
+        raise ValueError(msg) from e
+    try:
+        return expanded.resolve(strict=False)
     except UnicodeEncodeError as e:  # a ValueError, whose text is Python's codec message
-        msg = f"{str(path)!r} can't be resolved: this system's locale can't encode the path"
+        msg = (
+            f"{shown_local(str(path))} can't be resolved: this system's locale can't encode "
+            "the path"
+        )
         raise ValueError(msg) from e
-    except (OSError, ValueError, RuntimeError) as e:
-        msg = f"{str(path)!r} can't be resolved: {e}"
+    except RecursionError as e:
+        # A chain of links longer than realpath's recursion can follow (3.11/3.12, which
+        # recurse once per link; the OS stops at 40), not a loop (QA r3 on #712).
+        msg = f"{shown_local(str(path))} can't be resolved: too many symlinks to follow"
         raise ValueError(msg) from e
+    except RuntimeError as e:
+        # A symlink loop on 3.11/3.12, whose text repeats the path with repr (doubling a
+        # Windows backslash): say what it is, once (pre-QA r2 on #712).
+        msg = f"{shown_local(str(path))} can't be resolved: a symlink loop"
+        raise ValueError(msg) from e
+    except OSError as e:
+        # The OS's own words, without its copy of the path, as the transfer modules do (#698).
+        msg = f"{shown_local(str(path))} can't be resolved: {e.strerror or type(e).__name__}"
+        raise ValueError(msg) from e
+    except ValueError as e:  # a NUL byte: Python's text ("embedded null byte") has no path
+        msg = f"{shown_local(str(path))} can't be resolved: {e}"
+        raise ValueError(msg) from e
+
+
+def _working_folder_failed(path: str | Path, error: ValueError) -> bool:
+    """Whether ``path`` couldn't be resolved because of the working folder: relative, and
+    the OS refused (`_resolve`'s ``OSError``, as when that folder is gone), not a loop, a long
+    chain or a NUL byte, which an absolute path wouldn't fix (QA r4 on #712)."""
+    relative = not (os.path.isabs(path) or str(path).startswith("~"))
+    return relative and isinstance(error.__cause__, OSError)
 
 
 def _lexical(path: str | Path) -> Path:
     """``~`` and ``..`` handled, symlinks not followed."""
     return Path(os.path.normpath(os.path.abspath(Path(path).expanduser())))
+
+
+def _leads_to(path: str | Path) -> Path | None:
+    """Where ``path`` leads: ``os.path.realpath``'s answer, which follows links as far as they
+    go and stops at a loop without raising. A chain of links too long for its recursion
+    (3.11/3.12, one level per link) is followed in its longest prefix realpath can resolve, with
+    the rest as spelled, so a root spelled through a link (`/home` for `/var/home`) still holds
+    it (pre-QA r5 on #712); None when a ``..`` follows the part that couldn't be followed, as
+    where it leads then isn't known. The prefix is found by halving: every prefix longer than
+    one that fails fails too, and each try follows the chain again, up to the recursion limit
+    (pre-QA r6: one try per part took 27 s for 5,000 parts, blocking the event loop). The first
+    link that can't be followed counts as where it's spelled: a link in an allowed folder to a
+    long chain outside is "too many symlinks", not outside (pre-QA r7; following one more hop
+    takes about 25 ms and only moves the limit). Only 3.11/3.12 get here: realpath is iterative
+    from 3.13, so this can go once the floor is 3.13. Raises what ``expanduser``, ``cwd`` and
+    ``realpath`` raise (an unknown ~user, the working folder gone)."""
+    expanded = Path(path).expanduser()
+    current = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    try:
+        return Path(os.path.realpath(current))
+    except RecursionError:
+        pass
+    parts = current.parts
+    good, bad = 1, len(parts)  # the anchor (`/`) alone resolves; the whole path doesn't
+    while good + 1 < bad:
+        mid = (good + bad) // 2
+        try:
+            os.path.realpath(Path(*parts[:mid]))
+            good = mid
+        except RecursionError:
+            bad = mid
+    rest = parts[good:]
+    if ".." in rest:
+        return None
+    return Path(os.path.realpath(Path(*parts[:good]))).joinpath(*rest)
 
 
 def lexically_inside(path: str | Path, roots: list[Path]) -> bool:
@@ -112,7 +182,7 @@ def expand_setting(setting: str, entry: str) -> Path:
     try:
         return Path(entry).expanduser()
     except RuntimeError as e:
-        msg = f"{setting}: {entry!r} can't be expanded: {e}"
+        msg = f"{setting}: {shown_local(entry)} can't be expanded: {e}"
         raise ValueError(msg) from e
 
 
@@ -133,11 +203,11 @@ CONTROL_CHARACTER_ADVICE = (
 
 def check_resolvable(setting: str, entry: str) -> Path:
     """``~`` expanded, and the path checked to have no control character, which would reach
-    the model's instructions as written, and to resolve (a NUL byte; a symlink loop on Python
-    3.11 and 3.12). The server resolves these when it starts, so a config that passes here
-    starts: otherwise `check` passed what `serve` crashed on (#511 PR 3). The instructions
-    print the resolved path, so that's checked too: a link can lead to a folder with a line
-    break in its name (QA round 1 on #541)."""
+    the model's instructions as written, and to resolve (a NUL byte; a symlink loop or a chain
+    of links too long to follow on Python 3.11 and 3.12). The server resolves these when it
+    starts, so a config that passes here starts: otherwise `check` passed what `serve` crashed
+    on (#511 PR 3). The instructions print the resolved path, so that's checked too: a link
+    can lead to a folder with a line break in its name (QA round 1 on #541)."""
     if has_control_character(entry):
         msg = f"{setting} {CONTROL_CHARACTER_ADVICE}"
         raise ValueError(msg)
@@ -150,7 +220,7 @@ def check_resolvable(setting: str, entry: str) -> Path:
     if has_control_character(str(resolved)):
         msg = (
             f"{setting} resolves to a path with a control character, line break or lone surrogate: "
-            f"{str(resolved)!r}"
+            f"{shown_local(resolved)}"
         )
         raise ValueError(msg)
     return path
@@ -164,7 +234,7 @@ def check_local_path_entries(setting: str, value: list[str] | None) -> list[str]
     """
     for entry in value or []:
         if not check_resolvable(setting, entry).is_absolute():
-            msg = f"{setting} entries must be absolute (or start with ~): {entry!r}"
+            msg = f"{setting} entries must be absolute (or start with ~): {shown_local(entry)}"
             raise ValueError(msg)
     return value
 
@@ -210,7 +280,9 @@ def roots_for_description(roots: list[Path]) -> str:
     desktop app, in the 0.10.0rc5 and rc6 live tests), so a parameter that takes a local
     path names the folders itself instead of pointing to the instructions' LOCAL PATHS.
     """
-    return "one of the allowed local folders (" + ", ".join(str(r) for r in roots) + ")"
+    # Each folder as replies write a local path (#697): a description can't put one a line,
+    # so the quoting alone keeps a folder named `a, b` from reading as two.
+    return "one of the allowed local folders (" + ", ".join(shown_local(r) for r in roots) + ")"
 
 
 def outside_allowed_roots(path: str | Path, roots: list[Path]) -> Path | None:
@@ -243,11 +315,16 @@ def refuse_outside_roots(
     if roots is None:
         return
 
-    def refuse(shown: str) -> NoReturn:
+    def refuse(what: str) -> NoReturn:
+        # The caller's path, the one it resolves to and the allowed folders as replies write a
+        # local path (`shown_local`, #697), the folders one a line when there are two or more.
         error_response(
             ErrorCode.PERMISSION_DENIED,
-            f"{operation} refused: {shown} is outside the folders this server may use on "
-            f"this machine: {', '.join(str(r) for r in roots)}.",
+            path_list(
+                f"{operation} refused: {what} is outside the folders this server may use on "
+                "this machine",
+                [shown_local(r) for r in roots],
+            ),
             retryable=False,
             param=param,
             value=value,
@@ -263,21 +340,49 @@ def refuse_outside_roots(
         try:
             Path(path).expanduser()
         except RuntimeError:
-            refuse(value)
+            refuse(shown_local(value))
     try:
         refused = outside_allowed_roots(path, roots)
     except ValueError as e:
-        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186).
+        # A NUL byte, or on Python 3.11/3.12 a symlink loop or a chain of links too long to
+        # follow (QA R1 on #186). One that leads outside the allowed folders is refused as
+        # outside: a different error would tell the caller a loop exists there (#458). Where
+        # it leads is `_leads_to`'s answer (its docstring has the rules for a long chain);
+        # unknown (a `..` past a chain), the spelling decides, so a path spelled in an allowed
+        # folder isn't called outside it. Anything it can't answer (an unknown ~user, the
+        # working folder gone) keeps the error below. Rounds: QA r2 and r3, pre-QA r3, r5, r6.
+        if "\x00" not in value:
+            try:
+                real = _leads_to(path)
+                inside = (
+                    lexically_inside(path, roots)
+                    if real is None
+                    else any(real == root or root in real.parents for root in roots)
+                )
+            except (OSError, RuntimeError, ValueError):
+                inside = True
+            if not inside:
+                refuse(shown_local(value))
         error_response(
             ErrorCode.INVALID_PARAMETER,
             f"{operation} refused: {str(e).rstrip('.')}.",
             retryable=False,
             param=param,
             value=value,
-            suggestion="Pass a plain local path without NUL characters or symlink loops.",
+            suggestion=(
+                "Pass a plain local path without NUL characters, symlink loops or long chains "
+                "of symlinks."
+                if not _working_folder_failed(path, e)
+                else "Pass an absolute local path."  # pre-QA r7, QA r4 on #712
+            ),
         )
     if refused is None:
         return
     # Explain the resolved path only for a link inside an allowed folder that leads out;
     # for anything else it would reveal what exists outside (QA R1 on #186).
-    refuse(f"{value} (resolves to {refused})" if lexically_inside(path, roots) else value)
+    shown_value = shown_local(value)
+    refuse(
+        f"{shown_value} (resolves to {shown_local(refused)})"
+        if lexically_inside(path, roots)
+        else shown_value
+    )

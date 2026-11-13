@@ -1,4 +1,5 @@
-"""Tests for modules/filestation/helpers.py — path, size, polling, icons."""
+"""Tests for modules/filestation/helpers.py (path, size, polling, icons) and for the display rules
+moved to core/display.py in #697 (`invisible_problem`, `shown`, `json_quoted` and the rest)."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core import display
 from mcp_synology.core.errors import ErrorCode, SynologyError, error_from_code
 from mcp_synology.core.formatting import ESCAPED_NAME_ADVICE, format_size
 from mcp_synology.modules.filestation.helpers import (
@@ -123,7 +125,7 @@ class TestShown:
         ],
     )
     def test_shown(self, path: str, expected: str) -> None:
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
 
         assert shown(path) == expected
 
@@ -314,7 +316,7 @@ class TestInvisibleProblem:
         ],
     )
     def test_invisible_problem(self, name: str, expected: str | None) -> None:
-        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.core.display import invisible_problem
 
         assert invisible_problem(name) == expected
 
@@ -322,7 +324,7 @@ class TestInvisibleProblem:
         """Each tag used to rescan its run: 10,000 tags took 10 s (pre-QA on #515)."""
         import time
 
-        from mcp_synology.modules.filestation.helpers import invisible_problem, shown
+        from mcp_synology.core.display import invisible_problem, shown
 
         run = "\U0001f3f4" + "\U000e0067" * 50_000 + "\U000e007f"
         start = time.monotonic()
@@ -344,19 +346,18 @@ class TestInvisibleProblem:
         on #515). The test counts the matches described rather than timing them, so
         coverage and slow CI runners don't matter (pre-QA on #515): uncapped, these names
         describe 3,000 or more."""
-        from mcp_synology.modules.filestation import helpers
 
         described = 0
-        real = helpers._describe_repeat
+        real = display._describe_repeat
 
         def counting(*args: Any) -> tuple[str, bool]:
             nonlocal described
             described += 1
             return real(*args)
 
-        monkeypatch.setattr(helpers, "_describe_repeat", counting)
+        monkeypatch.setattr(display, "_describe_repeat", counting)
         assert len(name.encode()) <= 255
-        assert helpers.invisible_problem(name) is not None
+        assert display.invisible_problem(name) is not None
         assert 0 < described < 1000
 
     @pytest.mark.parametrize(
@@ -372,7 +373,7 @@ class TestInvisibleProblem:
         (QA round 2 on #515)."""
         import time
 
-        from mcp_synology.modules.filestation.helpers import invisible_problem, shown
+        from mcp_synology.core.display import invisible_problem, shown
 
         start = time.monotonic()
         invisible_problem(name)
@@ -383,26 +384,25 @@ class TestInvisibleProblem:
         """At most 4 characters per name in a variant form; emoji VS16 and Mongolian
         selectors don't count (maintainer, QA round 2 on #515). The message names each
         one, since the selectors can't be seen."""
-        from mcp_synology.modules.filestation import helpers
 
-        assert helpers.SELECTOR_LIMIT == 4
+        assert display.SELECTOR_LIMIT == 4
         four = "\u8f9b\U000e0100\u845b\U000e0101\u90ce\U000e0100\u6f22\ufe00"
-        assert helpers.invisible_problem(four) is None
+        assert display.invisible_problem(four) is None
         five = four + "\u5b57\U000e0100"
-        assert helpers.invisible_problem(five) == (
+        assert display.invisible_problem(five) == (
             "has 5 variation selectors (\u8f9b U+E0100, \u845b U+E0101, \u90ce U+E0100, "
             "\u6f22 U+FE00, \u5b57 U+E0100), more than the 4 a name may have"
         )
-        assert helpers.invisible_problem("\u2764\ufe0f" * 10) is None
-        assert helpers.invisible_problem("\u1820\u180b\u1821\u180c" * 4) is None
-        monkeypatch.setattr(helpers, "SELECTOR_LIMIT", 0)
-        assert helpers.invisible_problem("\u5b57\U000e0100") == (
+        assert display.invisible_problem("\u2764\ufe0f" * 10) is None
+        assert display.invisible_problem("\u1820\u180b\u1821\u180c" * 4) is None
+        monkeypatch.setattr(display, "SELECTOR_LIMIT", 0)
+        assert display.invisible_problem("\u5b57\U000e0100") == (
             "has 1 variation selector (\u5b57 U+E0100), more than the 0 a name may have"
         )
 
     def test_every_emoji_variation_sequence_passes(self) -> None:
-        from mcp_synology.modules.filestation.helpers import invisible_problem
-        from mcp_synology.modules.filestation.standardized_variants import EMOJI_VS_BASES
+        from mcp_synology.core.display import invisible_problem
+        from mcp_synology.core.standardized_variants import EMOJI_VS_BASES
 
         refused = [
             base + vs
@@ -415,8 +415,8 @@ class TestInvisibleProblem:
 
     def test_every_standardized_variant_passes(self) -> None:
         """Every VS1-VS7 sequence StandardizedVariants.txt registers, but after ASCII."""
-        from mcp_synology.modules.filestation.helpers import invisible_problem
-        from mcp_synology.modules.filestation.standardized_variants import STANDARDIZED_BASES
+        from mcp_synology.core.display import invisible_problem
+        from mcp_synology.core.standardized_variants import STANDARDIZED_BASES
 
         refused = [
             (base, vs)
@@ -434,7 +434,7 @@ class TestInvisibleProblem:
         `unicodedata` gives them, in canonical order (QA round 5 on #515)."""
         import unicodedata
 
-        from mcp_synology.modules.filestation.helpers import _nfd_with_sources
+        from mcp_synology.core.display import _nfd_with_sources
 
         names = [
             "a\u0301\u0316\u0300\u0323",
@@ -460,8 +460,7 @@ class TestInvisibleProblem:
         import sys
         import unicodedata
 
-        from mcp_synology.modules.filestation import helpers
-        from mcp_synology.modules.filestation.decompositions import NEW_DECOMPOSITIONS
+        from mcp_synology.core.decompositions import NEW_DECOMPOSITIONS
 
         for cp in range(sys.maxunicode + 1):
             char = chr(cp)
@@ -469,19 +468,19 @@ class TestInvisibleProblem:
                 "<"
             ):
                 continue
-            parts = helpers._decompose(char)
+            parts = display._decompose(char)
             assert parts == unicodedata.normalize("NFD", char), hex(cp)
-            marks = [c for c in parts if helpers._MARK.match(c)]
-            assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(cp)
+            marks = [c for c in parts if display._MARK.match(c)]
+            assert len(marks) <= display._LONGEST_DECOMPOSITION, hex(cp)
             for a, b in zip(parts, parts[1:], strict=False):
-                if a == b and helpers._MARK.match(a):
+                if a == b and display._MARK.match(a):
                     # The only pair a decomposition repeats is U+16121's, which is exempt.
-                    assert a * 2 in helpers._REPEATING_DECOMPOSITIONS, hex(cp)
+                    assert a * 2 in display._REPEATING_DECOMPOSITIONS, hex(cp)
         # The table's own entries too: Python 3.11 to 3.13 know none of them (QA round 7 on #515).
         for char in NEW_DECOMPOSITIONS:
-            marks = [c for c in helpers._decompose(char) if helpers._MARK.match(c)]
-            assert len(marks) <= helpers._LONGEST_DECOMPOSITION, hex(ord(char))
-        assert helpers._REPEATING_DECOMPOSITIONS == {"\U0001611e\U0001611e": "\U00016121"}
+            marks = [c for c in display._decompose(char) if display._MARK.match(c)]
+            assert len(marks) <= display._LONGEST_DECOMPOSITION, hex(ord(char))
+        assert display._REPEATING_DECOMPOSITIONS == {"\U0001611e\U0001611e": "\U00016121"}
 
     def test_no_character_repeats_a_mark_by_itself(self) -> None:
         """Every character with a canonical decomposition, alone (after a letter when it's
@@ -489,17 +488,15 @@ class TestInvisibleProblem:
         import sys
         import unicodedata
 
-        from mcp_synology.modules.filestation import helpers
-
         refused = []
         for cp in range(sys.maxunicode + 1):
             char = chr(cp)
             decomposition = unicodedata.decomposition(char)
-            if char in helpers.NEW_DECOMPOSITIONS or (
+            if char in display.NEW_DECOMPOSITIONS or (
                 decomposition and not decomposition.startswith("<")
             ):
-                name = "a" + char if helpers._MARK.match(char) else char
-                if helpers._repeated_marks(name) is not None:
+                name = "a" + char if display._MARK.match(char) else char
+                if display._repeated_marks(name) is not None:
                     refused.append(hex(cp))
         assert refused == []
 
@@ -511,7 +508,7 @@ class TestInvisibleProblem:
         the test checks they really are one name (pre-QA on #515)."""
         import unicodedata
 
-        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.core.display import invisible_problem
 
         k, aa, i, ii = "\U00016100", "\U0001611e", "\U0001611f", "\U00016120"
         u, e, ai, o, au = "\U00016121", "\U00016123", "\U00016125", "\U00016126", "\U00016128"
@@ -541,7 +538,7 @@ class TestInvisibleProblem:
         """U+16121 before a vowel sign that starts with U+1611E is refused (U+1611E three
         times in a row); after one it passes, since its NFD has no three in a row (QA
         round 7 on #515: the spec said "next to")."""
-        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.core.display import invisible_problem
 
         k, u = "\U00016100", "\U00016121"
         # Every vowel sign whose decomposition starts with U+1611E, except U+1611E itself
@@ -557,26 +554,25 @@ class TestInvisibleProblem:
         costs up to 8 times as much; the stdlib NFD it once used was quadratic: QA round 3
         on #515). No NAS name is over 255 bytes, so such a part is quoted without the
         check (deterministic: a spy records whether the part was checked)."""
-        from mcp_synology.modules.filestation import helpers
 
         checked: list[str] = []
-        real = helpers.invisible_problem
+        real = display.invisible_problem
 
         def spy(part: str) -> str | None:
             checked.append(part)
             return real(part)
 
-        monkeypatch.setattr(helpers, "invisible_problem", spy)
+        monkeypatch.setattr(display, "invisible_problem", spy)
         long_part = "a" + "\u0952\u0951" * 128  # 769 bytes
-        assert helpers.shown("/video/" + long_part).startswith("'/video/a")
+        assert display.shown("/video/" + long_part).startswith("'/video/a")
         assert long_part not in checked
-        helpers.shown("/video/" + "a" * 255)
+        display.shown("/video/" + "a" * 255)
         assert "a" * 255 in checked
 
     def test_a_part_longer_than_any_name_is_quoted_escaped(self) -> None:
         """Unchecked, it's still escaped: ``repr`` would show U+3164 raw (QA round 4 on
         #515)."""
-        from mcp_synology.modules.filestation.helpers import shown
+        from mcp_synology.core.display import shown
 
         got = shown("/video/" + "a" * 300 + "\u3164")
         assert "\\u3164" in got
@@ -588,13 +584,13 @@ class TestInvisibleProblem:
 
     @pytest.mark.parametrize("code", ["gbsct", "gbeng", "gbwls"])
     def test_a_subdivision_flag_passes(self, code: str) -> None:
-        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.core.display import invisible_problem
 
         assert invisible_problem("\U0001f3f4" + self._tags(code) + "\U000e007f") is None
 
     def test_flag_tags_need_the_flag(self) -> None:
         """A valid code after anything but 🏴 is hidden text too."""
-        from mcp_synology.modules.filestation.helpers import invisible_problem
+        from mcp_synology.core.display import invisible_problem
 
         name = "x" + self._tags("gbsct") + "\U000e007f"
         assert invisible_problem(name) == "contains an invisible character (U+E0067)"
@@ -608,7 +604,7 @@ class TestInvisibleProblem:
     def test_text_hidden_in_tags_is_refused(self, code: str) -> None:
         """Only the three RGI subdivision flags count; any other tag run is text hidden
         in the name ("ASCII smuggling", pre-QA on #515)."""
-        from mcp_synology.modules.filestation.helpers import invisible_problem, shown
+        from mcp_synology.core.display import invisible_problem, shown
 
         name = "a\U0001f3f4" + self._tags(code) + "\U000e007f.pdf"
         assert (invisible_problem(name) or "").startswith("contains an invisible character")
@@ -1519,7 +1515,7 @@ class TestUnreadablePathsError:
 )
 def test_json_quoted(name: str, quoted: str) -> None:
     """#695: a name set in a line of other text, as JSON, with what draws nothing escaped."""
-    from mcp_synology.modules.filestation.helpers import json_quoted
+    from mcp_synology.core.display import json_quoted
 
     assert json_quoted(name) == quoted
     assert json.loads(json_quoted(name)) == name
@@ -1546,7 +1542,7 @@ def test_json_quoted_escapes_exactly_when_shown_does(name: str) -> None:
     It escapes a name exactly when shown() writes it with escapes."""
     import re
 
-    from mcp_synology.modules.filestation.helpers import json_quoted, shown
+    from mcp_synology.core.display import json_quoted, shown
 
     def escaped(text: str) -> bool:
         return re.search(r"\\[xuUt]", text) is not None

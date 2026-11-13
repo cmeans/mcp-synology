@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 
+from mcp_synology.core.display import shown, shown_local
 from mcp_synology.core.errors import (
     CHECK_COMMAND,
     NO_FILE_NOTE,
@@ -33,8 +34,6 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     normalize_path,
     paths_isdir,
-    shown,
-    shown_local,
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 
