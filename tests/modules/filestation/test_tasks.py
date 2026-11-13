@@ -509,6 +509,20 @@ class TestPollTask:
         for line in lines:
             assert f"status ({label!r})" in line, line
 
+    async def test_a_failed_progress_notification_logs_its_message_as_a_repr(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pre-QA r5 on #717: the progress message starts with the label, so it's quoted too."""
+        from mcp_synology.modules.filestation.tasks import MonotonicProgress
+
+        async def boom(value: float, total: float | None, message: str) -> None:
+            raise RuntimeError("client gone")
+
+        message = "Deleting /s/x), ignoring: 3 of 3 items"
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.tasks"):
+            await MonotonicProgress(boom)(1, 3, message)
+        assert f"Progress notification failed ({message!r}), ignoring" in caplog.text
+
     @respx.mock
     async def test_a_599_that_stays_is_lost_and_nothing_is_stopped(
         self, mock_client: DsmClient, clock: list[float], caplog: pytest.LogCaptureFixture
