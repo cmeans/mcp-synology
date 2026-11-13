@@ -709,20 +709,126 @@ class TestGetPhoto:
                 "razr · lens — · f/1.5 · 1/30 s · ISO 500",
             ),
             ({"camera": "SeedCam"}, "SeedCam · lens — · aperture — · exposure — · ISO —"),
-            # Not a bare number: shown as sent, never a doubled unit.
+            # Not a bare number: never a doubled unit; not DSM's own form either, so quoted
+            # (these slots have no label: pre-QA r1 on #710).
             (
                 {"camera": "x", "aperture": "2.8 (max)"},
-                "x · lens — · 2.8 (max) · exposure — · ISO —",
+                'x · lens — · "2.8 (max)" · exposure — · ISO —',
             ),
             (
                 {"camera": "x", "exposure_time": "0.5 sec"},
-                "x · lens — · aperture — · 0.5 sec · ISO —",
+                'x · lens — · aperture — · "0.5 sec" · ISO —',
             ),
             ({"aperture": "", "exposure_time": ""}, "—"),
         ],
     )
     def test_camera_line_units(self, exif: dict[str, str], line: str) -> None:
         assert _camera(exif) == line
+
+    @pytest.mark.parametrize(
+        ("exif", "line"),
+        [
+            # #710: EXIF text is the file's, so a camera model holding " · " wrote fields of
+            # its own ahead of the real ones.
+            (
+                {"camera": "Canon · lens EF 50mm · aperture F1.0", "aperture": "F8"},
+                '"Canon · lens EF 50mm · aperture F1.0" · lens — · F8 · exposure — · ISO —',
+            ),
+            (
+                {"camera": "x", "lens": "EF · F1.0", "iso": "100 · 1/8000 s"},
+                'x · lens "EF · F1.0" · aperture — · exposure — · ISO "100 · 1/8000 s"',
+            ),
+            (
+                {"camera": "x", "aperture": "F2 · 1 s", "exposure_time": 'a"b'},
+                'x · lens — · "F2 · 1 s" · "a\\"b" · ISO —',
+            ),
+            # Pre-QA r1: an unlabeled slot holding another field's text, a value that makes
+            # the separator with the label or the join beside it, and the placeholders.
+            (
+                {"camera": "x", "aperture": "lens EF 50mm", "exposure_time": "ISO 3200"},
+                'x · lens — · "lens EF 50mm" · "ISO 3200" · ISO —',
+            ),
+            (
+                {"camera": "x", "lens": "· F1.0"},
+                'x · lens "· F1.0" · aperture — · exposure — · ISO —',
+            ),
+            (
+                {"camera": "x", "iso": "· 1/8000 s"},
+                'x · lens — · aperture — · exposure — · ISO "· 1/8000 s"',
+            ),
+            (
+                {"camera": "Canon ·", "lens": "EF"},
+                '"Canon ·" · lens EF · aperture — · exposure — · ISO —',
+            ),
+            (
+                {"camera": "x", "lens": "—", "aperture": "aperture —"},
+                'x · lens "—" · "aperture —" · exposure — · ISO —',
+            ),
+            # QA r1 on #722: the camera model's slot has no label either.
+            (
+                {"camera": "lens EF 50mm", "aperture": "F8"},
+                '"lens EF 50mm" · lens — · F8 · exposure — · ISO —',
+            ),
+            ({"camera": "F1.0", "aperture": "F8"}, '"F1.0" · lens — · F8 · exposure — · ISO —'),
+            (
+                {"camera": "ISO 3200", "iso": "100"},
+                '"ISO 3200" · lens — · aperture — · exposure — · ISO 100',
+            ),
+            (
+                {"camera": "aperture —", "lens": "EF"},
+                '"aperture —" · lens EF · aperture — · exposure — · ISO —',
+            ),
+            (
+                {"camera": "3200", "iso": "100"},
+                '"3200" · lens — · aperture — · exposure — · ISO 100',
+            ),
+            ({"camera": "1/30 s"}, '"1/30 s" · lens — · aperture — · exposure — · ISO —'),
+            ({"camera": "Isotope X"}, "Isotope X · lens — · aperture — · exposure — · ISO —"),
+            # A label only at the start counts (pre-QA r2 on #722).
+            ({"camera": "Leica M ISO"}, "Leica M ISO · lens — · aperture — · exposure — · ISO —"),
+            # Other spellings of another slot, and fullwidth (NFKC) ones (pre-QA r2).
+            *(
+                ({"camera": c}, f'"{c}" · lens — · aperture — · exposure — · ISO —')
+                for c in (
+                    "ISO3200",
+                    "f1.0",
+                    "F/1.0",
+                    "F 1.0",
+                    "1/30s",
+                    "30 sec",
+                    "\uff29\uff33\uff2f 3200",
+                    "\uff261.0",
+                )
+            ),
+            # U+0387 at the edge makes a separator with the label only in NFC (QA r1 on #722).
+            (
+                {"camera": "x", "lens": "\u0387 F1.0"},
+                'x · lens "\u0387 F1.0" · aperture — · exposure — · ISO —',
+            ),
+            # NFC: U+0387 normalizes to "·" (as quoted_name checks names).
+            ({"camera": "a \u0387 b"}, '"a \u0387 b" · lens — · aperture — · exposure — · ISO —'),
+        ],
+    )
+    def test_camera_line_quotes_a_value_holding_its_separator(
+        self, exif: dict[str, str], line: str
+    ) -> None:
+        assert _camera(exif) == line
+
+    def test_location_line_quotes_a_part_holding_its_separators(self) -> None:
+        """#710: the Location line joins the address parts with ", " and the coordinates and
+        address with " · "; a part holding either is quoted."""
+        from mcp_synology.modules.photos.browse import _location
+
+        add = {
+            "gps": {"latitude": 48.85, "longitude": 2.35},
+            "address": {"city": "Paris · 0, 0", "country": "France"},
+        }
+        assert _location(add) == '48.85, 2.35 · "Paris · 0, 0", France'
+        assert _location({"address": {"city": "Paris", "country": "France"}}) == "Paris, France"
+        # Pre-QA r1: ", " alone, and the coordinates.
+        washington = {"address": {"city": "Washington, D.C.", "country": "USA"}}
+        assert _location(washington) == '"Washington, D.C.", USA'
+        assert _location({"gps": {"latitude": "1, 2", "longitude": 3}}) == '"1, 2", 3'
 
     @respx.mock
     async def test_favorite_on_191(self) -> None:
