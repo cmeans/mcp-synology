@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
 import httpx
@@ -701,6 +701,23 @@ class TestDownloadFile:
         )
         assert calls == ["getinfo", "download"]
         assert list(tmp_path.iterdir()) == []
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [[407], {"a": 1}, "407", True])
+    async def test_download_a_malformed_code_cant_tell(
+        self, mock_client: DsmClient, tmp_path: Path, code: Any
+    ) -> None:
+        """QA r2 on #716: an unhashable code raised TypeError; it can't tell, so the download
+        is tried and DSM's own answer stands."""
+        calls = self._route(
+            httpx.Response(
+                200, json={"success": True, "data": {"files": [{"code": code, "path": "/v"}]}}
+            ),
+            httpx.Response(502, text="<html>DSM error page</html>"),
+        )
+        with pytest.raises(ToolError):
+            await download_file(mock_client, path="/video/x.mkv", dest_folder=str(tmp_path))
+        assert calls == ["getinfo", "download"]
 
     @respx.mock
     @pytest.mark.parametrize("code", [407, 105])

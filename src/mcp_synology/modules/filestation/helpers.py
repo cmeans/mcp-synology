@@ -620,6 +620,14 @@ def _files(data: Any) -> list[dict[str, Any]]:
     return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
 
 
+def entry_code(entry: dict[str, Any]) -> int | None:
+    """A ``getinfo`` entry's per-path code, only as a whole number: a malformed one (a list, a
+    dict, a bool, a string) is None, so a comparison or a set lookup reads it as "can't tell"
+    rather than raising (pre-QA r2 and QA r2 on #716)."""
+    raw = entry.get("code")
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+
+
 def read_denied(entry: dict[str, Any]) -> bool:
     """True when ``getinfo``'s permissions (``additional=["perm"]``) say the user can't read
     the path: a folder an ACL or POSIX mode denies, which getinfo still reports (vdsm 7.1,
@@ -667,8 +675,7 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     for entry in _files(data):
         # DSM's per-path code, read once and only as a whole number: a malformed one (a list,
         # a dict, a bool) reads as "can't tell", never raises (pre-QA r2 on #716).
-        raw = entry.get("code")
-        code = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+        code = entry_code(entry)
         if code == 408:
             return FolderKind("missing")
         # 105 and 407 per path, as `missing_text` and `get_dir_size` read them (#703). Only a
