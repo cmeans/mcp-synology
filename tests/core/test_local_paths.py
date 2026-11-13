@@ -448,12 +448,12 @@ def test_a_loop_outside_is_refused_as_outside(
 @pytest.mark.parametrize(
     ("where", "code"), [("out", "permission_denied"), ("ok", "invalid_parameter")]
 )
-def test_a_chain_too_long_to_follow_is_decided_by_its_spelling(
+def test_a_chain_too_long_to_follow_is_followed_as_far_as_it_can_be(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, code: str
 ) -> None:
     """QA r3 on #712: on 3.11/3.12 realpath recurses once per link, so a long chain raises
     RecursionError (a RuntimeError), which the catch-all read as "inside" and called a loop,
-    though it leads outside. Its spelling decides, as before realpath's rule."""
+    though it leads outside. Its deepest ancestor realpath resolves decides."""
     import json
 
     from mcp.server.mcpserver.exceptions import ToolError
@@ -468,8 +468,12 @@ def test_a_chain_too_long_to_follow_is_decided_by_its_spelling(
             raise RecursionError("maximum recursion depth exceeded")
         return real(self, strict=strict)
 
+    real_realpath = local_paths.os.path.realpath
+
     def realpath(path: object, *args: object, **kwargs: object) -> str:
-        raise RecursionError("maximum recursion depth exceeded")
+        if "chain" in Path(str(path)).parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_realpath(path)  # type: ignore[arg-type]
 
     root = real(tmp_path / "ok")
     monkeypatch.setattr(Path, "resolve", deep)
@@ -509,6 +513,77 @@ def test_a_real_long_chain_outside_is_refused_as_outside(tmp_path: Path) -> None
     err = json.loads(text[text.index("{") :])["error"]
     assert err["code"] == "permission_denied", err
     assert "loop" not in err["message"], err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.parametrize("spelled", ["home", "var/home"])
+def test_a_long_chain_in_a_root_spelled_through_a_link_isnt_outside(
+    tmp_path: Path, spelled: str
+) -> None:
+    """Pre-QA r5 on #712: a long chain in the allowed folder, spelled through `/home` ->
+    `/var/home`, was refused as outside, naming the folder it was in. Not refused on 3.13+,
+    where realpath follows it; on 3.11/3.12, too many symlinks (DSM is never reached)."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real_home = tmp_path / "var" / "home"
+    dl = real_home / "dl"
+    dl.mkdir(parents=True)
+    (tmp_path / "home").symlink_to(real_home)
+    (dl / "l0").mkdir()
+    for i in range(1, 3000):
+        (dl / f"l{i}").symlink_to(f"l{i - 1}")
+    value = str(tmp_path / spelled / "dl" / "l2999" / "f")
+    try:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [dl.resolve()], module="x")
+    except ToolError as exc:
+        text = str(exc)
+        err = json.loads(text[text.index("{") :])["error"]
+        assert err["code"] == "invalid_parameter", err
+        assert "too many symlinks to follow" in err["message"], err
+        assert sys.version_info < (3, 13), err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.parametrize("rest", ["../f", "x/../../f"])
+def test_a_dotdot_past_a_chain_is_refused_as_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rest: str
+) -> None:
+    """Pre-QA r5 on #712: where `..` after a link that can't be followed leads isn't known,
+    so it's refused as outside, as any path that might be."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core import local_paths
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    real = Path.resolve
+    real_realpath = local_paths.os.path.realpath
+
+    def deep(self: Path, strict: bool = False) -> Path:
+        if "chain" in self.parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, strict=strict)
+
+    def realpath(path: object, *args: object, **kwargs: object) -> str:
+        if "chain" in Path(str(path)).parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_realpath(path)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "resolve", deep)
+    monkeypatch.setattr(local_paths.os.path, "realpath", realpath)
+    value = str(root) + "/chain/" + rest
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "permission_denied", err
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")

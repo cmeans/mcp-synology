@@ -123,6 +123,31 @@ def _lexical(path: str | Path) -> Path:
     return Path(os.path.normpath(os.path.abspath(Path(path).expanduser())))
 
 
+def _leads_to(path: str | Path) -> Path | None:
+    """Where ``path`` leads: ``os.path.realpath``'s answer, which follows links as far as they
+    go and stops at a loop without raising. A chain of links too long for its recursion
+    (3.11/3.12, one level per link) is followed in its deepest ancestor realpath can
+    resolve, with the rest as spelled, so a root spelled through a link (`/home` for
+    `/var/home`) still holds it (pre-QA r5 on #712); None when a ``..`` follows the part that
+    couldn't be followed, as where it leads then isn't known. Raises what ``expanduser``,
+    ``cwd`` and ``realpath`` raise (an unknown ~user, the working folder gone)."""
+    expanded = Path(path).expanduser()
+    current = expanded if expanded.is_absolute() else Path.cwd() / expanded
+    rest: list[str] = []
+    while True:
+        try:
+            real = Path(os.path.realpath(current))
+        except RecursionError:
+            if current.parent == current:
+                raise
+            rest.append(current.name)
+            current = current.parent
+            continue
+        if ".." in rest:
+            return None
+        return real.joinpath(*reversed(rest))
+
+
 def lexically_inside(path: str | Path, roots: list[Path]) -> bool:
     """Whether ``path``, read literally (no symlinks followed), is inside a root.
 
@@ -311,13 +336,12 @@ def refuse_outside_roots(
         # working folder gone) keeps the error below.
         if "\x00" not in value:
             try:
-                try:
-                    real = Path(os.path.realpath(Path(path).expanduser()))
-                    inside = any(real == root or root in real.parents for root in roots)
-                except RecursionError:
-                    # A chain too long for realpath (3.11/3.12): where it's spelled decides,
-                    # as before the realpath rule (QA r3 on #712).
-                    inside = lexically_inside(path, roots)
+                # A chain too long for realpath (3.11/3.12) is followed as far as it can be
+                # (QA r3 on #712); where it leads unknown, it's refused as outside.
+                real = _leads_to(path)
+                inside = real is not None and any(
+                    real == root or root in real.parents for root in roots
+                )
             except (OSError, RuntimeError, ValueError):
                 inside = True
             if not inside:
