@@ -28,6 +28,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     missing_text,
     normalize_path,
+    read_denied,
     task_request,
     unanswered_status_response,
     unreadable_paths_error,
@@ -289,14 +290,6 @@ async def _getinfo_entry(client: DsmClient, normalized: str) -> dict[str, Any]:
     return first if isinstance(first, dict) else {}
 
 
-def _read_denied(entry: dict[str, Any]) -> bool:
-    """True when getinfo's permissions say the user can't read the path."""
-    acl: Any = entry
-    for key in ("additional", "perm", "acl"):
-        acl = acl.get(key) if isinstance(acl, dict) else None
-    return isinstance(acl, dict) and acl.get("read") is False
-
-
 async def get_dir_size(
     client: DsmClient,
     *,
@@ -322,7 +315,7 @@ async def get_dir_size(
     code = entry.get("code")
     if isinstance(code, int) and not isinstance(code, bool):
         _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
-    if _read_denied(entry):
+    if read_denied(entry):
         _refuse_path(normalized, path, 407, [(normalized, 407)])
 
     try:

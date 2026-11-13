@@ -2015,11 +2015,12 @@ class TestMoreShownSites:
         assert "start" not in [m for m, _ in client.calls]
 
     async def test_search_starts_when_the_check_cant_tell(self) -> None:
-        """#517: a check DSM doesn't answer leaves the search to DSM, as before."""
+        """#517: a check DSM doesn't answer leaves the search to DSM, as before. (A 407 is
+        no longer "can't tell": it's refused as denied, #703.)"""
         from mcp_synology.modules.filestation.search import search_files
 
         client = _FakeClient(
-            codes={"/video/x": 407},
+            codes={"/video/x": 400},
             methods={
                 "start": {"taskid": "T1"},
                 "list": {"finished": True, "total": 0, "files": []},

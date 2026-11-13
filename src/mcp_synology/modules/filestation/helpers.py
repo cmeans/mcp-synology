@@ -606,19 +606,32 @@ def _files(data: Any) -> list[dict[str, Any]]:
     return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
 
 
+def read_denied(entry: dict[str, Any]) -> bool:
+    """True when ``getinfo``'s permissions (``additional=["perm"]``) say the user can't read
+    the path: a folder an ACL or POSIX mode denies, which getinfo still reports (vdsm 7.1,
+    7.2.2; #336, #703)."""
+    acl: Any = entry
+    for key in ("additional", "perm", "acl"):
+        acl = acl.get(key) if isinstance(acl, dict) else None
+    return isinstance(acl, dict) and acl.get("read") is False
+
+
 @dataclass(frozen=True)
 class FolderKind:
-    """What `folder_kind` found: ``kind`` is ``"folder"``, ``"file"`` or ``"missing"``;
-    ``under_file`` is the file that makes a missing path impossible, for a path under a file."""
+    """What `folder_kind` found: ``kind`` is ``"folder"``, ``"file"``, ``"missing"`` or
+    ``"denied"`` (a 407 entry, or a folder whose permissions say the user can't read it,
+    #703); ``under_file`` is the file that makes a missing path impossible, for a path under a
+    file."""
 
     kind: str
     under_file: str | None = None
 
 
 async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
-    """One ``getinfo``: a folder, a file or a missing path (DSM's 408 entry), or None when the
-    answer shows none of these (another code, such as 407, or no entry) or DSM answers the
-    request with an error code: a caller then lets DSM's own answer stand (#517).
+    """One ``getinfo``: a folder, a file, a missing path (DSM's 408 entry) or one the user can't
+    read (a 407 entry, or a folder whose permissions deny reading, #703), or None when the
+    answer shows none of these (another code, or no entry) or DSM answers the request with an
+    error code: a caller then lets DSM's own answer stand (#517).
 
     A NAS that doesn't answer ends the call, since the request after the check would wait as
     long again, past a client's 60 s (pre-QA r3): a transport error or timeout raises, as in
@@ -627,7 +640,10 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     try:
         data = await client.request(
-            "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
+            "SYNO.FileStation.List",
+            "getinfo",
+            version=version,
+            params={"path": path, "additional": '["perm"]'},
         )
     except _NO_ANSWER:
         raise
@@ -637,6 +653,8 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     for entry in _files(data):
         if entry.get("code") == 408:
             return FolderKind("missing")
+        if entry.get("code") == 407 or (entry.get("isdir") is True and read_denied(entry)):
+            return FolderKind("denied")
         if entry.get("code") == 401:
             # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm
             # 7.1 to 7.4.1): a file among its parents means it can't exist.
