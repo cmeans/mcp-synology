@@ -1983,6 +1983,7 @@ class TestLocalPathsShown:
             # Primes and reversed primes, and the modifier letters prime, double prime,
             # apostrophe and double apostrophe (QA r1 on #724).
             *map(chr, range(0x2032, 0x2038)),
+            "\u2057",
             "\u02b9",
             "\u02ba",
             "\u02bc",
