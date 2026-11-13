@@ -81,9 +81,17 @@ def default_downloads_dir(platform: str = sys.platform) -> Path:
 
 def _resolve(path: str | Path) -> Path:
     """Resolve ``~``, ``..`` and symlinks. Raises ``ValueError`` when that's impossible:
-    a NUL byte (every Python), or a symlink loop (``RuntimeError`` on 3.11/3.12)."""
+    a NUL byte (every Python), an unknown ``~user`` or no home directory (``expanduser``'s
+    ``RuntimeError``), or a symlink loop (``resolve``'s ``RuntimeError`` on 3.11/3.12)."""
     try:
-        return Path(path).expanduser().resolve(strict=False)
+        expanded = Path(path).expanduser()
+    except RuntimeError as e:
+        # Python's text ("Could not determine home directory.") has no path in it; a loop is
+        # resolve()'s, below (pre-QA r3 on #712: both were called a loop).
+        msg = f"{shown_local(str(path))} can't be resolved: {str(e).rstrip('.')}"
+        raise ValueError(msg) from e
+    try:
+        return expanded.resolve(strict=False)
     except UnicodeEncodeError as e:  # a ValueError, whose text is Python's codec message
         msg = (
             f"{shown_local(str(path))} can't be resolved: this system's locale can't encode "
@@ -287,7 +295,16 @@ def refuse_outside_roots(
     try:
         refused = outside_allowed_roots(path, roots)
     except ValueError as e:
-        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186).
+        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186). A path outside
+        # the allowed folders is refused as outside whatever it resolves to: a different
+        # error would tell the caller a loop exists there (#458; pre-QA r3 on #712).
+        if "\x00" not in value:
+            try:
+                inside = lexically_inside(path, roots)
+            except (RuntimeError, ValueError):  # an unknown ~user: keep the error below
+                inside = True
+            if not inside:
+                refuse(shown_local(value))
         error_response(
             ErrorCode.INVALID_PARAMETER,
             f"{operation} refused: {str(e).rstrip('.')}.",

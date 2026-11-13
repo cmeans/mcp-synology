@@ -2063,7 +2063,7 @@ class TestLocalPathsShown:
             # `r` is each allowed folder (`for r in roots`): a raw `str(r)` is caught where it's
             # written (an f-string, a `path_list` item), not under another loop name.
             "core/local_paths.py": {"value", "path", "refused", "resolved", "entry", "r"},
-            "modules/downloadstation/tasks.py": {"torrent_file_path", "path"},
+            "modules/downloadstation/tasks.py": {"torrent_file_path", "path", "raw"},
             "server.py": {"r", "root"},
         }
         allowed: set[tuple[str, str, str]] = set()

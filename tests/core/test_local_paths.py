@@ -400,3 +400,45 @@ def test_an_unresolvable_path_names_it_once(
     with pytest.raises(ValueError) as exc:
         local_paths._resolve("/x/loop")
     assert str(exc.value) == f"/x/loop can't be resolved: {said}", exc.value
+
+
+def test_an_unknown_user_isnt_called_a_symlink_loop() -> None:
+    """Pre-QA r3 on #712: expanduser's RuntimeError was labeled a loop."""
+    from mcp_synology.core import local_paths
+
+    with pytest.raises(ValueError) as exc:
+        local_paths._resolve("~no-such-user-712/x")
+    assert str(exc.value) == (
+        "~no-such-user-712/x can't be resolved: Could not determine home directory"
+    ), exc.value
+
+
+@pytest.mark.parametrize(
+    ("where", "code"), [("out", "permission_denied"), ("ok", "invalid_parameter")]
+)
+def test_a_loop_outside_is_refused_as_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, code: str
+) -> None:
+    """#458, pre-QA r3 on #712: a loop outside the allowed folders gave invalid_parameter,
+    every other outside path permission_denied, so the reply showed a loop exists there."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real = Path.resolve
+
+    def resolve(self: Path, strict: bool = False) -> Path:
+        if "loopy" in self.parts:
+            raise RuntimeError(f"Symlink loop from {self!r}")  # what 3.11/3.12 raise
+        return real(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    root = real(tmp_path / "ok")
+    value = str(tmp_path / where / "loopy" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == code, err
