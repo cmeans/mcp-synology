@@ -1252,7 +1252,13 @@ class TestWithheldToolsNotice:
             return
         modules = {module: {"enabled": True, "permission": "write"}}
         text = " ".join(self._instructions(modules=modules).split())
-        said = r"shows? in quotes (\([^)]*\) )?is quoted to show its exact characters"
+        # The escape clause in the same passage, so LOCAL MACHINE's can't stand in for it
+        # (QA r1 on #720).
+        said = (
+            r"shows? in quotes (\([^)]*\) )?is quoted to show its exact characters: pass what's"
+            r" inside the quotes(, |\. In one written with escapes \([^)]*\), )each escape"
+            r" (stands|standing) for the one character it names"
+        )
         assert re.search(said, text), module
 
     def test_storage_section_only_when_storage_is_enabled(self) -> None:
