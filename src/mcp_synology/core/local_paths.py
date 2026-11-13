@@ -27,7 +27,7 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
-from mcp_synology.core.display import shown_local
+from mcp_synology.core.display import shown_local, shown_local_beside
 from mcp_synology.core.errors import ErrorCode
 from mcp_synology.core.formatting import error_response, path_list
 
@@ -380,9 +380,9 @@ def refuse_outside_roots(
         return
     # Explain the resolved path only for a link inside an allowed folder that leads out;
     # for anything else it would reveal what exists outside (QA R1 on #186).
-    shown_value = shown_local(value)
     refuse(
-        f"{shown_value} (resolves to {shown_local(refused)})"
+        # Before " (resolves to", quoted when it holds " (" (pre-QA r2 on #706).
+        f"{shown_local_beside(value, ' (')} (resolves to {shown_local(refused)})"
         if lexically_inside(path, roots)
-        else shown_value
+        else shown_local(value)
     )

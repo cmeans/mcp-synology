@@ -12,6 +12,7 @@ import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.display import shown as shown_path
+from mcp_synology.core.display import shown_beside
 from mcp_synology.core.errors import AuthenticationError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -25,6 +26,7 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     FolderKind,
     correct_recycle_status_from_observation,
+    doesnt_exist_text,
     dsm_str,
     ensure_recycle_status,
     file_type_icon,
@@ -252,6 +254,12 @@ async def list_shares(
     return result
 
 
+def _title_for(folder: str, total: int) -> str:
+    """A listing's title: the folder, quoted when it holds " (", so a name can't forge the
+    item count after it (pre-QA r1 on #706)."""
+    return f"Contents of {shown_beside(folder, ' (')} ({total:,} items)"
+
+
 async def _checked_kind(client: DsmClient, path: str) -> FolderKind | None:
     """`folder_kind`, its no-answer and login errors named for list_files (#705)."""
     try:
@@ -322,11 +330,9 @@ async def list_files(
             # below refuses it as permission_denied.
             kind = await _checked_kind(client, normalized)
             if kind is not None and kind.kind == "missing":
-                blocked = f": {shown_path(kind.under_file)} is a file" if kind.under_file else ""
                 error_response(
                     ErrorCode.NOT_FOUND,
-                    f"List files failed: {shown_path(normalized)} doesn't exist on the NAS"
-                    f"{blocked}.",
+                    f"List files failed: {doesnt_exist_text(normalized, kind.under_file)}.",
                     retryable=False,
                     param="path",
                     value=path,
@@ -383,8 +389,9 @@ async def list_files(
                 # on #515).
                 error_response(
                     ErrorCode.FILESTATION_ERROR,
-                    f"List files failed: DSM couldn't list {shown_path(normalized)} (DSM error "
-                    "408), though it's a folder that exists.",
+                    "List files failed: DSM couldn't list "
+                    f"{shown_beside(normalized, ' (')} (DSM error 408), though it's a folder "
+                    "that exists.",
                     retryable=True,
                     param="path",
                     value=path,
@@ -407,10 +414,9 @@ async def list_files(
             # `Movies` the model can see listed (pre-QA on #515). A file above it is named, as
             # in the 401 branch (pre-QA r2 on #705).
             above = kind.under_file if kind else None
-            blocked = f": {shown_path(above)} is a file" if above else ""
             error_response(
                 ErrorCode.NOT_FOUND,
-                f"List files failed: {shown_path(normalized)} doesn't exist on the NAS{blocked}.",
+                f"List files failed: {doesnt_exist_text(normalized, above)}.",
                 retryable=False,
                 param="path",
                 value=path,
@@ -457,7 +463,7 @@ async def list_files(
         result = format_table(
             headers=["Type", "Name"],
             rows=[],
-            title=f"Contents of {shown_path(normalized)} ({total:,} items)",
+            title=_title_for(normalized, total),
         )
         maybe = (
             " (the total may include a hidden #recycle: the check for it failed)"
@@ -488,7 +494,7 @@ async def list_files(
         rows.append([icon, display_name, size, modified])
 
     shown = len(files)
-    title = f"Contents of {shown_path(normalized)} ({total:,} items)"
+    title = _title_for(normalized, total)
     result = format_table(headers=headers, rows=rows, title=title)
     result += _sort_note(files, sort_by, sort_direction)
 

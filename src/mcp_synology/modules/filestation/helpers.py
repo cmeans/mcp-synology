@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 import httpx
 
 from mcp_synology.core.client import DsmClient
-from mcp_synology.core.display import shown
+from mcp_synology.core.display import shown, shown_beside
 from mcp_synology.core.errors import (
     AuthenticationError,
     DsmHttpError,
@@ -96,7 +96,7 @@ def unanswered_status_response(
     note = f" {task_note}" if task_note else ""
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
-        f"{operation} failed: DSM {what} a status request on path: {shown(path)}"
+        f"{operation} failed: DSM {what} a status request on path: {shown_beside(path, ' (')}"
         f" ({describe_transport_error(exc)}).{note}{already}",
         retryable=True,
         param="path",
@@ -821,7 +821,17 @@ RESTORE_UNDER_FILE_ADVICE = (
 def under_file_text(path: str, file: str) -> str:
     """A path under a file, in words (#702), as `list_files` and `search_files` write it
     (#517)."""
-    return f"{shown(path)} doesn't exist on the NAS: {shown(file)} is a file"
+    # The file after its ": " (pre-QA r1 on #706): a name holding one would read as the file.
+    return f"{shown(path)} doesn't exist on the NAS: {shown_beside(file, ': ')} is a file"
+
+
+def doesnt_exist_text(path: str, under_file: str | None) -> str:
+    """A missing path in words, naming the file above it when there is one: the sentence
+    `list_files` (both branches), `search_files` and `download_file` write (QA r3 on #706: two
+    of them wrote the file raw after its ": ")."""
+    if under_file is not None:
+        return under_file_text(path, under_file)
+    return f"{shown(path)} doesn't exist on the NAS"
 
 
 def missing_text(path: str, code: int, under_file: str | None) -> str:
@@ -832,13 +842,17 @@ def missing_text(path: str, code: int, under_file: str | None) -> str:
     if under_file is not None:
         # The code beside "doesn't exist", as for a 408, so it isn't read as the file's (QA r1
         # on #714).
-        return f"{shown(path)}: doesn't exist (DSM error {code}): {shown(under_file)} is a file"
+        return (
+            f"{shown_beside(path, ': ')}: doesn't exist (DSM error {code}): "
+            f"{shown_beside(under_file, ': ')} is a file"
+        )
     why = (
         "no permission"
         if code in NO_PERMISSION_CODES
         else {408: "doesn't exist"}.get(code, "can't be read")
     )
-    return f"{shown(path)}: {why} (DSM error {code})"
+    # The path's own ": " can't read as the line's (#706).
+    return f"{shown_beside(path, ': ')}: {why} (DSM error {code})"
 
 
 def unreadable_paths_error(
