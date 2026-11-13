@@ -63,6 +63,25 @@ class TestFolder:
         assert out == "Created /mcp-spec-capture/mcp-spec-capture (id 11, personal space)."
 
     @respx.mock
+    @pytest.mark.parametrize("action", ["create", "rename"])
+    async def test_a_folder_holding_the_space_marker_is_quoted(self, action: str) -> None:
+        """#700: "Created <folder> (id N, space)" read a folder named "/a (id 9" as another."""
+        made = captured("folder-create-duplicate-name")
+        made["folder"]["name"] = "/a (id 9"
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 13, "name": "/a/sub", "parent": 10}}
+        )
+        fake.on(FOLDER, "create", 1, made).on(FOLDER, "rename", 1, made)
+        install(fake)
+        client = make_client()
+        async with client:
+            if action == "create":
+                out = await photo_folder(client, action="create", parent_id=13, name="x")
+            else:
+                out = await photo_folder(client, action="rename", folder_id=13, name="x")
+        assert "'/a (id 9'" in out, out
+
+    @respx.mock
     async def test_rename(self) -> None:
         fake = FakePhotos().on(
             FOLDER, "get", 2, {"folder": {"id": 13, "name": "/a/sub", "parent": 10}}
@@ -204,9 +223,9 @@ class TestTags:
         install(fake)
         client = make_client()
         async with client:
-            out = await tag_photos(client, action="remove", ids=[12], tags=["2024", "gone"])
+            out = await tag_photos(client, action="remove", ids=[12], tags=["2024", "gone, beach"])
         assert fake.one(ITEM, "remove_tag").params == {"id": [12], "tag": [4]}
-        assert "No item has the tag(s) gone" in out
+        assert 'No item has the tag(s) "gone, beach", so' in out, out  # #700
         assert not fake.of(TAG, "create")
 
     @respx.mock
@@ -674,7 +693,23 @@ class TestPeople:
             "merged_id": [11, 19],
             "name": "Person 1",
         }
-        assert out == 'Merged 2 people into person 12 "Person 1" (now 70 items).'
+        assert out == "Merged 2 people into person 12 Person 1 (now 70 items)."
+
+    @respx.mock
+    async def test_merge_quotes_the_kept_person(self) -> None:
+        """#700: the kept person's name was in plain quotes, so `Jo" (now 1` closed it early."""
+        kept = captured("person-get", PEOPLE)
+        kept["list"][0]["name"] = 'Jo" (now 1'
+        fake = FakePhotos().on(PERSON, "list", 1, captured("person-list", PEOPLE))
+        fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
+        fake.on(PERSON, "get", 1, kept)
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await merge_people(
+                client, target_name="person 1", merge_names=["Person 2", "Person 3"]
+            )
+        assert out == 'Merged 2 people into person 12 "Jo\\" (now 1" (now 70 items).', out
 
     @respx.mock
     async def test_a_numeric_id_never_merges_a_person_by_name(self) -> None:
@@ -720,6 +755,43 @@ class TestPeople:
 
 class TestRequests:
     @respx.mock
+    async def test_a_crafted_subject_and_folder_are_quoted(self) -> None:
+        """#700: the subject was in plain quotes, so `x" (abc)` forged the request's ID on
+        delete, and the folder before " (" read a folder named "/a (Shared Space)" as it."""
+        listed = captured("request-list")
+        listed["list"][0].update(subject='x" (abc)', folder_home_path="/a (Shared Space)")
+        fake = FakePhotos().on(REQ, "list", 1, listed, listed, listed)
+        fake.on(REQ, "update", 1, {}).on(REQ, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            block = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", max_file_mib=10
+            )
+            gone = await photo_request(client, action="delete", request="ZxOc9Ep8q")
+        assert block.startswith(
+            'Photo request "x\\" (abc)" → \'/a (Shared Space)\' (personal space)'
+        ), block
+        assert gone.startswith('Deleted photo request "x\\" (abc)" (ZxOc9Ep8q);'), gone
+
+    @respx.mock
+    async def test_a_request_with_no_subject_shows_the_placeholder(self) -> None:
+        """Pre-QA r2 on #700: no subject is the server's placeholder, unquoted."""
+        listed = captured("request-list")
+        listed["list"][0]["subject"] = ""
+        fake = FakePhotos().on(REQ, "list", 1, listed, listed, listed)
+        fake.on(REQ, "update", 1, {}).on(REQ, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            block = await photo_request(
+                client, action="update", request="ZxOc9Ep8q", max_file_mib=10
+            )
+            gone = await photo_request(client, action="delete", request="ZxOc9Ep8q")
+        assert block.startswith("Photo request (no subject) → /mcp-spec-capture"), block
+        assert gone.startswith("Deleted photo request (no subject) (ZxOc9Ep8q);"), gone
+
+    @respx.mock
     async def test_create(self) -> None:
         fake = FakePhotos().on(REQ, "list", 1, {"list": []})
         fake.on(FOLDER, "get", 2, captured("folder-get-by-name"))
@@ -744,7 +816,7 @@ class TestRequests:
             "filesize_limit": 10485760,
             "expiration": 0,
         }
-        assert 'Photo request "mcp spec" → /mcp-spec-capture (personal space)' in out
+        assert "Photo request mcp spec → /mcp-spec-capture (personal space)" in out
         assert "Link:      http://nas.example:5000/mo/request/ZxOc9Ep8q" in out
 
     @respx.mock
@@ -827,9 +899,29 @@ class TestRequests:
             "passphrase": "ZxOc9Ep8q",
             "subject": "mcp spec 2",
         }
-        assert 'Photo request "mcp spec 2"' in out and "10 MiB per file" in out
+        assert "Photo request mcp spec 2" in out and "10 MiB per file" in out
         assert fake.one(REQ, "delete").params == {"passphrase": ["ZxOc9Ep8q"]}
         assert "its link stops working" in gone
+
+    @respx.mock
+    async def test_list_quotes_a_folder_holding_the_cells_space_marker(self) -> None:
+        """QA r1 on #709: the Folder cell adds " (shared)" after the folder, so a personal
+        request on a folder named "/Up (shared)" read the same as a Shared Space one on "/Up"."""
+        listed = captured("request-list")
+        mine, team = (
+            json.loads(json.dumps(listed["list"][0])),
+            json.loads(json.dumps(listed["list"][0])),
+        )
+        mine.update(passphrase="Mine1", folder_home_path="/Up (shared)", library="personal")
+        team.update(passphrase="Team1", folder_home_path="/Up", library="shared_space")
+        fake = FakePhotos().on(REQ, "list", 1, {**listed, "list": [mine, team]})
+        install(fake)
+        client = make_client()
+        async with client:
+            table = await photo_request(client, action="list")
+        rows = {r.split()[0]: r for r in table.splitlines()[4:]}
+        assert "  '/Up (shared)'  " in rows["Mine1"], table
+        assert "  /Up (shared)  " in rows["Team1"], table
 
     @respx.mock
     @pytest.mark.parametrize(
@@ -1001,3 +1093,134 @@ class TestNamesShownEscaped:
         assert (_error(exc)["code"], _error(exc)["param"]) == ("invalid_parameter", "name")
         assert not fake.of(PERSON, "merge")
         assert "without the backslash escapes" in _error(exc)["suggestion"]
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: replies show names in "…", so a model may pass one back with the
+    quotes. A lookup that finds nothing says so (advice only: a name with real quotes still
+    works), and a call that sets such a name notes that the quotes are now part of it."""
+
+    HINT = "If the name came from a reply in quotes, pass it without them."
+
+    @respx.mock
+    async def test_tag_remove_of_an_unknown_tag_in_quotes_hints(self) -> None:
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12))
+        fake.on(TAG, "list", 1, captured("tag-list")).on(ITEM, "remove_tag", 1, {"error_list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await tag_photos(client, action="remove", ids=[12], tags=["2024", '"gone"'])
+        assert f"so there was nothing to remove. {self.HINT}" in out, out
+        async with client:
+            plain = await tag_photos(client, action="remove", ids=[12], tags=["2024", "gone"])
+        assert self.HINT not in plain, plain
+
+    @respx.mock
+    async def test_person_lookup_by_a_name_in_quotes_hints(self) -> None:
+        fake = FakePhotos().on(PERSON, "list", 1, captured("person-list", PEOPLE))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await edit_person(client, action="hide", person_name='"Person 1"')
+            with pytest.raises(ToolError) as plain:
+                await edit_person(client, action="hide", person_name="Nobody")
+        assert _error(exc)["code"] == "not_found"
+        assert _error(exc)["suggestion"].endswith(f"lists people. {self.HINT}"), _error(exc)
+        assert self.HINT not in _error(plain)["suggestion"]
+
+    @respx.mock
+    async def test_a_nas_escape_shows_doubled_and_its_decoded_text_finds_it(self) -> None:
+        """Pre-QA r4 on #709: a person whose name holds a newline is shown escaped (#604), and
+        inside quotes that escape's backslash is doubled; passing the decoded text (the escape
+        itself) finds the person, as the SYNOLOGY PHOTOS instructions say."""
+        people = captured("person-list", PEOPLE)
+        people["list"][0]["name"] = "Ann\nX"
+        one = captured("person-get", PEOPLE)
+        one["list"][0]["name"] = "Ann\nX"
+        fake = FakePhotos().on(PERSON, "list", 1, people).on(PERSON, "get", 1, one)
+        fake.on(PERSON, "show", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await edit_person(client, action="hide", person_name="Ann\\nX")
+        assert out.startswith('Person 12: "Ann\\\\nX" ('), out
+
+
+def test_a_request_with_no_folder_shows_the_placeholder() -> None:
+    """Pre-QA r4 on #709: a reply with no folder showed an empty one (`→  (personal space)`)."""
+    from mcp_synology.modules.photos.organize import _request_block
+
+    assert _request_block({}).splitlines()[0] == (
+        "Photo request (no subject) → (unnamed) (personal space)"
+    )
+
+
+class TestQuotesRound2:
+    """QA r2 on #709: the hint where photo_request adds "/", and no note on a name that
+    already had the quotes."""
+
+    PATH_HINT = "If the path came from a reply in quotes, pass it without them."
+
+    @respx.mock
+    async def test_photo_request_folder_in_quotes_hints(self) -> None:
+        fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+        fake.error("SYNO.Foto.Browse.Folder", "get", 2, 642)
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_request(
+                    client, action="create", subject="s", folder_path="'/Up (shared)'"
+                )
+            with pytest.raises(ToolError) as plain:
+                await photo_request(client, action="create", subject="s", folder_path="/Up")
+        assert _error(exc)["suggestion"].endswith(self.PATH_HINT), _error(exc)
+        assert self.PATH_HINT not in _error(plain)["suggestion"], _error(plain)
+        assert not fake.of(REQ, "create")
+
+
+@respx.mock
+async def test_photo_request_missing_folder_names_the_path_dsm_was_asked_for() -> None:
+    """QA r3 on #709: the caller's `Up` was echoed beside "starting with /" advice."""
+    fake = FakePhotos().on(REQ, "list", 1, {"list": []})
+    fake.error("SYNO.Foto.Browse.Folder", "get", 2, 642)
+    install(fake)
+    client = make_client()
+    async with client:
+        with pytest.raises(ToolError) as exc:
+            await photo_request(client, action="create", subject="s", folder_path="Up")
+    err = _error(exc)
+    assert "no folder '/Up' in the personal space." in err["message"], err
+    assert err["value"] == "Up", err
+
+
+@respx.mock
+async def test_added_tags_quote_a_tag_holding_the_lists_separator() -> None:
+    """#709: `Added tags A, B` joins with ", ", so a tag holding it is quoted."""
+    tags = captured("tag-list")
+    tags["list"].append({"id": 77, "name": "sun, sea"})
+    fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(TAG, "list", 1, tags)
+    fake.on(ITEM, "add_tag", 1, {"error_list": []})
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await tag_photos(client, action="add", ids=[12], tags=["2024", "sun, sea"])
+    assert out.startswith('Added tags 2024, "sun, sea" to 1 item(s)'), out
+
+
+@respx.mock
+async def test_merge_quotes_a_kept_name_of_digits() -> None:
+    """Pre-QA r9 on #709: `person 12 2024 (now …)` read as two IDs."""
+    kept = captured("person-get", PEOPLE)
+    kept["list"][0]["name"] = "2024"
+    fake = FakePhotos().on(PERSON, "list", 1, captured("person-list", PEOPLE))
+    fake.on(PERSON, "merge", 2, captured("person-merge-missing", PEOPLE))
+    fake.on(PERSON, "get", 1, kept)
+    install(fake)
+    client = make_client()
+    async with client:
+        out = await merge_people(
+            client, target_name="person 1", merge_names=["Person 2", "Person 3"]
+        )
+    assert out == 'Merged 2 people into person 12 "2024" (now 70 items).', out

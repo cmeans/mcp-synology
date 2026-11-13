@@ -60,6 +60,19 @@ class TestListPhotosRouting:
         assert "9 item(s) total; showing 1–" in out
 
     @respx.mock
+    async def test_the_title_quotes_a_folder_ending_in_a_colon(self) -> None:
+        """Pre-QA r3 on #709: the title's folder goes through `shown_folder`."""
+        fake = FakePhotos().on(
+            FOLDER, "get", 2, {"folder": {"id": 10, "name": "/Trips:", "parent": 3}}
+        )
+        fake.on(ITEM, "list", 2, captured("item-list-v2")).on(ITEM, "count", 1, {"count": 9})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photos(client, folder_id=10, limit=2)
+        assert out.startswith("Photos in '/Trips:' (personal space; newest first)"), out
+
+    @respx.mock
     async def test_no_source_uses_list_with_filter(self) -> None:
         """Item.list ignores sort_by outside a folder; list_with_filter honors it."""
         fake = _folders(FakePhotos())
@@ -102,7 +115,7 @@ class TestListPhotosRouting:
         assert {**keys, "offset": 0, "limit": 50}.items() <= fake.one(
             ITEM, "list_with_filter"
         ).params.items()
-        assert 'Photos: tag "MCP-SPEC-TAG" (personal space; 2024-01-01 to 2024-12-31' in out
+        assert "Photos: tag MCP-SPEC-TAG (personal space; 2024-01-01 to 2024-12-31" in out
 
     @respx.mock
     async def test_the_title_quotes_names_holding_its_separator(self) -> None:
@@ -153,7 +166,7 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, tag="nope")
-        assert 'no item has the tag "nope"' in out  # as the title writes it (pre-QA r2 on #695)
+        assert "no item has the tag nope" in out  # as the title writes it (pre-QA r2 on #695)
 
     @respx.mock
     async def test_unknown_tag_in_a_folder_keeps_photos_in(self) -> None:
@@ -164,7 +177,7 @@ class TestListPhotosRouting:
         client = make_client()
         async with client:
             out = await list_photos(client, folder_path="/mcp-spec-capture", tag="nope")
-        assert out.startswith('Photos in /mcp-spec-capture, tag "nope" ('), out
+        assert out.startswith("Photos in /mcp-spec-capture, tag nope ("), out
 
     @respx.mock
     async def test_place_uses_geocoding_id(self) -> None:
@@ -188,7 +201,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, keyword="2024")
         assert fake.one("SYNO.Foto.Search.Search", "list_item").params["keyword"] == "2024"
-        assert 'search "2024"' in out and "beach-sunset_1.jpg" in out
+        assert "search 2024" in out and "beach-sunset_1.jpg" in out
 
     @respx.mock
     async def test_a_keyword_holding_a_quote_is_escaped_in_the_title(self) -> None:
@@ -212,7 +225,7 @@ class TestListPhotosRouting:
         async with client:
             out = await list_photos(client, album_id=4)
         assert fake.one(ITEM, "list").params["album_id"] == 4
-        assert 'album "mcp-spec-album" (4)' in out and "2 item(s) total" in out
+        assert "album mcp-spec-album (4)" in out and "2 item(s) total" in out
 
     @respx.mock
     async def test_an_unnamed_person_isnt_quoted_as_a_name(self) -> None:
@@ -291,14 +304,14 @@ class TestListPhotosRouting:
             "SYNO.Foto.Browse.Concept",
             "get",
             2,
-            {"list": [{"id": 1, "name": "dog", "item_count": 0}]},
+            {"list": [{"id": 1, "name": "dog (pet)", "item_count": 0}]},
         )
         install(fake)
         client = make_client(CAPTURE_191)
         async with client:
             out = await list_photos(client, concept=1)
         assert fake.one(ITEM, "list").params["concept_id"] == 1
-        assert 'concept "dog"' in out
+        assert 'concept "dog (pet)" (' in out, out
 
     @respx.mock
     async def test_concept_without_get_result_gives_no_total(self) -> None:
@@ -463,6 +476,40 @@ class TestCollections:
         assert "/mcp-spec-capture/2024" in out
 
     @respx.mock
+    async def test_folders_heading_quotes_the_parent_and_the_filter(self) -> None:
+        """#700: "Folders in <parent> matching "<name>"" wrote both raw."""
+        parent = {"folder": {"id": 10, "name": "/a (x", "parent": 3}}
+        fake = FakePhotos().on(FOLDER, "get", 2, parent)
+        fake.on(FOLDER, "list", 2, captured("folder-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photo_collections(client, type="folder", parent_id=10, name='2"')
+        assert out.startswith('Folders in \'/a (x\' matching "2\\""'), out
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("name", "heading"),
+        [
+            ("x", "Folders in '/a matching b' matching x"),
+            ("x matching y", "Folders in '/a matching b' matching \"x matching y\""),  # QA r7
+            (None, "Folders in /a matching b"),
+        ],
+    )
+    async def test_folders_heading_quotes_matching_only_beside_a_filter(
+        self, name: str | None, heading: str
+    ) -> None:
+        """Pre-QA r2 on #700: " matching " follows the parent only when a filter is given."""
+        parent = {"folder": {"id": 10, "name": "/a matching b", "parent": 3}}
+        fake = FakePhotos().on(FOLDER, "get", 2, parent)
+        fake.on(FOLDER, "list", 2, captured("folder-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await list_photo_collections(client, type="folder", parent_id=10, name=name)
+        assert out.splitlines()[0].startswith(heading), out
+
+    @respx.mock
     async def test_folders_shared_flag_on_191(self) -> None:
         """1.9.1's sharing_info has only sharing_link; the state is the top-level flag."""
         listed = captured("folder-list", CAPTURE_191)
@@ -549,6 +596,24 @@ class TestGetPhoto:
         assert "SeedCam 1" in out
         assert "GPS Latitude Reference" in out
         assert out.endswith("Not found: 999999")
+
+    @respx.mock
+    async def test_names_holding_the_list_separator_are_quoted(self) -> None:
+        """#700: Tags and People join names with ", ", so a person "Jo, Ann" read as two people
+        and a tag "a, b" as two tags; a folder holding " (" read as the space."""
+        item = captured("item-get")
+        item["list"][0]["additional"].update(
+            tag=[{"id": 3, "name": "a, b"}, {"id": 4, "name": 'x"y'}],
+            person=[{"id": 1, "name": "Jo, Ann"}, {"id": 2, "name": ""}],
+        )
+        folder = {"folder": {"id": 10, "name": "/a (Shared Space)", "parent": 3}}
+        install(FakePhotos().on(FOLDER, "get", 2, folder).on(ITEM, "get", 2, item))
+        client = make_client()
+        async with client:
+            out = await get_photo(client, ids=[12])
+        assert 'Tags:         "a, b", "x\\"y"' in out, out
+        assert 'People:       "Jo, Ann", (unnamed)' in out, out
+        assert "Folder:       '/a (Shared Space)' (personal space)" in out, out
 
     @respx.mock
     async def test_indexing_item_has_no_taken_time_yet(self) -> None:
@@ -705,3 +770,89 @@ def test_collection_limit_refusal_separates_thousands() -> None:
     with pytest.raises(ToolError) as exc:
         _check_paging("List photo collections", 0, 5_000, 1_000)
     assert json.loads(str(exc.value))["error"]["message"].endswith("limit must be 1–1,000.")
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: an album or tag passed back in a reply's quotes and not found."""
+
+    HINT = "If the name came from a reply in quotes, pass it without them."
+
+    @respx.mock
+    async def test_an_album_name_in_quotes_hints(self) -> None:
+        install(FakePhotos().on("SYNO.Foto.Browse.Album", "list", 2, captured("album-list")))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await list_photos(client, album_name='"Trip 2024"')
+            with pytest.raises(ToolError) as plain:
+                await list_photos(client, album_name="Trip 2024")
+        assert _error(exc)["suggestion"].endswith(f"lists your albums. {self.HINT}"), _error(exc)
+        assert self.HINT not in _error(plain)["suggestion"]
+
+    @respx.mock
+    async def test_a_tag_in_quotes_with_no_items_hints(self) -> None:
+        install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list")))
+        client = make_client()
+        async with client:
+            out = await list_photos(client, tag='"2024"')
+            plain = await list_photos(client, tag="nope")
+        assert out.endswith(f"while some item has it). {self.HINT}"), out
+        assert self.HINT not in plain, plain
+
+
+@respx.mock
+async def test_an_empty_tag_is_shown_as_the_callers_text() -> None:
+    """Pre-QA r6 on #709: `(unnamed)` is for a name missing from the NAS, not the caller's
+    empty tag."""
+    install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list")))
+    client = make_client()
+    async with client:
+        out = await list_photos(client, tag="")
+    assert 'no item has the tag "" (' in out and "(unnamed)" not in out, out
+
+
+@respx.mock
+async def test_a_concept_with_no_name_is_its_placeholder_and_id() -> None:
+    """Pre-QA r9 on #709: a nameless concept 7 read the same as a concept named `7`."""
+    fake = FakePhotos().on(ITEM, "list", 7, {"list": []})
+    fake.on("SYNO.Foto.Browse.Concept", "get", 2, {"list": [{"id": 7, "name": ""}]})
+    install(fake)
+    client = make_client(CAPTURE_191)
+    async with client:
+        out = await list_photos(client, concept=7)
+    assert out.startswith("Photos: concept (unnamed) (7) ("), out
+
+
+@respx.mock
+async def test_title_quotes_digit_names_after_the_keyword() -> None:
+    """Pre-QA r10 on #709: `album 42 (4)` read as album ID 42, as `person 12` does."""
+    album = captured("album-get")
+    album["list"][0]["name"] = "42"
+    person = captured("person-get", PEOPLE)
+    person["list"][0]["name"] = "13"
+    fake = _folders(FakePhotos())
+    fake.on("SYNO.Foto.Browse.Album", "get", 1, album)
+    fake.on("SYNO.Foto.Browse.Person", "get", 1, person)
+    fake.on(ITEM, "list", 2, captured("item-list-album"))
+    fake.on(ITEM, "list_with_filter", 2, {"list": []}).on(
+        ITEM, "count_with_filter", 2, {"count": 0}
+    )
+    install(fake)
+    client = make_client()
+    async with client:
+        by_album = await list_photos(client, album_id=4)
+        by_person = await list_photos(client, person_id=12)
+    assert 'album "42" (4)' in by_album, by_album
+    assert 'person "13" (12)' in by_person, by_person
+
+
+@respx.mock
+async def test_a_concept_named_with_digits_is_quoted() -> None:
+    """Pre-QA r10 on #709: `concept 7 (1)` read as concept 7."""
+    fake = FakePhotos().on(ITEM, "list", 7, {"list": []})
+    fake.on("SYNO.Foto.Browse.Concept", "get", 2, {"list": [{"id": 1, "name": "7"}]})
+    install(fake)
+    client = make_client(CAPTURE_191)
+    async with client:
+        out = await list_photos(client, concept=1)
+    assert out.startswith('Photos: concept "7" (1) ('), out

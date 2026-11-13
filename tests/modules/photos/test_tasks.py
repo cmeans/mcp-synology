@@ -48,6 +48,24 @@ _DEST = {"folder": {"id": 14, "name": "/mcp-spec-capture/dest", "parent": 10}}
 
 class TestCopyMove:
     @respx.mock
+    async def test_a_destination_holding_the_space_marker_is_quoted(self) -> None:
+        """#700: "to <folder> (<space>): …" read a folder named "/Trips (Shared Space)" as
+        the Shared Space."""
+        dest = {"folder": {"id": 14, "name": "/Trips (Shared Space)", "parent": 10}}
+        fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, dest)
+        fake.on(FILE, "copy", 1, captured("bg-copy"))
+        fake.on(INFO, "get_status", 1, captured("bg-copy-status"), captured("bg-copy-status_last"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await copy_or_move(
+                client, operation="copy", ids=[12], folder_ids=None, destination_id=14
+            )
+        assert out.startswith(
+            "Copied 1 item(s) to '/Trips (Shared Space)' (personal space): 1 of 1"
+        ), out
+
+    @respx.mock
     async def test_copy_polls_until_done(self) -> None:
         fake = FakePhotos().on(ITEM, "get", 2, _items(12)).on(FOLDER, "get", 2, _DEST)
         fake.on(FILE, "copy", 1, captured("bg-copy"))
@@ -468,7 +486,7 @@ class TestDeletes:
             out = await delete_photo_folders(client, folder_paths=["/a, b", "/c"])
         assert out.startswith("Deleted 2 folders (listed last)"), out
         assert out.endswith(
-            "The folders:\n  /a, b (2 item(s) directly in it)\n  /c (2 item(s) directly in it)"
+            "The folders:\n  '/a, b' (2 item(s) directly in it)\n  /c (2 item(s) directly in it)"
         ), out
 
     @respx.mock
@@ -563,6 +581,18 @@ class TestPhotoTask:
         with pytest.raises(ToolError) as exc:
             parse_handle("Op", handle)
         assert _error(exc)["param"] == "handle"
+
+    @respx.mock
+    async def test_status_quotes_a_target_holding_its_separators(self) -> None:
+        """#700: the target folder is followed by ": <status>" (and " (Shared Space)"), so a
+        folder named "/x: done" or "/x (Shared Space)" read as the line's own."""
+        fake = FakePhotos().on(INFO, "get_status", 1, captured("bg-copy-status"))
+        fake.on(FOLDER, "get", 2, {"folder": {"id": 14, "name": "/x: done", "parent": 10}})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_task(client, handle="photos:5")
+        assert out.startswith("photos:5 copy to '/x: done': processing"), out
 
     @respx.mock
     async def test_status(self) -> None:

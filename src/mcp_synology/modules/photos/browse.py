@@ -16,16 +16,19 @@ from mcp_synology.core.formatting import (
     synology_error_response,
     unescaped_length,
 )
-from mcp_synology.modules.filestation.helpers import json_quoted, shown_beside
 from mcp_synology.modules.photos.helpers import (
+    QUOTES_HINT,
     V7,
     Photos,
     Ref,
     check_space,
+    in_reply_quotes,
     invalid,
     one_ref,
     page_footer,
     parse_date,
+    quoted_name,
+    shown_folder,
     space_label,
     taken_or_indexing,
 )
@@ -34,6 +37,9 @@ if TYPE_CHECKING:
     from mcp_synology.core.client import DsmClient
 
 logger = logging.getLogger(__name__)
+
+# The caller's own empty text, as written (`(unnamed)` is for a name missing from the NAS).
+_EMPTY = '""'
 
 _SORTS = {"taken": "takentime", "filename": "filename", "size": "filesize", "type": "item_type"}
 _DIRECTIONS = ("asc", "desc")
@@ -243,7 +249,7 @@ async def _list(
         items = data.get("list", [])
         total = int((await ph.call("Search.Search", "count_item", {"keyword": keyword}))["count"])
         return await _render(
-            ph, f"search {json_quoted(keyword)}", [], "search order", items, total, offset
+            ph, f"search {quoted_name(keyword, _EMPTY)}", [], "search order", items, total, offset
         )
 
     if album is not None:
@@ -251,7 +257,8 @@ async def _list(
         params = {"album_id": int(found["id"]), **page, **order, "additional": _ROW_ADDITIONAL}
         items = (await ph.call("Browse.Item", "list", params, version=2)).get("list", [])
         total = int(found.get("item_count", 0))
-        source = f"album {json_quoted(str(found.get('name', '')))} ({found['id']})"
+        # `album 42` reads as an ID, as `person 12` does in merge_people (pre-QA r10).
+        source = f"album {quoted_name(found.get('name'), beside_id=True)} ({found['id']})"
         return await _render(ph, source, [], _order(*sort), items, total, offset)
 
     if concept is not None:
@@ -265,7 +272,7 @@ async def _list(
         name = listed[0].get("name", "") if listed else ""
         return await _render(
             ph,
-            f"concept {json_quoted(str(name)) if name else concept}",
+            f"concept {quoted_name(name, beside_id=True)} ({concept})",
             [],
             _order(*sort),
             items,
@@ -287,9 +294,9 @@ async def _list(
         f = await ph.folder(folder)
         folder_id = int(f["id"])
         keys["folder"] = [folder_id]
-        # Plain unless it holds what `shown` quotes or the title's other separator, " (": the
-        # title joins what was asked for with ", " and ends each with " (…)" (#695).
-        described.append(shown_beside(str(f.get("name", "")) or "/", " ("))
+        # `shown_folder`: quoted when it holds what `shown` quotes (", " included: the title
+        # joins what was asked for with ", "), " (" (each ends with " (…)") or ": " (#695, #700).
+        described.append(shown_folder(str(f.get("name", "")) or "/"))
     if person is not None:
         p = await ph.person(person)
         # count_with_filter answers 120 without the policy (verified on both versions).
@@ -297,18 +304,20 @@ async def _list(
         keys["person_policy"] = "or"
         # The placeholder is the server's text, not a name: unquoted, so it can't pass for a
         # person named "(unnamed)" (pre-QA r2 on #695).
-        named = json_quoted(str(p["name"])) if p.get("name") else "(unnamed)"
-        described.append(f"person {named} ({p['id']})")
+        described.append(f"person {quoted_name(p.get('name'), beside_id=True)} ({p['id']})")
     if tag is not None:
         tag_id = (await ph.tag_ids([tag]))[tag]
-        described.append(f"tag {json_quoted(tag)}")
+        # The caller's own text, `""` when empty: `(unnamed)` is for a name missing from the
+        # NAS (pre-QA r6 on #709).
+        described.append(f"tag {quoted_name(tag, _EMPTY)}")
         if tag_id is None:
             heading = _heading(
                 ph, described, filters_text, _order(*sort), in_folder=folder is not None
             )
+            hint = f" {QUOTES_HINT}" if in_reply_quotes(tag) else ""
             return (
-                f"{heading}\nNo items: no item has the tag {json_quoted(tag)} (a tag exists only "
-                "while some item has it)."
+                f"{heading}\nNo items: no item has the tag {quoted_name(tag, _EMPTY)} "
+                f"(a tag exists only while some item has it).{hint}"
             )
         keys["general_tag"] = [tag_id]
         keys["general_tag_policy"] = "or"
@@ -545,7 +554,9 @@ async def _collections(
             },
             version=2,
         )
-        heading = f"Folders in {under.get('name') or '/'}"
+        # Quoted when it holds " (", ": " or, with a filter, " matching " (pre-QA r1).
+        also = (" matching ",) if name else ()
+        heading = f"Folders in {shown_folder(under.get('name') or '/', *also)}"
         headers = ["ID", "Path", "Shared"]
         rows = [
             [
@@ -562,7 +573,7 @@ async def _collections(
             for r, e in zip(rows, entries, strict=True)
             if wanted in str(e.get("name", "")).casefold()
         ]
-        heading += f' matching "{name}"'
+        heading += f" matching {quoted_name(name, '(unnamed)', ' matching ')}"
     total = len(rows)
     shown = rows[offset : offset + limit]
     noun = {"shared_with_me": "album", "person": "person", "place": "place"}.get(kind, kind)
@@ -708,16 +719,16 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
     if v7:
         rating += f" · favorite: {'yes' if add.get('favorite') else 'no'}"
     pairs = [
-        ("Folder", f"{folder} ({space_label(ph.space)})"),
+        ("Folder", f"{shown_folder(folder)} ({space_label(ph.space)})"),
         ("Taken", taken_or_indexing(item, "not known yet: still indexing")),
         ("Size", " · ".join(size)),
         ("Rating", rating),
         # Stripped: some cameras pad EXIF ImageDescription with spaces (#362).
         ("Description", str(add.get("description") or "").strip() or "—"),
-        ("Tags", ", ".join(str(t.get("name", "")) for t in add.get("tag") or []) or "—"),
+        ("Tags", ", ".join(quoted_name(t.get("name")) for t in add.get("tag") or []) or "—"),
         (
             "People",
-            ", ".join(str(p.get("name") or "(unnamed)") for p in add.get("person") or []) or "—",
+            ", ".join(quoted_name(p.get("name")) for p in add.get("person") or []) or "—",
         ),
         ("Location", _location(add)),
         ("Camera", _camera(add.get("exif") or {})),
