@@ -380,6 +380,7 @@ class TestLocalPathsQuoted:
     ("raised", "said"),
     [
         (RuntimeError("Symlink loop from '/x/loop'"), "a symlink loop"),
+        (RecursionError("maximum recursion depth exceeded"), "too many symlinks to follow"),
         (
             OSError(40, "Too many levels of symbolic links", "/x/loop"),
             "Too many levels of symbolic links",
@@ -442,6 +443,72 @@ def test_a_loop_outside_is_refused_as_outside(
     text = str(exc.value)
     err = json.loads(text[text.index("{") :])["error"]
     assert err["code"] == code, err
+
+
+@pytest.mark.parametrize(
+    ("where", "code"), [("out", "permission_denied"), ("ok", "invalid_parameter")]
+)
+def test_a_chain_too_long_to_follow_is_decided_by_its_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, code: str
+) -> None:
+    """QA r3 on #712: on 3.11/3.12 realpath recurses once per link, so a long chain raises
+    RecursionError (a RuntimeError), which the catch-all read as "inside" and called a loop,
+    though it leads outside. Its spelling decides, as before realpath's rule."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core import local_paths
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    real = Path.resolve
+
+    def deep(self: Path, strict: bool = False) -> Path:
+        if "chain" in self.parts:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, strict=strict)
+
+    def realpath(path: object, *args: object, **kwargs: object) -> str:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    root = real(tmp_path / "ok")
+    monkeypatch.setattr(Path, "resolve", deep)
+    monkeypatch.setattr(local_paths.os.path, "realpath", realpath)
+    value = str(tmp_path / where / "chain" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == code, err
+    if code == "invalid_parameter":
+        assert "too many symlinks to follow" in err["message"], err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_real_long_chain_outside_is_refused_as_outside(tmp_path: Path) -> None:
+    """QA r3 on #712, as QA probed it: 3,000 links, all outside the allowed folder. On
+    3.11/3.12 realpath runs out of recursion; on 3.13+ it follows them. Either way it's
+    refused as outside, never called a loop."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "l0").mkdir()
+    for i in range(1, 3000):
+        (out / f"l{i}").symlink_to(f"l{i - 1}")
+    value = str(out / "l2999" / "f")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "permission_denied", err
+    assert "loop" not in err["message"], err
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")

@@ -82,7 +82,8 @@ def default_downloads_dir(platform: str = sys.platform) -> Path:
 def _resolve(path: str | Path) -> Path:
     """Resolve ``~``, ``..`` and symlinks. Raises ``ValueError`` when that's impossible:
     a NUL byte (every Python), an unknown ``~user`` or no home directory (``expanduser``'s
-    ``RuntimeError``), or a symlink loop (``resolve``'s ``RuntimeError`` on 3.11/3.12)."""
+    ``RuntimeError``), or a symlink loop or a chain of links too long to follow (``resolve``'s
+    ``RuntimeError`` and ``RecursionError`` on 3.11/3.12)."""
     try:
         expanded = Path(path).expanduser()
     except RuntimeError as e:
@@ -97,6 +98,11 @@ def _resolve(path: str | Path) -> Path:
             f"{shown_local(str(path))} can't be resolved: this system's locale can't encode "
             "the path"
         )
+        raise ValueError(msg) from e
+    except RecursionError as e:
+        # A chain of links longer than realpath's recursion can follow (3.11/3.12, which
+        # recurse once per link; the OS stops at 40), not a loop (QA r3 on #712).
+        msg = f"{shown_local(str(path))} can't be resolved: too many symlinks to follow"
         raise ValueError(msg) from e
     except RuntimeError as e:
         # A symlink loop on 3.11/3.12, whose text repeats the path with repr (doubling a
@@ -154,11 +160,11 @@ CONTROL_CHARACTER_ADVICE = (
 
 def check_resolvable(setting: str, entry: str) -> Path:
     """``~`` expanded, and the path checked to have no control character, which would reach
-    the model's instructions as written, and to resolve (a NUL byte; a symlink loop on Python
-    3.11 and 3.12). The server resolves these when it starts, so a config that passes here
-    starts: otherwise `check` passed what `serve` crashed on (#511 PR 3). The instructions
-    print the resolved path, so that's checked too: a link can lead to a folder with a line
-    break in its name (QA round 1 on #541)."""
+    the model's instructions as written, and to resolve (a NUL byte; a symlink loop or a chain
+    of links too long to follow on Python 3.11 and 3.12). The server resolves these when it
+    starts, so a config that passes here starts: otherwise `check` passed what `serve` crashed
+    on (#511 PR 3). The instructions print the resolved path, so that's checked too: a link
+    can lead to a folder with a line break in its name (QA round 1 on #541)."""
     if has_control_character(entry):
         msg = f"{setting} {CONTROL_CHARACTER_ADVICE}"
         raise ValueError(msg)
@@ -295,7 +301,8 @@ def refuse_outside_roots(
     try:
         refused = outside_allowed_roots(path, roots)
     except ValueError as e:
-        # A NUL byte, or a symlink loop on Python 3.11/3.12 (QA R1 on #186). A path that
+        # A NUL byte, or a symlink loop or too long a chain of links on Python 3.11/3.12 (QA R1
+        # on #186, QA r3 on #712). A path that
         # leads outside the allowed folders is refused as outside: a different error would
         # tell the caller a loop exists there (#458; pre-QA r3 on #712). Where it leads is
         # `realpath`'s answer, which follows links as far as they go and stops at a loop
@@ -304,8 +311,13 @@ def refuse_outside_roots(
         # working folder gone) keeps the error below.
         if "\x00" not in value:
             try:
-                real = Path(os.path.realpath(Path(path).expanduser()))
-                inside = any(real == root or root in real.parents for root in roots)
+                try:
+                    real = Path(os.path.realpath(Path(path).expanduser()))
+                    inside = any(real == root or root in real.parents for root in roots)
+                except RecursionError:
+                    # A chain too long for realpath (3.11/3.12): where it's spelled decides,
+                    # as before the realpath rule (QA r3 on #712).
+                    inside = lexically_inside(path, roots)
             except (OSError, RuntimeError, ValueError):
                 inside = True
             if not inside:
@@ -316,7 +328,10 @@ def refuse_outside_roots(
             retryable=False,
             param=param,
             value=value,
-            suggestion="Pass a plain local path without NUL characters or symlink loops.",
+            suggestion=(
+                "Pass a plain local path without NUL characters, symlink loops or long chains "
+                "of symlinks."
+            ),
         )
     if refused is None:
         return
