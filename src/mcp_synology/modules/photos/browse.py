@@ -834,10 +834,8 @@ def _camera_model(model: str) -> str:
     # NFKC: fullwidth `ＩＳＯ 3200` reads as `ISO 3200` (pre-QA r2).
     folded = unicodedata.normalize("NFKC", model)
     if model and (
-        _CAMERA_LABELS.match(folded)
-        or _APERTURE_FORM.fullmatch(folded)
-        or _EXPOSURE_FORM.fullmatch(folded)
-        or _BARE_NUMBER.fullmatch(folded)
+        # `_CAMERA_LABELS` starts DSM's aperture and exposure forms too (QA r2 on #722).
+        _CAMERA_LABELS.match(folded) or _BARE_NUMBER.fullmatch(folded)
     ):
         return json_quoted(model)
     return _part(model, _CAMERA_MARKS)
