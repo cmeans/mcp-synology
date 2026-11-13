@@ -499,3 +499,16 @@ def test_a_relative_path_with_the_working_folder_gone_is_a_structured_error(
     text = str(exc.value)
     err = json.loads(text[text.index("{") :])["error"]
     assert err["code"] == "invalid_parameter", err
+
+
+def test_shown_local_reads_windows_separators(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-QA r4 on #712: nothing ran `shown_local` with Windows separators (CI is Linux),
+    so dropping `os.altsep` passed. It reads them at call time: patch both."""
+    from mcp_synology.core.display import shown_local
+
+    monkeypatch.setattr(os, "sep", "\\")
+    monkeypatch.setattr(os, "altsep", "/")
+    assert shown_local("C:\\Users\\Jo Smith\\Downloads") == "C:\\Users\\Jo Smith\\Downloads"
+    assert shown_local("C:/Users/jo/ x") == "'C:/Users/jo/ x'"  # padding after "/"
+    assert shown_local("C:\\Users\\jo\\a, b") == repr("C:\\Users\\jo\\a, b")
+    assert shown_local("C:\\Users\\jo\\tab\tx") == repr("C:\\Users\\jo\\tab\tx")
