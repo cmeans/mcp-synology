@@ -1299,6 +1299,21 @@ class TestFileTask:
         )
 
     @respx.mock
+    async def test_file_task_status_599_quotes_a_path_holding_its_colon(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA r1 on #717: the lost-task line's path reaches its ": " through a parameter, which
+        the guard can't see; a name holding one read as the line's own."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
+        h = Handle("delete", "FileStation_D2")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a: b"]))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text.startswith("DSM has no task for the delete of '/s/a: b': it may have"), text
+
+    @respx.mock
     async def test_file_task_stop(self, mock_client: DsmClient) -> None:
         from mcp_synology.modules.filestation.tasks import file_task
 

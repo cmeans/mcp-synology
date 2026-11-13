@@ -559,7 +559,14 @@ def shown_beside(path: str, marker: str) -> str:
     a line puts right after or between paths (`" and "`, `" (to "`), so a name holding it can't
     read as that line's structure (pre-QA r1 on #693)."""
     text = shown(path)
-    return plain_quoted(path) if marker in path and text == path else text
+    return plain_quoted(path) if _holds_marker(path, marker) and text == path else text
+
+
+def _holds_marker(path: str, marker: str) -> bool:
+    """Whether ``path`` would read as part of its line's ``marker``: it holds it, or, before
+    ``" ("``, it ends with ``":"``, which would read as the line's own ``": "`` (QA r1 on
+    #717; Photos' `shown_folder` quotes it the same way)."""
+    return marker in path or (marker == " (" and path.endswith(":"))
 
 
 def shown_local_beside(path: str | os.PathLike[str], marker: str) -> str:
@@ -568,7 +575,7 @@ def shown_local_beside(path: str | os.PathLike[str], marker: str) -> str:
     for a NAS path (#706)."""
     text = shown_local(path)
     raw = os.fspath(path)
-    return plain_quoted(raw) if marker in raw and text == raw else text
+    return plain_quoted(raw) if _holds_marker(raw, marker) and text == raw else text
 
 
 def plain_quoted(path: str) -> str:

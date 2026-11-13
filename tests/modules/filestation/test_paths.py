@@ -3617,3 +3617,28 @@ class TestPathBeforeItsSeparator:
             exclude_pattern="*.nfo",
         )
         assert "Search results in '/video/a (excluding: *.mkv)' (excluding: *.nfo)" in out
+
+    async def test_a_moves_skipped_row_quotes_its_path(self) -> None:
+        """QA r1 on #717: `  /s/a (skipped items are still in b) (skipped items are still in
+        /s/)`, a `+` join the guard can't see."""
+        from mcp_synology.modules.filestation.operations import _skip_report
+
+        p = "/s/a (skipped items are still in b)"
+        lines = await _skip_report(_FakeClient(), "Moved", "/s/d", [p], [], [p], True, probe=False)  # type: ignore[arg-type]
+        assert any(line.startswith(f"  '{p}' (skipped items") for line in lines), lines
+
+    def test_a_path_ending_in_a_colon_is_quoted_before_its_paren(self) -> None:
+        """QA r1 on #717: `Contents of /s/x: (3 items)` read as `/s/x`, then the line's ": "."""
+        from mcp_synology.core.display import shown_beside, shown_local_beside
+        from mcp_synology.modules.filestation.listing import _title_for
+
+        assert _title_for("/s/x:", 3) == "Contents of '/s/x:' (3 items)"
+        assert shown_beside("/s/report:", " (") == "'/s/report:'"
+        assert shown_beside("/s/report:", ": ") == "/s/report:"  # ": " follows: reads right
+        assert shown_local_beside("/home/u/x:", " (") == "'/home/u/x:'"
+
+    def test_a_task_description_quotes_a_source_holding_to(self) -> None:
+        """QA r1 on #717: `copying /s/a to b to /s/d/`."""
+        from mcp_synology.modules.filestation.tasks import _describe
+
+        assert _describe("copy", ["/s/a to b"], "/s/d") == "copying '/s/a to b' to /s/d/"

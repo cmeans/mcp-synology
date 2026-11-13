@@ -1099,7 +1099,13 @@ def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     one path, which the caller lists one a line (#693)."""
     # Its lines put " (<progress>)" right after it (pre-QA r1 on #706).
     where = (
-        shown_beside(paths[0], " (") if len(paths) == 1 else f"{len(paths)} items" if paths else ""
+        # " to <dest>" follows it when there's a destination, " (<progress>)" when not (QA r1
+        # on #717).
+        shown_beside(paths[0], " to " if dest and kind != "delete" else " (")
+        if len(paths) == 1
+        else f"{len(paths)} items"
+        if paths
+        else ""
     )
     # The folder quoted, then its slash, as the tools' summaries write it (#688).
     to = f" to {shown_beside(dest, ' (')}/" if dest and kind != "delete" else ""

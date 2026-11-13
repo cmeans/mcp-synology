@@ -792,7 +792,8 @@ async def _skip_report(
         where = f" (skipped items are still in {shown(src_dir)}/)"
         if p in unknown:
             where = " (skipped items are still at this path or under it)"
-        return f"  {shown(p)}" + (where if remove_src else "")
+        # Before its " (skipped items …)" note, a `+` join the AST guard can't see (QA r1 on #717).
+        return f"  {shown_beside(p, ' (')}" + (where if remove_src else "")
 
     if ok:
         lines.append(f"{verb}:")
