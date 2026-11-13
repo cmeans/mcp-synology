@@ -724,6 +724,44 @@ class TestGetPhoto:
     def test_camera_line_units(self, exif: dict[str, str], line: str) -> None:
         assert _camera(exif) == line
 
+    @pytest.mark.parametrize(
+        ("exif", "line"),
+        [
+            # #710: EXIF text is the file's, so a camera model holding " · " wrote fields of
+            # its own ahead of the real ones.
+            (
+                {"camera": "Canon · lens EF 50mm · aperture F1.0", "aperture": "F8"},
+                '"Canon · lens EF 50mm · aperture F1.0" · lens — · F8 · exposure — · ISO —',
+            ),
+            (
+                {"camera": "x", "lens": "EF · F1.0", "iso": "100 · 1/8000 s"},
+                'x · lens "EF · F1.0" · aperture — · exposure — · ISO "100 · 1/8000 s"',
+            ),
+            (
+                {"camera": "x", "aperture": "F2 · 1 s", "exposure_time": 'a"b'},
+                'x · lens — · "F2 · 1 s" · "a\\"b" · ISO —',
+            ),
+            # NFC: U+0387 normalizes to "·" (as quoted_name checks names).
+            ({"camera": "a \u0387 b"}, '"a \u0387 b" · lens — · aperture — · exposure — · ISO —'),
+        ],
+    )
+    def test_camera_line_quotes_a_value_holding_its_separator(
+        self, exif: dict[str, str], line: str
+    ) -> None:
+        assert _camera(exif) == line
+
+    def test_location_line_quotes_a_part_holding_its_separators(self) -> None:
+        """#710: the Location line joins the address parts with ", " and the coordinates and
+        address with " · "; a part holding either is quoted."""
+        from mcp_synology.modules.photos.browse import _location
+
+        add = {
+            "gps": {"latitude": 48.85, "longitude": 2.35},
+            "address": {"city": "Paris · 0, 0", "country": "France"},
+        }
+        assert _location(add) == '48.85, 2.35 · "Paris · 0, 0", France'
+        assert _location({"address": {"city": "Paris", "country": "France"}}) == "Paris, France"
+
     @respx.mock
     async def test_favorite_on_191(self) -> None:
         fake = FakePhotos().on(FOLDER, "get", 2, _FOLDER_10)

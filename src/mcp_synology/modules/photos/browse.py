@@ -736,15 +736,24 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
     return format_key_value(pairs, title=f"Item {item['id']}: {item.get('filename', '')}")
 
 
+# What the Location and Camera lines put between their parts: a value holding one is
+# quoted, so it can't read as parts of its own (#710).
+_LOCATION_MARKS = (", ", " · ")
+_CAMERA_MARKS = (" · ",)
+
+
 def _location(add: dict[str, Any]) -> str:
     gps = add.get("gps") or {}
     address = add.get("address") or {}
     parts = []
     if gps.get("latitude") is not None and gps.get("longitude") is not None:
-        parts.append(f"{gps['latitude']}, {gps['longitude']}")
+        lat, lon = (
+            quoted_name(gps[k], "—", marks=_LOCATION_MARKS) for k in ("latitude", "longitude")
+        )
+        parts.append(f"{lat}, {lon}")
     names = [str(address[k]) for k in _ADDRESS_PARTS if address.get(k)]
     if names:
-        parts.append(", ".join(dict.fromkeys(names)))
+        parts.append(", ".join(quoted_name(n, marks=_LOCATION_MARKS) for n in dict.fromkeys(names)))
     return " · ".join(parts) or "—"
 
 
@@ -753,6 +762,12 @@ _BARE_NUMBER = re.compile(r"[0-9]+(?:[./][0-9]+)?")
 
 
 def _camera(exif: dict[str, Any]) -> str:
+    """The Camera line. Each value is EXIF text from the file, which whoever made it chose, so
+    one holding the line's ` · ` (or a quote) is quoted (#710)."""
+
+    def text(value: str) -> str:
+        return quoted_name(value, "", marks=_CAMERA_MARKS)
+
     camera = str(exif.get("camera") or "")
     # Photos sends these formatted: "F1.5", "1/30 s" on 1.3.4 (DSM 7.1.1); "F2.8", "1/2 s"
     # on 1.9.1 (vdsm DSM 7.2.2). Add the unit only when it's missing, so a bare number
@@ -764,14 +779,14 @@ def _camera(exif: dict[str, Any]) -> str:
     if _BARE_NUMBER.fullmatch(exposure):
         exposure = f"{exposure} s"
     details = [
-        f"lens {exif.get('lens') or '—'}",
-        aperture or "aperture —",
-        exposure or "exposure —",
-        f"ISO {exif.get('iso') or '—'}",
+        f"lens {text(str(exif.get('lens') or '')) or '—'}",
+        text(aperture) or "aperture —",
+        text(exposure) or "exposure —",
+        f"ISO {text(str(exif.get('iso') or '')) or '—'}",
     ]
     if not camera and not any(exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")):
         return "—"
-    return " · ".join([camera or "—", *details])
+    return " · ".join([text(camera) or "—", *details])
 
 
 async def _exif_table(ph: Photos, item_id: int) -> str:
