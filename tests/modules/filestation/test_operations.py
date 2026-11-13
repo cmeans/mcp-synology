@@ -319,6 +319,20 @@ class TestCreateFolderPartWay:
         ), error["message"]
 
     @respx.mock
+    @pytest.mark.parametrize("force_parent", [True, False])
+    async def test_a_proxy_error_on_the_first_path_is_retryable_only_with_force_parent(
+        self, mock_client: DsmClient, force_parent: bool
+    ) -> None:
+        """Nothing was created, so only ``force_parent`` decides whether the path that may
+        exist can be asked for again."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": "502"}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(
+                mock_client, paths=["/video/b", "/video/c"], force_parent=force_parent
+            )
+        assert json.loads(str(exc_info.value))["error"]["retryable"] is force_parent
+
+    @respx.mock
     async def test_a_connection_never_made_on_a_later_path_didnt_create_it(
         self, mock_client: DsmClient
     ) -> None:
