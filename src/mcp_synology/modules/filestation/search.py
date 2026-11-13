@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 
-from mcp_synology.core.display import shown
+from mcp_synology.core.display import shown, shown_beside
 from mcp_synology.core.errors import ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     error_response,
@@ -224,7 +224,8 @@ async def search_files(
     filters = [f"pattern: {pattern}"] if pattern else []
     if exclude_pattern:
         filters.append(f"excluding: {exclude_pattern}")
-    title = f"Search results in {shown(normalized)}"
+    # The folder before " (<filters>)" is quoted when it holds " (" (pre-QA r2 on #706).
+    title = f"Search results in {shown_beside(normalized, ' (') if filters else shown(normalized)}"
     if filters:
         title += f" ({', '.join(filters)})"
 

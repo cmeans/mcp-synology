@@ -337,7 +337,8 @@ def _already_running(operation: str, path: str, dest: str | None = None) -> str:
     """
     to = f" (to {shown(dest)}/)" if dest else ""
     return (
-        f"A {operation.lower()} of {shown(path)}{to} was already running on the NAS, so no second "
+        f"A {operation.lower()} of {shown_beside(path, ' (')}{to} was already running on the NAS, "
+        "so no second "
         "one was started."
     )
 
@@ -611,7 +612,8 @@ def _partial_note(
         else ""
     )
     return (
-        f"Part of it may already be in {shown(str(dest))}{gone}: DSM doesn't say how much was "
+        f"Part of it may already be in {shown_beside(str(dest), ': ')}{gone}: DSM doesn't say how "
+        "much was "
         f"{past} before it stopped, so check there before trying again."
     )
 

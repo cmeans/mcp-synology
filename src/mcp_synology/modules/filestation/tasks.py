@@ -1102,7 +1102,7 @@ def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
         shown_beside(paths[0], " (") if len(paths) == 1 else f"{len(paths)} items" if paths else ""
     )
     # The folder quoted, then its slash, as the tools' summaries write it (#688).
-    to = f" to {shown(dest)}/" if dest and kind != "delete" else ""
+    to = f" to {shown_beside(dest, ' (')}/" if dest and kind != "delete" else ""
     return f"{_GERUND[kind]} {where or '(path unknown)'}{to}"
 
 
@@ -1407,7 +1407,12 @@ async def file_task(
     # (#693), so no separator inside a name can read as another path.
     many = len(paths) > 1
     what = (
-        f"{len(paths)} items (listed last)" if many else shown(paths[0]) if paths else f"`{parsed}`"
+        f"{len(paths)} items (listed last)"
+        if many
+        # Its lost-task line puts ": " after it (pre-QA r2 on #706).
+        else shown_beside(paths[0], ": ")
+        if paths
+        else f"`{parsed}`"
     )
     reply = await _file_task_reply(client, records, parsed, record, action, paths, what)
     if many:

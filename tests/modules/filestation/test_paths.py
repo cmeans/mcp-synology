@@ -3540,7 +3540,7 @@ class TestPathBeforeItsSeparator:
 
         assert missing_text(path, code, None).startswith(want)
 
-    def test_a_failure_list_quotes_a_path_holding_a_paren(self) -> None:
+    def test_shown_beside_quotes_a_path_holding_a_paren(self) -> None:
         from mcp_synology.core.display import shown_beside
 
         assert shown_beside("/s/a (DSM error 900)", " (") == "'/s/a (DSM error 900)'"
@@ -3583,3 +3583,37 @@ class TestPathBeforeItsSeparator:
 
         assert "'/s/a: b.txt' is a file" in missing_text("/s/a: b.txt/x", 401, "/s/a: b.txt")
         assert under_file_text("/s/a: b.txt/x", "/s/a: b.txt").endswith("'/s/a: b.txt' is a file")
+
+    def test_the_variable_carried_sites_quote_their_path(self) -> None:
+        """Pre-QA r2 on #706: paths that reach their separator through a variable, `+=` or
+        another field, which the AST guard can't see."""
+        from mcp_synology.modules.filestation.operations import _already_running, _partial_note
+        from mcp_synology.modules.filestation.tasks import _describe
+
+        assert "'/s/a (to elsewhere)' (to /s/d/)" in _already_running(
+            "Copy", "/s/a (to elsewhere)", "/s/d"
+        )
+        note = _partial_note({}, [("/s/a", 1000)], "Copy", "/s/a", "/s/d: nothing was written")
+        assert "'/s/d: nothing was written': DSM" in note
+        assert "to '/s/d (100% finished)'/" in _describe("copy", ["/s/a"], "/s/d (100% finished)")
+
+    async def test_search_titles_quote_a_folder_holding_its_paren(self) -> None:
+        """Pre-QA r2 on #706: `Search results in /video/a (excluding: *.mkv) (excluding: …)`."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Folder(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    path = kwargs["params"]["path"]
+                    return {"files": [{"path": path, "isdir": True}]}
+                return await super().request(api, method, **kwargs)
+
+        client = _Folder(
+            methods={"start": {"taskid": "T"}, "list": {"finished": True, "total": 0, "files": []}}
+        )
+        out = await search_files(
+            client,  # type: ignore[arg-type]
+            folder_path="/video/a (excluding: *.mkv)",  # type: ignore[arg-type]
+            exclude_pattern="*.nfo",
+        )
+        assert "Search results in '/video/a (excluding: *.mkv)' (excluding: *.nfo)" in out
