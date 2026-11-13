@@ -34,6 +34,7 @@ from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
     UNDER_FILE_ADVICE,
     diagnose_under_file,
+    doesnt_exist_text,
     files_above,
     missing_paths_suggestion,
     normalize_path,
@@ -378,9 +379,7 @@ async def download_file(
     if exists is False:
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Download failed: {under_file_text(nas_path, blocker)}."
-            if blocker
-            else f"Download failed: {shown(nas_path)} doesn't exist on the NAS.",
+            f"Download failed: {doesnt_exist_text(nas_path, blocker)}.",
             retryable=False,
             param="path",
             value=nas_path,

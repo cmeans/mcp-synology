@@ -144,8 +144,8 @@ async def create_folder(
                 if blocker:
                     error_response(
                         ErrorCode.NOT_FOUND,
-                        f"Create folder failed: {shown(p)} can't be created: {shown(blocker)} "
-                        "is a file.",
+                        f"Create folder failed: {shown(p)} can't be created: "
+                        f"{shown_beside(blocker, ': ')} is a file.",
                         retryable=False,
                         param="paths",
                         value=given,  # the caller's own text (QA r1 on #714)

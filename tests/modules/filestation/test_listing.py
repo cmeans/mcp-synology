@@ -882,9 +882,6 @@ class TestListFiles:
             ("407", "filestation_error"),  # a parent it can't read: DSM's error stands
             # A proxy's stall ends the call (pre-QA r4, #282), named for the tool (#705).
             ("502", "unavailable"),
-            # QA r3 on #706: a file holding ": " is quoted (the sentence `doesnt_exist_text`
-            # writes for both branches and search_files).
-            ("colon", "not_found"),
         ],
     )
     @respx.mock
@@ -910,10 +907,9 @@ class TestListFiles:
                 entry = {"isdir": parent == "folder", "path": params["path"]}
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
-        file = "/video/a: b.jpg" if parent == "colon" else "/video/a.jpg"
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
-            await list_files(mock_client, path=f"{file}/x/child")
+            await list_files(mock_client, path="/video/a.jpg/x/child")
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == code
         if parent == "502":
@@ -923,11 +919,31 @@ class TestListFiles:
                 "List files failed: /video/a.jpg/x/child doesn't exist on the NAS: "
                 "/video/a.jpg is a file."
             )
-        if parent == "colon":
-            assert error["message"] == (
-                "List files failed: /video/a: b.jpg/x/child doesn't exist on the NAS: "
-                "'/video/a: b.jpg' is a file."
-            )
+
+    @respx.mock
+    async def test_the_401_branch_quotes_a_file_holding_its_colon(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA r3 on #706: the file above is quoted when it holds ": " (`doesnt_exist_text`, the
+        sentence both branches and search_files write)."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 401}})
+            if params["path"] == "/video/a: b.jpg":
+                entry: dict[str, Any] = {"isdir": False, "path": params["path"]}
+            else:
+                entry = {"code": 401, "path": params["path"]}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a: b.jpg/x/child")
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "List files failed: /video/a: b.jpg/x/child doesn't exist on the NAS: "
+            "'/video/a: b.jpg' is a file."
+        )
 
     @respx.mock
     async def test_list_files_401_isnt_read_without_tell_files_apart(

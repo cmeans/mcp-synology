@@ -2232,6 +2232,21 @@ class TestPathUnderAFile:
         else:
             assert f"DSM error {code}" in error["message"]
 
+    async def test_create_folder_quotes_a_file_holding_its_colon(self) -> None:
+        """Pre-QA r3 on #717: `…can't be created: /video/f: g.txt is a file` read as if
+        g.txt were the file."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        class _Colon(_UnderFile):
+            FILE = "/video/f: g.txt"
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_Colon(fails={"create": 1100}), paths=["/video/f: g.txt/x/y"])  # type: ignore[arg-type,list-item]
+        assert _error(exc)["message"] == (
+            "Create folder failed: /video/f: g.txt/x/y can't be created: "
+            "'/video/f: g.txt' is a file."
+        )
+
     async def test_create_folder_1100_with_no_file_above(self) -> None:
         """A real permission refusal keeps DSM's 1100."""
         from mcp_synology.modules.filestation.operations import create_folder
@@ -3666,6 +3681,14 @@ class TestPathBeforeItsSeparator:
             exclude_pattern="*.nfo",
         )
         assert "Search results in '/video/a (excluding: *.mkv)' (excluding: *.nfo)" in out
+        # Pre-QA r3: a folder holding " (" but no ": ", so a wrong marker can't pass (the
+        # marker sits in a conditional, which the marker guard doesn't read).
+        out = await search_files(
+            client,  # type: ignore[arg-type]
+            folder_path="/video/Movies (2024)",  # type: ignore[arg-type]
+            exclude_pattern="*.nfo",
+        )
+        assert "Search results in '/video/Movies (2024)' (excluding: *.nfo)" in out
 
     async def test_a_moves_skipped_row_quotes_its_path(self) -> None:
         """QA r1 on #717: `  /s/a (skipped items are still in b) (skipped items are still in

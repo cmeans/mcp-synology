@@ -791,10 +791,10 @@ def under_file_text(path: str, file: str) -> str:
 
 
 def doesnt_exist_text(path: str, under_file: str | None) -> str:
-    """A missing path in words, naming the file above it when there is one: the one sentence
-    `list_files` (both branches) and `search_files` write (QA r3 on #706: two of them wrote
-    the file raw after its ": ")."""
-    if under_file:
+    """A missing path in words, naming the file above it when there is one: the sentence
+    `list_files` (both branches), `search_files` and `download_file` write (QA r3 on #706: two
+    of them wrote the file raw after its ": ")."""
+    if under_file is not None:
         return under_file_text(path, under_file)
     return f"{shown(path)} doesn't exist on the NAS"
 
