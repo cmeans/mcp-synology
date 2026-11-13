@@ -96,7 +96,7 @@ def unanswered_status_response(
     note = f" {task_note}" if task_note else ""
     error_response(
         ErrorCode.TIMEOUT if timed_out else ErrorCode.UNAVAILABLE,
-        f"{operation} failed: DSM {what} a status request on path: {shown(path)}"
+        f"{operation} failed: DSM {what} a status request on path: {shown_beside(path, ' (')}"
         f" ({describe_transport_error(exc)}).{note}{already}",
         retryable=True,
         param="path",
@@ -782,7 +782,8 @@ RESTORE_UNDER_FILE_ADVICE = (
 def under_file_text(path: str, file: str) -> str:
     """A path under a file, in words (#702), as `list_files` and `search_files` write it
     (#517)."""
-    return f"{shown(path)} doesn't exist on the NAS: {shown(file)} is a file"
+    # The file after its ": " (pre-QA r1 on #706): a name holding one would read as the file.
+    return f"{shown(path)} doesn't exist on the NAS: {shown_beside(file, ': ')} is a file"
 
 
 def missing_text(path: str, code: int, under_file: str | None) -> str:
@@ -795,7 +796,7 @@ def missing_text(path: str, code: int, under_file: str | None) -> str:
         # on #714).
         return (
             f"{shown_beside(path, ': ')}: doesn't exist (DSM error {code}): "
-            f"{shown(under_file)} is a file"
+            f"{shown_beside(under_file, ': ')} is a file"
         )
     why = (
         "no permission"

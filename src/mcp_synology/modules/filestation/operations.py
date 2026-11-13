@@ -1367,7 +1367,7 @@ class CopyMoveAdapter:
                 ErrorCode.TIMEOUT
                 if isinstance(e, httpx.TimeoutException)
                 else ErrorCode.UNAVAILABLE,
-                f"{operation} files failed: DSM didn't answer for {shown(p)} "
+                f"{operation} files failed: DSM didn't answer for {shown_beside(p, ' (')} "
                 f"({describe_transport_error(e)}); its {operation.lower()} may have started.",
                 retryable=False,
                 param="paths",
@@ -1642,7 +1642,7 @@ class DeleteAdapter:
                 ErrorCode.TIMEOUT
                 if isinstance(e, httpx.TimeoutException)
                 else ErrorCode.UNAVAILABLE,
-                f"Delete files failed: DSM didn't answer for {shown(p)} "
+                f"Delete files failed: DSM didn't answer for {shown_beside(p, ' (')} "
                 f"({describe_transport_error(e)}); its delete may have started.",
                 retryable=False,
                 param="paths",

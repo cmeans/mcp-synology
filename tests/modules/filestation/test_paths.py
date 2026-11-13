@@ -3484,16 +3484,41 @@ class TestPathBeforeItsSeparator:
     separator is quoted and can't read as the line's structure (the File Station sibling of
     #695 and #699)."""
 
-    _RAW = __import__("re").compile(r"\{(shown|shown_local)\([^{}]*\)\}(: | \(|  )")
+    _MARKERS = (": ", " (", "  ")
 
     def test_no_shown_path_sits_before_its_separator(self) -> None:
+        """An AST walk, not a line grep (pre-QA r1 on #706): it follows `shown`/`shown_local`
+        under any import name (`shown as shown_path`), and an f-string split over lines,
+        which Python joins into one; a path carried through a variable is held by the
+        behavior tests below."""
+        import ast
+
         src = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
-        hits = [
-            f"{f.relative_to(src)}:{n}: {line.strip()}"
-            for f in sorted(src.rglob("*.py"))
-            for n, line in enumerate(f.read_text().splitlines(), 1)
-            if self._RAW.search(line)
-        ]
+        hits = []
+        for f in sorted(src.rglob("*.py")):
+            tree = ast.parse(f.read_text())
+            names = {
+                alias.asname or alias.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("display")
+                for alias in node.names
+                if alias.name in ("shown", "shown_local")
+            }
+            if f.name == "display.py":
+                names |= {"shown", "shown_local"}
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                for here, after in zip(node.values, node.values[1:], strict=False):
+                    call = here.value if isinstance(here, ast.FormattedValue) else None
+                    named = (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id in names
+                    )
+                    text = after.value if isinstance(after, ast.Constant) else ""
+                    if named and isinstance(text, str) and text.startswith(self._MARKERS):
+                        hits.append(f"{f.relative_to(src)}:{node.lineno}: {ast.unparse(call)}")
         assert hits == [], hits
 
     @pytest.mark.parametrize(
@@ -3529,3 +3554,32 @@ class TestPathBeforeItsSeparator:
         assert shown_local_beside("/home/u/plain", ": ") == "/home/u/plain"
         # Already quoted by shown_local (padding): left as it writes it.
         assert shown_local_beside("/home/u/a ", ": ") == "'/home/u/a '"
+
+    def test_list_files_title_quotes_a_folder_holding_its_paren(self) -> None:
+        """Pre-QA r1 on #706: `Contents of /video/a (99 items) (0 items)` forged the count."""
+        from mcp_synology.modules.filestation.listing import _title_for
+
+        assert _title_for("/video/a (99 items)", 0) == "Contents of '/video/a (99 items)' (0 items)"
+
+    def test_a_task_description_quotes_a_path_holding_its_paren(self) -> None:
+        """Pre-QA r1 on #706: `_describe` carries the path in a variable, then `(<progress>)`."""
+        from mcp_synology.modules.filestation.tasks import _describe
+
+        assert "'/video/a (100%)'" in _describe("delete", ["/video/a (100%)"], None)
+
+    def test_a_status_request_with_no_answer_quotes_its_path(self) -> None:
+        """Pre-QA r1 on #706: a split f-string the line grep couldn't see."""
+        import httpx
+
+        from mcp_synology.modules.filestation.helpers import unanswered_status_response
+
+        with pytest.raises(ToolError) as exc:
+            unanswered_status_response("Delete", "/video/a (ReadTimeout)", httpx.ReadTimeout("x"))
+        assert "'/video/a (ReadTimeout)' (ReadTimeout" in _error(exc)["message"]
+
+    def test_the_file_above_is_quoted_when_it_holds_its_colon(self) -> None:
+        """Pre-QA r1 on #706: `…: /s/a: b.txt is a file` read as if b.txt were the file."""
+        from mcp_synology.modules.filestation.helpers import missing_text, under_file_text
+
+        assert "'/s/a: b.txt' is a file" in missing_text("/s/a: b.txt/x", 401, "/s/a: b.txt")
+        assert under_file_text("/s/a: b.txt/x", "/s/a: b.txt").endswith("'/s/a: b.txt' is a file")

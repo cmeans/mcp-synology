@@ -1097,7 +1097,10 @@ def _where_to_look(gerund: str, dest: str, sources: list[str]) -> str:
 def _describe(kind: HandleKind, paths: list[str], dest: str | None) -> str:
     """``deleting /s/a`` or ``moving /s/b to /s/d/``; ``moving 2 items to /s/d/`` for more than
     one path, which the caller lists one a line (#693)."""
-    where = shown(paths[0]) if len(paths) == 1 else f"{len(paths)} items" if paths else ""
+    # Its lines put " (<progress>)" right after it (pre-QA r1 on #706).
+    where = (
+        shown_beside(paths[0], " (") if len(paths) == 1 else f"{len(paths)} items" if paths else ""
+    )
     # The folder quoted, then its slash, as the tools' summaries write it (#688).
     to = f" to {shown(dest)}/" if dest and kind != "delete" else ""
     return f"{_GERUND[kind]} {where or '(path unknown)'}{to}"
