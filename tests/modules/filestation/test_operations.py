@@ -279,6 +279,24 @@ class TestCreateFolderPartWay:
         assert "Failed on" not in error["message"]
 
     @respx.mock
+    @pytest.mark.parametrize("force_parent", [True, False])
+    async def test_no_answer_on_the_first_path_is_retryable_only_with_force_parent(
+        self, mock_client: DsmClient, force_parent: bool
+    ) -> None:
+        """Nothing else was created, so only the path with no answer decides: it may exist, and
+        only with ``force_parent`` is that no error."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"a": httpx.ReadTimeout("timed out")})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(
+                mock_client, paths=["/video/a", "/video/b"], force_parent=force_parent
+            )
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["retryable"] is force_parent
+        assert error["message"].endswith("it may have been created. Not started: /video/b.")
+
+    @respx.mock
     async def test_a_proxy_error_on_a_later_path_may_have_created_it(
         self, mock_client: DsmClient
     ) -> None:
