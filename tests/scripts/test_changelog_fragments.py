@@ -508,3 +508,14 @@ def test_long_lists_are_cut_short() -> None:
     assert script._named(names).endswith("and 2 more"), script._named(names)
     assert "12.fixed.md" not in script._named(names)
     assert "3.fixed.md" in script._named(names[:3])
+
+
+def test_only_ci_has_a_job_named_changelog() -> None:
+    """QA r1 on #732: a required check is matched by name, and another workflow's `changelog`
+    job, skipped on every PR it doesn't run for, would satisfy it."""
+    owners = [
+        path.name
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+        if re.search(r"(?m)^  changelog:\s*$", path.read_text(encoding="utf-8"))
+    ]
+    assert owners == ["ci.yml"], owners

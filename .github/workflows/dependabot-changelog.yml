@@ -38,7 +38,9 @@ permissions:
   pull-requests: read
 
 jobs:
-  changelog:
+  # Not `changelog`: CI's fragment check has that name, and a required check is matched by
+  # name, so this job's skip on every other PR would satisfy it (QA r1 on #732).
+  dependabot-changelog:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
