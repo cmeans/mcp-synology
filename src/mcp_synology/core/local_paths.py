@@ -90,7 +90,16 @@ def _resolve(path: str | Path) -> Path:
             "the path"
         )
         raise ValueError(msg) from e
-    except (OSError, ValueError, RuntimeError) as e:
+    except RuntimeError as e:
+        # A symlink loop on 3.11/3.12, whose text repeats the path with repr (doubling a
+        # Windows backslash): say what it is, once (pre-QA r2 on #712).
+        msg = f"{shown_local(str(path))} can't be resolved: a symlink loop"
+        raise ValueError(msg) from e
+    except OSError as e:
+        # The OS's own words, without its copy of the path, as the transfer modules do (#698).
+        msg = f"{shown_local(str(path))} can't be resolved: {e.strerror or type(e).__name__}"
+        raise ValueError(msg) from e
+    except ValueError as e:  # a NUL byte: Python's text ("embedded null byte") has no path
         msg = f"{shown_local(str(path))} can't be resolved: {e}"
         raise ValueError(msg) from e
 

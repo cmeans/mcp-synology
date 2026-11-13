@@ -374,3 +374,29 @@ class TestLocalPathsQuoted:
 
         with pytest.raises(ValueError, match="start with ~\\): 'a, b'$"):
             check_local_path_entries("allowed_local_paths", ["a, b"])
+
+
+@pytest.mark.parametrize(
+    ("raised", "said"),
+    [
+        (RuntimeError("Symlink loop from '/x/loop'"), "a symlink loop"),
+        (
+            OSError(40, "Too many levels of symbolic links", "/x/loop"),
+            "Too many levels of symbolic links",
+        ),
+        (OSError("bare"), "OSError"),
+    ],
+)
+def test_an_unresolvable_path_names_it_once(
+    monkeypatch: pytest.MonkeyPatch, raised: Exception, said: str
+) -> None:
+    """Pre-QA r2 on #712: the error's own text repeated the path with repr (3.11/3.12)."""
+    from mcp_synology.core import local_paths
+
+    def boom(self: Path, strict: bool = False) -> Path:
+        raise raised
+
+    monkeypatch.setattr(Path, "resolve", boom)
+    with pytest.raises(ValueError) as exc:
+        local_paths._resolve("/x/loop")
+    assert str(exc.value) == f"/x/loop can't be resolved: {said}", exc.value

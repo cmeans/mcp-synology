@@ -469,7 +469,7 @@ def shown(path: str) -> str:
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
-    if ", " in path or _edge_quote(path):
+    if ", " in path or edge_quote(path):
         # Quoted only, with no escapes: nothing else needs showing, so what's inside the
         # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
         # #692: repr doubled a backslash, `C:\new` read as `C:\\new`). A name that starts or
@@ -518,7 +518,7 @@ def json_quoted(text: str) -> str:
 _QUOTES = ("'", '"', "`", "\u2018", "\u2019", "\u201c", "\u201d")
 
 
-def _edge_quote(text: str) -> bool:
+def edge_quote(text: str) -> bool:
     """``text`` starts or ends with a quote, so written as is it could read as quoted."""
     return text.startswith(_QUOTES) or text.endswith(_QUOTES)
 
@@ -549,7 +549,7 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
     if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
         return escaped_repr(text)
-    if not text or ", " in text or _edge_quote(text):
+    if not text or ", " in text or edge_quote(text):
         return plain_quoted(text)
     return text
 
