@@ -749,8 +749,8 @@ def _part(value: object, marks: tuple[str, ...], *placeholders: str) -> str:
     """One part of the Location or Camera line, JSON-quoted as `quoted_name` quotes a name
     when it's needed (#710): when it holds one of the line's ``marks``, also with the space
     the line writes around it (`· F1.0` after `lens ` makes a separator of its own, pre-QA
-    r1), or is one of the line's placeholders (``—``, ``aperture —``), which would read as
-    missing. ``""`` for no value."""
+    r1), or is ``—`` or one of ``placeholders`` (the Camera line's ``aperture —`` and the
+    like), which would read as missing. ``""`` for no value."""
     text = "" if value is None else str(value)
     if not text:
         return ""
@@ -810,7 +810,27 @@ def _camera(exif: dict[str, Any]) -> str:
         exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")
     ):
         return _MISSING
-    return " · ".join([_part(exif.get("camera") or "", _CAMERA_MARKS) or _MISSING, *details])
+    return " · ".join([_camera_model(str(exif.get("camera") or "")) or _MISSING, *details])
+
+
+# The labels the Camera line writes before a value, and its placeholders.
+_CAMERA_LABELS = re.compile(r"(?:lens|aperture|exposure|iso)\b", re.IGNORECASE)
+_CAMERA_PLACEHOLDERS = ("aperture —", "exposure —", "lens —", "ISO —")
+
+
+def _camera_model(model: str) -> str:
+    """The camera model, the line's first slot, which has no label either: free text, so one
+    that reads as another slot (a label first, an aperture or exposure in DSM's form, a bare
+    number, a placeholder) is quoted, or `ISO 3200` there would read as a second ISO (QA r1 on
+    #722)."""
+    if model and (
+        _CAMERA_LABELS.match(model)
+        or _APERTURE_FORM.fullmatch(model)
+        or _EXPOSURE_FORM.fullmatch(model)
+        or _BARE_NUMBER.fullmatch(model)
+    ):
+        return json_quoted(model)
+    return _part(model, _CAMERA_MARKS, *_CAMERA_PLACEHOLDERS)
 
 
 async def _exif_table(ph: Photos, item_id: int) -> str:

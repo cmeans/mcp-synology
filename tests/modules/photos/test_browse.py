@@ -764,6 +764,27 @@ class TestGetPhoto:
                 {"camera": "x", "lens": "—", "aperture": "aperture —"},
                 'x · lens "—" · "aperture —" · exposure — · ISO —',
             ),
+            # QA r1 on #722: the camera model's slot has no label either.
+            (
+                {"camera": "lens EF 50mm", "aperture": "F8"},
+                '"lens EF 50mm" · lens — · F8 · exposure — · ISO —',
+            ),
+            ({"camera": "F1.0", "aperture": "F8"}, '"F1.0" · lens — · F8 · exposure — · ISO —'),
+            (
+                {"camera": "ISO 3200", "iso": "100"},
+                '"ISO 3200" · lens — · aperture — · exposure — · ISO 100',
+            ),
+            (
+                {"camera": "aperture —", "lens": "EF"},
+                '"aperture —" · lens EF · aperture — · exposure — · ISO —',
+            ),
+            ({"camera": "1/30 s"}, '"1/30 s" · lens — · aperture — · exposure — · ISO —'),
+            ({"camera": "Isotope X"}, "Isotope X · lens — · aperture — · exposure — · ISO —"),
+            # U+0387 at the edge makes a separator with the label only in NFC (QA r1 on #722).
+            (
+                {"camera": "x", "lens": "\u0387 F1.0"},
+                'x · lens "\u0387 F1.0" · aperture — · exposure — · ISO —',
+            ),
             # NFC: U+0387 normalizes to "·" (as quoted_name checks names).
             ({"camera": "a \u0387 b"}, '"a \u0387 b" · lens — · aperture — · exposure — · ISO —'),
         ],
