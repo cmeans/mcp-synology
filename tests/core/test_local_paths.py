@@ -618,6 +618,57 @@ def test_a_long_path_past_a_chain_takes_few_tries(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_last_link_to_a_loop_outside_is_refused_as_outside(tmp_path: Path) -> None:
+    """Pre-QA r7 on #712: with the path's last part a link inside the allowed folder that
+    leads out to a loop, realpath's own answer (outside) decides; were it read as spelled,
+    the reply would say a loop exists outside."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "loop").symlink_to("loop")
+    (root / "link_out").symlink_to(out / "loop")
+    value = str(root / "link_out")
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "permission_denied", err
+
+
+def test_a_relative_path_that_cant_be_resolved_is_told_to_be_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-QA r7 on #712: with the working folder gone, a relative path's advice was about
+    NUL characters and symlinks, which a model could follow without changing anything."""
+    import json
+    import os
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    os.rmdir(gone)
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", "rel/f", Path("rel/f"), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert err["suggestion"] == "Pass an absolute local path.", err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
 def test_a_loop_in_a_root_spelled_through_a_link_stays_a_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

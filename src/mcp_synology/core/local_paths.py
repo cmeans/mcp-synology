@@ -131,7 +131,11 @@ def _leads_to(path: str | Path) -> Path | None:
     still holds it (pre-QA r5 on #712); None when a ``..`` follows the part that couldn't be
     followed, as where it leads then isn't known. The prefix is found by halving: every prefix
     longer than one that fails fails too, and each try runs the whole chain again (pre-QA r6:
-    one try per part took 27 s for 5,000 parts, blocking the event loop). Raises what
+    one try per part took 27 s for 5,000 parts, blocking the event loop). The first link that
+    can't be followed counts as where it's spelled: a link in an allowed folder to a long
+    chain outside is "too many symlinks", not outside (pre-QA r7; following one more hop
+    takes about 25 ms and only moves the limit). Only 3.11/3.12 get here: realpath is
+    iterative from 3.13, so this can go once the floor is 3.13. Raises what
     ``expanduser``, ``cwd`` and ``realpath`` raise (an unknown ~user, the working folder
     gone)."""
     expanded = Path(path).expanduser()
@@ -333,20 +337,15 @@ def refuse_outside_roots(
     try:
         refused = outside_allowed_roots(path, roots)
     except ValueError as e:
-        # A NUL byte, or a symlink loop or too long a chain of links on Python 3.11/3.12 (QA R1
-        # on #186, QA r3 on #712). A path that
-        # leads outside the allowed folders is refused as outside: a different error would
-        # tell the caller a loop exists there (#458; pre-QA r3 on #712). Where it leads is
-        # `realpath`'s answer, which follows links as far as they go and stops at a loop
-        # without raising, so a loop in an allowed folder spelled through a link (`/home` for
-        # `/var/home`) stays a loop (QA r2). Anything it can't answer (an unknown ~user, the
-        # working folder gone) keeps the error below.
+        # A NUL byte, or on Python 3.11/3.12 a symlink loop or a chain of links too long to
+        # follow (QA R1 on #186). One that leads outside the allowed folders is refused as
+        # outside: a different error would tell the caller a loop exists there (#458). Where
+        # it leads is `_leads_to`'s answer (its docstring has the rules for a long chain);
+        # unknown (a `..` past a chain), the spelling decides, so a path spelled in an allowed
+        # folder isn't called outside it. Anything it can't answer (an unknown ~user, the
+        # working folder gone) keeps the error below. Rounds: QA r2 and r3, pre-QA r3, r5, r6.
         if "\x00" not in value:
             try:
-                # A chain too long for realpath (3.11/3.12) is followed as far as it can be
-                # (QA r3 on #712); where it leads unknown (a `..` past it), its spelling
-                # decides, so one spelled in an allowed folder isn't called outside it
-                # (pre-QA r6).
                 real = _leads_to(path)
                 inside = (
                     lexically_inside(path, roots)
@@ -366,6 +365,8 @@ def refuse_outside_roots(
             suggestion=(
                 "Pass a plain local path without NUL characters, symlink loops or long chains "
                 "of symlinks."
+                if os.path.isabs(path) or str(path).startswith("~") or "\x00" in value
+                else "Pass an absolute local path."  # a relative one (pre-QA r7 on #712)
             ),
         )
     if refused is None:
