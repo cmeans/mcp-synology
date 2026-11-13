@@ -637,13 +637,16 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     A NAS that doesn't answer ends the call, since the request after the check would wait as
     long again, past a client's 60 s (pre-QA r3): a transport error or timeout raises, as in
     `get_dir_size`'s pre-check, and so does a proxy's error status or a reply that isn't DSM's
-    (`DsmHttpError`, `DsmReplyError`), which is how a proxy reports the same stall (#282)."""
+    (`DsmHttpError`, `DsmReplyError`), which is how a proxy reports the same stall (#282). A
+    refused re-login raises too: it's the login's own answer, not "can't tell" (#448, #705)."""
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     try:
         data = await client.request(
             "SYNO.FileStation.List", "getinfo", version=version, params={"path": path}
         )
-    except _NO_ANSWER:
+    except (*_NO_ANSWER, AuthenticationError):
+        # A refused re-login is the login's own answer, not "can't tell" (#448; pre-QA r1 on
+        # #705).
         raise
     except SynologyError as e:
         logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
@@ -665,7 +668,8 @@ async def _file_above(
     client: DsmClient, path: str, version: int, seen: dict[str, dict[str, Any]] | None = None
 ) -> str | None:
     """The file among ``path``'s parents, when one is; None when none is found or DSM answers
-    a parent with an error code (#517). A NAS that doesn't answer raises, as in `folder_kind`.
+    a parent with an error code (#517). A NAS that doesn't answer, or a refused re-login,
+    raises, as in `folder_kind`.
 
     The parents read folders down to the file, then 401 below it (vdsm 7.1: `f0.txt` a file,
     `f0.txt/x` and `f0.txt/x/y` 401), so the file is found by halving the levels: about
@@ -685,7 +689,7 @@ async def _file_above(
                 data = await client.request(
                     "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
                 )
-            except _NO_ANSWER:
+            except (*_NO_ANSWER, AuthenticationError):
                 raise
             except SynologyError as e:
                 logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
