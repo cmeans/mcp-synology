@@ -145,7 +145,11 @@ async def create_folder(
             raise _create_partial(
                 _no_answer_error(e, p, given, force_parent), p, given, folders, rest, force_parent
             ) from None
-        folders.extend(data.get("folders", []))
+        # The path asked for, when DSM's reply doesn't name it (pre-QA r2 on #713: the error's
+        # list of what was created must not drop one).
+        folders.extend(
+            {**f, "path": f.get("path") or p} for f in (data.get("folders") or [{"path": p}])
+        )
 
     lines = [format_status(f"Created {len(folders):,} folder(s):")]
     for f in folders:
@@ -163,9 +167,22 @@ def _no_answer_error(
     force_parent: bool,
 ) -> ToolError:
     """The error for a CreateFolder request of ``p`` that got no DSM answer (#713): it may have
-    been created. Retryable only with ``force_parent``, where an existing folder isn't an
-    error."""
+    been created, so it's retryable only with ``force_parent``, where an existing folder isn't
+    an error, and only when the error itself is (a proxy's 403 isn't). A connection never made
+    sent nothing (writes never reuse one, #222): that folder wasn't created."""
     try:
+        if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"Create folder failed: couldn't connect to DSM for {shown(p)} "
+                f"({describe_transport_error(e)}); it wasn't created.",
+                retryable=True,
+                param="paths",
+                value=given,
+                suggestion="Check that the NAS is reachable, then try again.",
+            )
         if isinstance(e, httpx.TransportError):
             error_response(
                 ErrorCode.TIMEOUT
@@ -188,7 +205,7 @@ def _no_answer_error(
             sentence(str(details["message"])), f"{shown(p)} may have been created."
         )
         details["param"], details["value"] = "paths", given
-        details["retryable"] = force_parent
+        details["retryable"] = bool(details.get("retryable")) and force_parent
         return rewrapped_error(body)
     raise AssertionError("unreachable")  # pragma: no cover
 

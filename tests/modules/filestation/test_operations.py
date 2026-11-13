@@ -297,17 +297,62 @@ class TestCreateFolderPartWay:
         assert error["message"].endswith("it may have been created. Not started: /video/b.")
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("status", "force_parent", "retryable"),
+        [("502", True, True), ("502", False, False), ("403", True, False), ("403", False, False)],
+    )
     async def test_a_proxy_error_on_a_later_path_may_have_created_it(
-        self, mock_client: DsmClient
+        self, mock_client: DsmClient, status: str, force_parent: bool, retryable: bool
     ) -> None:
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": "502"}))
+        """Retryable only when the error itself is (a 5xx, not a 403) and ``force_parent`` makes
+        an existing folder no error (pre-QA r2 on #713: a 403 became retryable)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": status}))
         with pytest.raises(ToolError) as exc_info:
-            await create_folder(mock_client, paths=["/video/a", "/video/b"])
+            await create_folder(
+                mock_client, paths=["/video/a", "/video/b"], force_parent=force_parent
+            )
         error = json.loads(str(exc_info.value))["error"]
         assert (error["param"], error["value"]) == ("paths", "/video/b")
+        assert error["retryable"] is retryable
         assert error["message"].endswith(
             " /video/b may have been created. Already created before this failure: /video/a."
         ), error["message"]
+
+    @respx.mock
+    async def test_a_connection_never_made_on_a_later_path_didnt_create_it(
+        self, mock_client: DsmClient
+    ) -> None:
+        """Writes never reuse a connection (#222): a refused connection sent nothing."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"b": httpx.ConnectError("refused")})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a", "/video/b"])
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "unavailable"
+        assert error["retryable"] is True
+        assert "it wasn't created." in error["message"], error["message"]
+        assert "may have been created" not in error["message"]
+
+    @respx.mock
+    async def test_a_reply_without_the_folder_still_counts_it(self, mock_client: DsmClient) -> None:
+        """Pre-QA r2 on #713: a success with no ``folders`` (or no ``path``) dropped the folder
+        from the error's list; the path asked for stands in."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            name = json.loads(dict(request.url.params)["name"])
+            if name == "b":
+                return httpx.Response(200, json={"success": False, "error": {"code": 418}})
+            data: dict[str, Any] = {} if name == "a" else {"folders": [{"name": name}]}
+            return httpx.Response(200, json={"success": True, "data": data})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a", "/video/c", "/video/b"])
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith("Already created before this failure:\n  /video/a\n  /video/c"), (
+            message
+        )
 
     @respx.mock
     async def test_no_answer_for_a_single_path_is_as_it_was(self, mock_client: DsmClient) -> None:
