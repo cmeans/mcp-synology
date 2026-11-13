@@ -32,8 +32,10 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
+    NO_PERMISSION_CODES,
     UNDER_FILE_ADVICE,
     diagnose_under_file,
+    entry_code,
     files_above,
     missing_paths_suggestion,
     normalize_path,
@@ -349,23 +351,24 @@ async def download_file(
         )
 
     blocker: str | None = None  # the file a path under one is below (#702)
-    if entry.get("code") == 408:  # getinfo's entry for a missing path (#161)
+    code = entry_code(entry)  # a malformed code can't tell, never raises (QA r2 on #716)
+    if code == 408:  # getinfo's entry for a missing path (#161)
         exists = False
-    elif entry.get("code") == 401:  # a path under a file (vdsm 7.1), which DSM answers 404
+    elif code == 401:  # a path under a file (vdsm 7.1), which DSM answers 404
         # No answer ends the call, as before a request elsewhere (pre-QA r2 on #702).
         try:
             blocker = (await files_above(client, [(nas_path, 401)])).get(nas_path)
         except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's
             synology_error_response("Download", e)
         exists = False if blocker else None
-    elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
+    elif code in NO_PERMISSION_CODES:  # no permission (vdsm 7.1, 7.2.2; #716)
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"Download failed: no permission to read {shown(nas_path)} on the NAS.",
             retryable=False,
             param="path",
             value=nas_path,
-            suggestion="Check the DSM user's permissions for that shared folder.",
+            suggestion="Check the DSM user's permissions for that folder.",
         )
     elif entry.get("isdir"):
         is_folder = True

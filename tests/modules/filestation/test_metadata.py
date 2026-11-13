@@ -467,7 +467,7 @@ class TestGetDirSize:
         assert err["code"] == error
         assert err["message"] == message
         if code == 407:
-            assert err["suggestion"] == "Check the DSM user's permissions for that shared folder."
+            assert err["suggestion"] == "Check the DSM user's permissions for that folder."
         assert calls == ["getinfo"]
 
     @respx.mock
@@ -507,6 +507,34 @@ class TestGetDirSize:
     ) -> None:
         calls: list[str] = []
         self._getinfo_then_dirsize(entry, calls)
+        result = await get_dir_size(mock_client, path="/video")
+        assert "Total size" in result
+        assert calls[:2] == ["getinfo", "start"]
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [105, 407])
+    async def test_dir_size_refuses_a_path_getinfo_denies(
+        self, mock_client: DsmClient, code: int
+    ) -> None:
+        """QA r1 on #716: a per-path 105 was measured as 0 B while search_files refused it;
+        both read `NO_PERMISSION_CODES`."""
+        calls: list[str] = []
+        self._getinfo_then_dirsize({"code": code, "path": "/video"}, calls)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/video")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "permission_denied", err
+        assert calls == ["getinfo"]
+
+    @respx.mock
+    @pytest.mark.parametrize("code", [[407], {"a": 1}, "407", True])
+    async def test_dir_size_runs_when_the_check_code_is_malformed(
+        self, mock_client: DsmClient, code: Any
+    ) -> None:
+        """QA r3 on #716: get_dir_size reads the code through entry_code; a malformed one
+        can't tell, so the task runs (it raised TypeError on a list or dict)."""
+        calls: list[str] = []
+        self._getinfo_then_dirsize({"code": code, "path": "/video"}, calls)
         result = await get_dir_size(mock_client, path="/video")
         assert "Total size" in result
         assert calls[:2] == ["getinfo", "start"]
@@ -557,6 +585,11 @@ class TestGetDirSize:
                 "Get directory size failed: no permission to read /homes/admin on the NAS.",
             ),
             (
+                [{"code": 105, "path": "/homes/admin"}],
+                "permission_denied",
+                "Get directory size failed: no permission to read /homes/admin on the NAS.",
+            ),
+            (
                 [{"code": 401, "path": "/homes"}, {"code": 408, "path": "/homes/admin"}],
                 "not_found",
                 "Get directory size failed: /homes/admin doesn't exist on the NAS.",
@@ -573,7 +606,14 @@ class TestGetDirSize:
                 "Get directory size failed: DSM reported errors without saying what they were.",
             ),
         ],
-        ids=["unreadable", "entry-for-the-path", "other-code", "subfolder", "no-usable-code"],
+        ids=[
+            "unreadable",
+            "unreadable-105",
+            "entry-for-the-path",
+            "other-code",
+            "subfolder",
+            "no-usable-code",
+        ],
     )
     async def test_dir_size_status_errors_are_not_an_empty_folder(
         self,

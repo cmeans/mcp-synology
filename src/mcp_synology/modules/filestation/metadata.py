@@ -25,11 +25,14 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    NO_PERMISSION_CODES,
+    entry_code,
     files_above,
     missing_paths_suggestion,
     missing_text,
     no_answer,
     normalize_path,
+    read_denied,
     task_request,
     unanswered_status_response,
     under_file_text,
@@ -234,7 +237,8 @@ def _format_single_info(file_data: dict[str, Any]) -> str:
 
 
 def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str, int]]) -> None:
-    """Refuse get_dir_size for a path DSM reports as missing (408) or unreadable (407)."""
+    """Refuse get_dir_size for a path DSM reports as missing (408) or unreadable (105 or 407,
+    `NO_PERMISSION_CODES`, as `folder_kind` reads them for search_files, QA r1 on #716)."""
     if code == 408:
         error_response(
             ErrorCode.NOT_FOUND,
@@ -244,14 +248,14 @@ def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str,
             value=path,
             suggestion=missing_paths_suggestion(missing),
         )
-    if code == 407:  # no permission for it
+    if code in NO_PERMISSION_CODES:  # no permission for it
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"Get directory size failed: no permission to read {shown(normalized)} on the NAS.",
             retryable=False,
             param="path",
             value=path,
-            suggestion="Check the DSM user's permissions for that shared folder.",
+            suggestion="Check the DSM user's permissions for that folder.",
         )
 
 
@@ -261,13 +265,7 @@ def _status_errors_response(normalized: str, path: str, errors: list[Any]) -> No
     The message names the path DSM's entry names, so a subfolder's code is never reported
     as the requested folder's.
     """
-    entries = [
-        e
-        for e in errors
-        if isinstance(e, dict)
-        and isinstance(e.get("code"), int)
-        and not isinstance(e["code"], bool)
-    ]
+    entries = [e for e in errors if isinstance(e, dict) and entry_code(e) is not None]
     entry = next((e for e in entries if e.get("path") == normalized), None)
     if entry is None and entries:
         entry = entries[0]
@@ -300,14 +298,6 @@ async def _getinfo_entry(client: DsmClient, normalized: str) -> dict[str, Any]:
     return first if isinstance(first, dict) else {}
 
 
-def _read_denied(entry: dict[str, Any]) -> bool:
-    """True when getinfo's permissions say the user can't read the path."""
-    acl: Any = entry
-    for key in ("additional", "perm", "acl"):
-        acl = acl.get(key) if isinstance(acl, dict) else None
-    return isinstance(acl, dict) and acl.get("read") is False
-
-
 async def get_dir_size(
     client: DsmClient,
     *,
@@ -335,7 +325,7 @@ async def get_dir_size(
             synology_error_response("Get directory size", e)
         logger.debug("Get directory size: path check failed: %s", e)
         entry = {}
-    code = entry.get("code")
+    code = entry_code(entry)
     if code == 401:
         # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). A transport
         # error ends the call, as in the check above.
@@ -352,9 +342,9 @@ async def get_dir_size(
                 value=path,
                 suggestion=missing_paths_suggestion([(normalized, 408)]),
             )
-    if isinstance(code, int) and not isinstance(code, bool):
+    if code is not None:
         _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
-    if _read_denied(entry):
+    if read_denied(entry):
         _refuse_path(normalized, path, 407, [(normalized, 407)])
 
     try:

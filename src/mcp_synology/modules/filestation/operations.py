@@ -43,6 +43,7 @@ from mcp_synology.modules.filestation.batch import (
     run_batch,
 )
 from mcp_synology.modules.filestation.helpers import (
+    NO_PERMISSION_CODES,
     RESTORE_UNDER_FILE_ADVICE,
     UNDER_FILE_ADVICE,
     _is_dot,
@@ -554,7 +555,7 @@ async def _refuse_missing_destination(
             value=dest,
             suggestion=RESTORE_UNDER_FILE_ADVICE if operation == "Restore" else UNDER_FILE_ADVICE,
         )
-    if 407 in codes:
+    if codes & NO_PERMISSION_CODES:  # 105 or 407, as every getinfo reader (pre-QA r4 on #716)
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"{operation} files refused: no permission to use the destination folder {shown(dest)}."
@@ -2189,7 +2190,8 @@ async def _recreate_missing_folders(
     texts = [under_file_text(path, under[path]) for path in blocked]
     # A destination this account can't use is refused before anything moves: found only at its
     # item's turn, it came after earlier items were restored (#482).
-    denied = [path for path, code in found if code == 407 and path in wanted]
+    # 105 or 407, as every getinfo reader takes them (pre-QA r3 on #716).
+    denied = [path for path, code in found if code in NO_PERMISSION_CODES and path in wanted]
     if denied:
         error_response(
             ErrorCode.PERMISSION_DENIED,
