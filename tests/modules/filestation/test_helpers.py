@@ -1467,19 +1467,19 @@ class TestUnreadablePathsError:
     def test_only_other_codes_get_one_fixed_message(self, codes: tuple[int, ...]) -> None:
         """QA round 1 on #623: a per-path 119 read "re-authentication will be attempted"
         under retryable=False, and 599 "background task not found"."""
-        code, suggestion = unreadable_paths_error([(f"/v/{c}", c) for c in codes])
+        code, suggestion = unreadable_paths_error([(f"/v/{c}", c) for c in codes], {})
         assert code == ErrorCode.FILESTATION_ERROR
         assert suggestion == (
             "DSM couldn't report the path: check it and the account's access to it in DSM."
         )
 
     def test_no_permission_and_another_code(self) -> None:
-        code, suggestion = unreadable_paths_error([("/v/a", 407), ("/v/b", 400)])
+        code, suggestion = unreadable_paths_error([("/v/a", 407), ("/v/b", 400)], {})
         assert code == ErrorCode.PERMISSION_DENIED
         assert suggestion == f"For one with no permission: {self.PERM} {self.OTHER}"
 
     def test_a_mix_keeps_the_wildcard_hint(self) -> None:
-        code, suggestion = unreadable_paths_error([("/v/*.mkv", 408), ("/v/x", 407)])
+        code, suggestion = unreadable_paths_error([("/v/*.mkv", 408), ("/v/x", 407)], {})
         assert code == ErrorCode.NOT_FOUND
         assert suggestion == (
             f"{self.FIND} Paths are literal, not wildcard patterns: use search_files (or "
@@ -1491,7 +1491,7 @@ class TestUnreadablePathsError:
     def test_a_mix_gives_the_escaped_name_advice_only_for_an_escape(self, escaped: bool) -> None:
         """QA round 1 on #623: 408's own suggestion always carried the escaped-name advice."""
         gone = "/v/a\\nb" if escaped else "/v/ab"
-        code, suggestion = unreadable_paths_error([(gone, 408), ("/v/x", 407)])
+        code, suggestion = unreadable_paths_error([(gone, 408), ("/v/x", 407)], {})
         assert code == ErrorCode.NOT_FOUND
         assert (ESCAPED_NAME_ADVICE in suggestion) is escaped, suggestion
         assert suggestion.startswith(self.FIND), suggestion

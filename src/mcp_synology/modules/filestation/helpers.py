@@ -11,7 +11,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import httpx
 import regex
@@ -37,6 +37,9 @@ from mcp_synology.modules.filestation.standardized_variants import (
     EMOJI_VS_BASES,
     STANDARDIZED_BASES,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -1268,9 +1271,56 @@ _CHECK_ACCESS = "check it and the account's access to it in DSM."
 _OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."
 
 
-def missing_text(path: str, code: int) -> str:
+async def files_above(client: DsmClient, missing: Sequence[tuple[str, int]]) -> dict[str, str]:
+    """``{path: file}`` for each path ``getinfo`` answered 401 for that lies under a file (#702).
+
+    DSM answers a path under a file (`…/f.txt/x`) with a 401 entry (vdsm 7.1 to 7.4.1), which
+    `missing_text` alone would call "can't be read". `_file_above` finds the file; a path whose
+    parents don't show one is left out, so its 401 stands. A NAS that doesn't answer raises, as
+    in `folder_kind`."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    found: dict[str, str] = {}
+    for path, code in missing:
+        if code == 401 and path not in found:
+            blocker = await _file_above(client, path, version)
+            if blocker:
+                found[path] = blocker
+    return found
+
+
+async def file_above(client: DsmClient, path: str) -> str | None:
+    """The file among ``path``'s parents, or None (#702): for a path DSM refused in a way that
+    doesn't say why, which is how it answers one under a file (`…/f.txt/x`, vdsm 7.1): a 401
+    getinfo entry, `get_dir_size`'s 0 B, a download's 404, a copy or move's 1002 into it,
+    `create_folder`'s 1100, `upload_file`'s 401, `rename`'s 1200. Only a diagnosis: whatever
+    the check hits (a DSM error, no answer) gives None, and DSM's own answer stands."""
+    version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
+    try:
+        return await _file_above(client, path, version)
+    except Exception:
+        logger.warning("Couldn't check whether %s is under a file", path, exc_info=True)
+        return None
+
+
+# The advice for a destination or new folder under a file (#702): nothing can be made there.
+UNDER_FILE_ADVICE = (
+    "A file can't hold files or folders: pick a folder that isn't below one (list_files shows "
+    "what's there)."
+)
+
+
+def under_file_text(path: str, file: str) -> str:
+    """A path under a file, in words (#702), as `list_files` writes it (#517)."""
+    return f"{shown(path)} doesn't exist: {shown(file)} is a file"
+
+
+def missing_text(path: str, code: int, under_file: str | None) -> str:
     """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
-    model to translate DSM's code; a 407 was called "not found"), keeping the code."""
+    model to translate DSM's code; a 407 was called "not found"), keeping the code.
+    ``under_file``: the file above it (`files_above`), which means it doesn't exist (#702);
+    required, so no caller forgets to look."""
+    if under_file is not None:
+        return f"{shown(path)}: doesn't exist: {shown(under_file)} is a file (DSM error {code})"
     why = (
         "no permission"
         if code in _NO_PERMISSION
@@ -1279,14 +1329,18 @@ def missing_text(path: str, code: int) -> str:
     return f"{shown(path)}: {why} (DSM error {code})"
 
 
-def unreadable_paths_error(missing: list[tuple[str, int]]) -> tuple[ErrorCode, str]:
+def unreadable_paths_error(
+    missing: list[tuple[str, int]], under: Mapping[str, str]
+) -> tuple[ErrorCode, str]:
     """The error code and suggestion for paths ``getinfo`` answered with a code (#620): every
     path refused for permission is ``permission_denied``, every missing one ``not_found``;
     a mix gets each kind's own advice (not the shared "retry with paths that exist", which a
     path refused for permission can't follow: QA round 3 on #606). A per-path code other
     than 408, 105 or 407 gets one fixed message under ``filestation_error``: the generic
     mapping of such a code (a session code's "re-authentication will be attempted", 599's
-    "background task") doesn't fit a path's entry (QA round 1 on #623)."""
+    "background task") doesn't fit a path's entry (QA round 1 on #623). A path in ``under``
+    (`files_above`: under a file) is missing, whatever its code (#702)."""
+    missing = [(path, 408 if path in under else code) for path, code in missing]
     codes = [code for _, code in missing]
     perm = error_from_code(407, "SYNO.FileStation.List").suggestion or ""
     if codes and all(code in _NO_PERMISSION for code in codes):

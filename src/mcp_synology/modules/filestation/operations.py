@@ -42,11 +42,14 @@ from mcp_synology.modules.filestation.batch import (
     run_batch,
 )
 from mcp_synology.modules.filestation.helpers import (
+    UNDER_FILE_ADVICE,
     _escaped_repr,
     _is_dot,
     describe_transport_error,
     dsm_str,
     ensure_recycle_status,
+    file_above,
+    files_above,
     find_missing_paths,
     missing_paths_suggestion,
     missing_text,
@@ -57,6 +60,7 @@ from mcp_synology.modules.filestation.helpers import (
     probe_recycle_status,
     shown,
     shown_beside,
+    under_file_text,
     unreadable_paths_error,
 )
 from mcp_synology.modules.filestation.paths import (
@@ -133,6 +137,20 @@ async def create_folder(
                 },
             )
         except SynologyError as e:
+            # DSM's 1100 "Insufficient filesystem permissions" for a folder under a file (vdsm
+            # 7.1, #702), which points at permissions.
+            if e.code == 1100:
+                blocker = await file_above(client, p)
+                if blocker:
+                    error_response(
+                        ErrorCode.NOT_FOUND,
+                        f"Create folder failed: {shown(p)} can't be created: {shown(blocker)} "
+                        "is a file.",
+                        retryable=False,
+                        param="paths",
+                        value=p,
+                        suggestion=UNDER_FILE_ADVICE,
+                    )
             synology_error_response("Create folder", e)
         folders.extend(data.get("folders", []))
 
@@ -168,6 +186,17 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
         # Only a diagnostic: whatever it hits, DSM's own 1200 is still the answer.
         logger.warning("Couldn't check why DSM refused to rename %s (1200)", path, exc_info=True)
         return
+    # getinfo's 401 entry, no answer either way: a path under a file (vdsm 7.1, #702).
+    blocker = await file_above(client, path) if source is None else None
+    if blocker:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"Rename failed (DSM error 1200): {under_file_text(path, blocker)}.",
+            retryable=False,
+            param="path",
+            value=original,
+            suggestion=missing_paths_suggestion([(path, 408)]),
+        )
     if source is False:
         error_response(
             ErrorCode.NOT_FOUND,
@@ -369,16 +398,20 @@ async def _refuse_missing_sources(
     """Refuse the whole call before anything moves if any source is missing (#162 policy)."""
     try:
         missing = await find_missing_paths(client, checked)
+        under = await files_above(client, missing)  # a path under a file (#702)
     except SynologyError as e:
         synology_error_response(f"{operation} files", e)
     if missing:
         # Each path in words, and the code DSM gave (#620: a 407 was called "not found").
-        err_code, suggestion = unreadable_paths_error(missing)
+        err_code, suggestion = unreadable_paths_error(missing, under)
         error_response(
             err_code,
             # One a line when two or more (#693).
             then(
-                path_list(f"{operation} files refused", [missing_text(p, c) for p, c in missing]),
+                path_list(
+                    f"{operation} files refused",
+                    [missing_text(p, c, under.get(p)) for p, c in missing],
+                ),
                 f"Nothing was {_PAST_TENSE.get(operation, 'processed')}.",
             ),
             retryable=False,
@@ -500,6 +533,18 @@ async def _refuse_missing_destination(
                 else "Create it first with create_folder, or check the path with list_files, "
                 "then retry."
             ),
+        )
+    # A folder under a file: getinfo's 401, where DSM's task answers 1002 (vdsm 7.1, #702).
+    blocker = await file_above(client, dest) if 401 in codes else None
+    if blocker:
+        error_response(
+            ErrorCode.NOT_FOUND,
+            f"{operation} files refused: the destination folder "
+            f"{under_file_text(dest, blocker)}.{nothing}",
+            retryable=False,
+            param="dest_folder",
+            value=dest,
+            suggestion=UNDER_FILE_ADVICE,
         )
     if 407 in codes:
         error_response(
@@ -1480,15 +1525,19 @@ class DeleteAdapter:
         # without an error, and a partial delete of a mistyped list is worse than none.
         try:
             missing = await find_missing_paths(client, self.normalized)
+            under = await files_above(client, missing)  # a path under a file (#702)
         except SynologyError as e:
             synology_error_response("Delete files", e)
         if missing:
-            err_code, suggestion = unreadable_paths_error(missing)
+            err_code, suggestion = unreadable_paths_error(missing, under)
             error_response(
                 err_code,
                 # One a line when two or more (#693).
                 then(
-                    path_list("Delete files refused", [missing_text(p, c) for p, c in missing]),
+                    path_list(
+                        "Delete files refused",
+                        [missing_text(p, c, under.get(p)) for p, c in missing],
+                    ),
                     "Nothing was deleted.",
                 ),
                 retryable=False,
