@@ -1921,7 +1921,14 @@ class TestMoreShownSites:
         assert "/video/f.txt is a file, not a folder" in error["message"]
         assert "start" not in [m for m, _ in client.calls]
 
-    async def test_search_a_path_under_a_file_names_the_file(self) -> None:
+    @pytest.mark.parametrize(
+        ("file", "shown_file"),
+        # QA r3 on #706: a file holding ": " is quoted, or it reads as the sentence's own.
+        [("/video/f.txt", "/video/f.txt"), ("/video/f: g.txt", "'/video/f: g.txt'")],
+    )
+    async def test_search_a_path_under_a_file_names_the_file(
+        self, file: str, shown_file: str
+    ) -> None:
         """#517 (pre-QA r1): getinfo answers 401 for a path under a file; the nearest parent is
         the file, so the path can't exist, and the reply names the file."""
         from mcp_synology.modules.filestation.search import search_files
@@ -1930,19 +1937,18 @@ class TestMoreShownSites:
             async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
                 if method == "getinfo":
                     path = kwargs["params"]["path"]
-                    if path == "/video/f.txt":
+                    if path == file:
                         return {"files": [{"path": path, "isdir": False}]}
                     return {"files": [{"path": path, "code": 401}]}
                 return await super().request(api, method, **kwargs)
 
         client = _UnderFile(methods={"start": {"taskid": "T1"}})
         with pytest.raises(ToolError) as exc:
-            await search_files(client, folder_path="/video/f.txt/x/y", pattern="x")  # type: ignore[arg-type]
+            await search_files(client, folder_path=f"{file}/x/y", pattern="x")  # type: ignore[arg-type]
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            "Search files failed: /video/f.txt/x/y doesn't exist on the NAS: "
-            "/video/f.txt is a file."
+            f"Search files failed: {file}/x/y doesn't exist on the NAS: {shown_file} is a file."
         )
         assert "start" not in [m for m, _ in client.calls]
 
@@ -2305,6 +2311,21 @@ class TestPathUnderAFile:
             assert error["suggestion"] == UNDER_FILE_ADVICE
         else:
             assert f"DSM error {code}" in error["message"]
+
+    async def test_create_folder_quotes_a_file_holding_its_colon(self) -> None:
+        """Pre-QA r3 on #717: `…can't be created: /video/f: g.txt is a file` read as if
+        g.txt were the file."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        class _Colon(_UnderFile):
+            FILE = "/video/f: g.txt"
+
+        with pytest.raises(ToolError) as exc:
+            await create_folder(_Colon(fails={"create": 1100}), paths=["/video/f: g.txt/x/y"])  # type: ignore[arg-type,list-item]
+        assert _error(exc)["message"] == (
+            "Create folder failed: /video/f: g.txt/x/y can't be created: "
+            "'/video/f: g.txt' is a file."
+        )
 
     async def test_create_folder_1100_with_no_file_above(self) -> None:
         """A real permission refusal keeps DSM's 1100."""
@@ -3556,6 +3577,259 @@ class TestPlanIsTheOnlyWayIntoABatch:
                 budget=Budget(1.0),
                 records=None,
             )
+
+
+class TestPathBeforeItsSeparator:
+    """#706: a path written right before its line's own separator (``": "``, ``" ("``, two
+    spaces) goes through `shown_beside` / `shown_local_beside`, so a name holding that
+    separator is quoted and can't read as the line's structure (the File Station sibling of
+    #695 and #699)."""
+
+    _MARKERS = (": ", " (", "  ")
+
+    def test_no_shown_path_sits_before_its_separator(self) -> None:
+        """An AST walk, not a line grep (pre-QA r1 on #706): it follows `shown`/`shown_local`
+        under any import name (`shown as shown_path`), and an f-string split over lines,
+        which Python joins into one; a path carried through a variable is held by the
+        behavior tests below."""
+        import ast
+
+        src = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
+        hits = []
+        for f in sorted(src.rglob("*.py")):
+            tree = ast.parse(f.read_text())
+            names = {
+                alias.asname or alias.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("display")
+                for alias in node.names
+                if alias.name in ("shown", "shown_local")
+            }
+            if f.name == "display.py":
+                names |= {"shown", "shown_local"}
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                for here, after in zip(node.values, node.values[1:], strict=False):
+                    call = here.value if isinstance(here, ast.FormattedValue) else None
+                    named = (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id in names
+                    )
+                    text = after.value if isinstance(after, ast.Constant) else ""
+                    if named and isinstance(text, str) and text.startswith(self._MARKERS):
+                        hits.append(f"{f.relative_to(src)}:{node.lineno}: {ast.unparse(call)}")
+        assert hits == [], hits
+
+    def test_each_beside_marker_matches_its_line(self) -> None:
+        """QA r2 on #717: a site with the wrong marker (`shown_beside(p, ": ")` before " (")
+        passed every test. A literal marker must start the text right after the call, or end
+        the text right before it (the file above a path under one: `…: <file> is a file`)."""
+        import ast
+
+        src = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
+        bad = []
+        for f in sorted(src.rglob("*.py")):
+            for node in ast.walk(ast.parse(f.read_text())):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                values = node.values
+                for i, here in enumerate(values):
+                    call = here.value if isinstance(here, ast.FormattedValue) else None
+                    if not (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id in ("shown_beside", "shown_local_beside")
+                        and len(call.args) == 2
+                        and isinstance(call.args[1], ast.Constant)
+                    ):
+                        continue
+                    marker = call.args[1].value
+                    after = values[i + 1] if i + 1 < len(values) else None
+                    before = values[i - 1] if i else None
+                    text_after = after.value if isinstance(after, ast.Constant) else None
+                    text_before = before.value if isinstance(before, ast.Constant) else None
+                    if text_after is None or (text_after == "/" and i + 2 == len(values)):
+                        # A field or a `+` join follows, or only a folder's slash ends the
+                        # f-string (`{shown_beside(dest, ' (')}/`): the behavior tests hold it.
+                        continue
+                    ok = (isinstance(text_after, str) and text_after.startswith(marker)) or (
+                        isinstance(text_before, str)
+                        and text_before.endswith(marker)
+                        # Only where no separator follows (`…: <file> is a file`): one that
+                        # does is the marker (QA r3: `' ('` → `': '` passed after "NAS: ").
+                        and not text_after.startswith((" (", ": ", " to ", " and "))
+                    )
+                    if not ok:
+                        bad.append(f"{f.relative_to(src)}:{node.lineno}: {ast.unparse(call)}")
+        assert bad == [], bad
+
+    @pytest.mark.parametrize(
+        ("path", "code", "want"),
+        [
+            (
+                "/s/x: doesn't exist (DSM error 408)",
+                105,
+                '"/s/x: doesn\'t exist (DSM error 408)": ',
+            ),
+            ("/s/plain", 408, "/s/plain: "),
+        ],
+    )
+    def test_missing_text_quotes_a_path_holding_its_separator(
+        self, path: str, code: int, want: str
+    ) -> None:
+        """The issue's repro: the path's own text read as the error."""
+        from mcp_synology.modules.filestation.helpers import missing_text
+
+        assert missing_text(path, code, None).startswith(want)
+
+    def test_shown_beside_quotes_a_path_holding_a_paren(self) -> None:
+        from mcp_synology.core.display import shown_beside
+
+        assert shown_beside("/s/a (DSM error 900)", " (") == "'/s/a (DSM error 900)'"
+        assert shown_beside("/s/a", " (") == "/s/a"
+
+    def test_a_local_path_holding_its_separator_is_quoted(self) -> None:
+        from mcp_synology.core.display import shown_local_beside
+
+        assert shown_local_beside("/home/u/a: b", ": ") == "'/home/u/a: b'"
+        assert shown_local_beside("/home/u/a (1)", " (") == "'/home/u/a (1)'"
+        assert shown_local_beside("/home/u/plain", ": ") == "/home/u/plain"
+        # Already quoted by shown_local (padding): left as it writes it.
+        assert shown_local_beside("/home/u/a ", ": ") == "'/home/u/a '"
+
+    def test_a_progress_label_quotes_a_source_holding_its_colon(self) -> None:
+        """Pre-QA r4 on #717: a progress message is `<label>: <n> of <m> items`, so a source
+        named `/s/x: 9 of 10 items` read as the progress."""
+        from mcp_synology.modules.filestation.batch import Item
+        from mcp_synology.modules.filestation.operations import CopyMoveAdapter, DeleteAdapter
+
+        crafted = Item("/s/x: 9 of 10 items", None)
+        delete = DeleteAdapter(
+            None,  # type: ignore[arg-type]
+            [crafted.source],
+            paths_arg=[crafted.source],
+            recursive=True,
+            recycle_bin_status=None,
+        )
+        assert delete.label(crafted) == "Deleting '/s/x: 9 of 10 items'"
+        assert delete.label(Item("/s/plain", None)) == "Deleting /s/plain"
+        copy = CopyMoveAdapter(
+            None,  # type: ignore[arg-type]
+            [crafted],
+            operation="Copy",
+            overwrite=False,
+            remove_src=False,
+            check_sources=False,
+            paths_arg=[crafted.source],
+        )
+        assert copy.label(crafted).endswith(" '/s/x: 9 of 10 items'"), copy.label(crafted)
+
+    def test_where_it_went_quotes_a_source_ending_in_a_colon(self) -> None:
+        """Pre-QA r4 on #717: before `" (to "`, a trailing `:` read as the line's `": "`, as
+        before `" ("` (QA r1 on #717)."""
+        from mcp_synology.core.display import shown_beside
+        from mcp_synology.modules.filestation.tasks import where_it_went
+
+        assert where_it_went("/s/x:", {"/s/x:": "/s/e"}, "/s/d") == "'/s/x:' (to /s/e)"
+        assert shown_beside("/s/x:", ": ") == "/s/x:"
+
+    def test_list_files_title_quotes_a_folder_holding_its_paren(self) -> None:
+        """Pre-QA r1 on #706: `Contents of /video/a (99 items) (0 items)` forged the count."""
+        from mcp_synology.modules.filestation.listing import _title_for
+
+        assert _title_for("/video/a (99 items)", 0) == "Contents of '/video/a (99 items)' (0 items)"
+
+    def test_a_task_description_quotes_a_path_holding_its_paren(self) -> None:
+        """Pre-QA r1 on #706: `_describe` carries the path in a variable, then `(<progress>)`."""
+        from mcp_synology.modules.filestation.tasks import _describe
+
+        assert "'/video/a (100%)'" in _describe("delete", ["/video/a (100%)"], None)
+
+    def test_a_status_request_with_no_answer_quotes_its_path(self) -> None:
+        """Pre-QA r1 on #706: a split f-string the line grep couldn't see."""
+        import httpx
+
+        from mcp_synology.modules.filestation.helpers import unanswered_status_response
+
+        with pytest.raises(ToolError) as exc:
+            unanswered_status_response("Delete", "/video/a (ReadTimeout)", httpx.ReadTimeout("x"))
+        assert "'/video/a (ReadTimeout)' (ReadTimeout" in _error(exc)["message"]
+
+    def test_the_file_above_is_quoted_when_it_holds_its_colon(self) -> None:
+        """Pre-QA r1 on #706: `…: /s/a: b.txt is a file` read as if b.txt were the file."""
+        from mcp_synology.modules.filestation.helpers import missing_text, under_file_text
+
+        assert "'/s/a: b.txt' is a file" in missing_text("/s/a: b.txt/x", 401, "/s/a: b.txt")
+        assert under_file_text("/s/a: b.txt/x", "/s/a: b.txt").endswith("'/s/a: b.txt' is a file")
+
+    def test_the_variable_carried_sites_quote_their_path(self) -> None:
+        """Pre-QA r2 on #706: paths that reach their separator through a variable, `+=` or
+        another field, which the AST guard can't see."""
+        from mcp_synology.modules.filestation.operations import _already_running, _partial_note
+        from mcp_synology.modules.filestation.tasks import _describe
+
+        assert "'/s/a (to elsewhere)' (to /s/d/)" in _already_running(
+            "Copy", "/s/a (to elsewhere)", "/s/d"
+        )
+        note = _partial_note({}, [("/s/a", 1000)], "Copy", "/s/a", "/s/d: nothing was written")
+        assert "'/s/d: nothing was written': DSM" in note
+        assert "to '/s/d (100% finished)'/" in _describe("copy", ["/s/a"], "/s/d (100% finished)")
+
+    async def test_search_titles_quote_a_folder_holding_its_paren(self) -> None:
+        """Pre-QA r2 on #706: `Search results in /video/a (excluding: *.mkv) (excluding: …)`."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _Folder(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    path = kwargs["params"]["path"]
+                    return {"files": [{"path": path, "isdir": True}]}
+                return await super().request(api, method, **kwargs)
+
+        client = _Folder(
+            methods={"start": {"taskid": "T"}, "list": {"finished": True, "total": 0, "files": []}}
+        )
+        out = await search_files(
+            client,  # type: ignore[arg-type]
+            folder_path="/video/a (excluding: *.mkv)",  # type: ignore[arg-type]
+            exclude_pattern="*.nfo",
+        )
+        assert "Search results in '/video/a (excluding: *.mkv)' (excluding: *.nfo)" in out
+        # Pre-QA r3: a folder holding " (" but no ": ", so a wrong marker can't pass (the
+        # marker sits in a conditional, which the marker guard doesn't read).
+        out = await search_files(
+            client,  # type: ignore[arg-type]
+            folder_path="/video/Movies (2024)",  # type: ignore[arg-type]
+            exclude_pattern="*.nfo",
+        )
+        assert "Search results in '/video/Movies (2024)' (excluding: *.nfo)" in out
+
+    async def test_a_moves_skipped_row_quotes_its_path(self) -> None:
+        """QA r1 on #717: `  /s/a (skipped items are still in b) (skipped items are still in
+        /s/)`, a `+` join the guard can't see."""
+        from mcp_synology.modules.filestation.operations import _skip_report
+
+        p = "/s/a (skipped items are still in b)"
+        lines = await _skip_report(_FakeClient(), "Moved", "/s/d", [p], [], [p], True, probe=False)  # type: ignore[arg-type]
+        assert any(line.startswith(f"  '{p}' (skipped items") for line in lines), lines
+
+    def test_a_path_ending_in_a_colon_is_quoted_before_its_paren(self) -> None:
+        """QA r1 on #717: `Contents of /s/x: (3 items)` read as `/s/x`, then the line's ": "."""
+        from mcp_synology.core.display import shown_beside, shown_local_beside
+        from mcp_synology.modules.filestation.listing import _title_for
+
+        assert _title_for("/s/x:", 3) == "Contents of '/s/x:' (3 items)"
+        assert shown_beside("/s/report:", " (") == "'/s/report:'"
+        assert shown_beside("/s/report:", ": ") == "/s/report:"  # ": " follows: reads right
+        assert shown_local_beside("/home/u/x:", " (") == "'/home/u/x:'"
+
+    def test_a_task_description_quotes_a_source_holding_to(self) -> None:
+        """QA r1 on #717: `copying /s/a to b to /s/d/`."""
+        from mcp_synology.modules.filestation.tasks import _describe
+
+        assert _describe("copy", ["/s/a to b"], "/s/d") == "copying '/s/a to b' to /s/d/"
 
 
 @pytest.mark.parametrize("code", [105, 407])

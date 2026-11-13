@@ -1900,6 +1900,11 @@ class TestLocalPathConfinementErrors:
         assert error["param"] == "dest_folder"
 
 
+# What writes a local path as `shown_local` does: it, `_folder_shown` (which calls it, pre-QA
+# r1 on #699) and `shown_local_beside` (it, quoted beside its line's separator, #706).
+_LOCAL_SHOWN = ("shown_local", "shown_local_beside", "_folder_shown")
+
+
 class TestLocalPathsShown:
     """#691: a local path in a reply or error is written by `shown`'s rule for a NAS path
     (`shown_local`): as is, or quoted whole when a part holds a tab, padding or a character
@@ -2096,7 +2101,7 @@ class TestLocalPathsShown:
             name read (not a loop's own target, `for r in roots`), or ``Path.home()``."""
             inside: set[int] = set()
             for call in ast.walk(expr):
-                if isinstance(call, ast.Call) and called(call) in ("shown_local", "_folder_shown"):
+                if isinstance(call, ast.Call) and called(call) in _LOCAL_SHOWN:
                     inside |= {id(x) for x in ast.walk(call)}
             # A conditional's test isn't written (`a if lexically_inside(path, …) else b`).
             for cond in ast.walk(expr):
@@ -2174,9 +2179,11 @@ class TestLocalPathsShown:
                         )
                         raw = part.conversion != -1
                         # _folder_shown calls shown_local (pre-QA r1 on #699).
-                        if call in ("shown_local", "_folder_shown") and not raw:
+                        if call in _LOCAL_SHOWN and not raw:
                             continue
-                        named = call in ("shown", "_row_name")  # _row_name calls shown (#699)
+                        # _row_name calls shown (#699); shown_beside is shown, quoted beside its
+                        # line's separator (#706).
+                        named = call in ("shown", "shown_beside", "_row_name")
                         if named and not raw and value.args and a_name(value.args[0]):
                             continue
                         # The caller's own file name, refused as given ("Can't save as '..'"),
@@ -2186,6 +2193,6 @@ class TestLocalPathsShown:
                             continue
                         # A local path's name anywhere in the expression: bare, an attribute,
                         # wrapped in a call (str(local_dir), local_dir.as_posix()), or !r.
-                        if bare(value, local) and not (raw is False and call == "shown_local"):
+                        if bare(value, local) and not (raw is False and call in _LOCAL_SHOWN):
                             found.add((module, func.name, ast.unparse(value)))
         assert found <= allowed, sorted(found - allowed)
