@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _dir(tmp_path: Path, files: dict[str, str]) -> Path:
     fragments = tmp_path / "changelog.d"
-    fragments.mkdir()
+    fragments.mkdir(parents=True)
     for name, text in {"README.md": "how\n", "template.md": "{{ x }}\n", **files}.items():
         (fragments / name).write_text(text, encoding="utf-8")
     (tmp_path / "CHANGELOG.md").write_text(
@@ -122,9 +122,59 @@ def test_bad_content_is_refused(tmp_path: Path, text: str, says: str) -> None:
     assert len(found) == 1 and says in found[0], found
 
 
-def test_code_fences_hide_headings_and_bullets(tmp_path: Path) -> None:
+def test_indented_lines_are_neither_headings_nor_entries(tmp_path: Path) -> None:
     text = "- **x** (#731): y\n\n  ```\n  # not a heading\n  - not an entry\n  ```\n"
     assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # publish.yml's awk stops at any line starting "## ": a fence doesn't hide it.
+        "- **x** (#731): y\n\n  ```\n## 0.0.2 (fake)\n  ```\n",
+        # A line with inline backticks used to flip the fence state for the lines after it.
+        "- **x** (#731): y ```a``` b\n## 0.0.1 (fake)\n",
+    ],
+)
+def test_a_column_zero_heading_in_a_fence_is_refused(tmp_path: Path, text: str) -> None:
+    """Pre-QA r5 on #731: the release body was cut short at the fake heading."""
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "heading" in found[0], found
+
+
+def test_a_fragment_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    """Pre-QA r5 on #731: towncrier copies the link's target into the notes."""
+    root = _dir(tmp_path, {"731.fixed.md": "- **x** (#731): y\n"})
+    (tmp_path / "secret").write_text("token\n", encoding="utf-8")
+    (root / "changelog.d" / "+notes.release.md").symlink_to(tmp_path / "secret")
+    found = script.fragment_problems(root)
+    assert len(found) == 1 and "+notes.release.md is a symbolic link" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "- **x** (#731): y <!-- towncrier release notes start -->\n",
+        "- **x** (#731): y\n\n<!-- towncrier release notes start -->\n",
+        "- **x** (#731): y <!--\n",
+    ],
+)
+def test_a_comment_is_refused(tmp_path: Path, text: str) -> None:
+    for name in ("731.fixed.md", "+x.release.md"):
+        found = script.fragment_problems(_dir(tmp_path / name, {name: text}))
+        assert len(found) == 1 and "`<!--`" in found[0], (name, found)
+
+
+def test_only_a_release_fragment_says_security_release(tmp_path: Path) -> None:
+    """Pre-QA r5 on #731: the update check announces any release whose notes hold it."""
+    from mcp_synology.cli import version
+
+    assert script.SECURITY_MARKER == version._SECURITY_MARKER
+    entry = f"- **Tidy logs** (#731): quieter. {script.SECURITY_MARKER} upgrade now.\n"
+    found = script.fragment_problems(_dir(tmp_path / "a", {"731.fixed.md": entry}))
+    assert len(found) == 1 and "only a release's own text" in found[0], found
+    release = f"{script.SECURITY_MARKER} fixes a path check; every user should upgrade.\n"
+    assert script.fragment_problems(_dir(tmp_path / "b", {"+security.release.md": release})) == []
 
 
 def test_a_release_fragment_with_a_heading_is_refused(tmp_path: Path) -> None:

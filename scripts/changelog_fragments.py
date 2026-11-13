@@ -31,6 +31,11 @@ SKIP_LABEL = "no changelog"
 _ENTRY = re.compile(r"(?P<pr>[1-9][0-9]*)\.(?:added|changed|fixed)(?:\.[1-9][0-9]*)?\.md")
 _RELEASE = re.compile(r"\+[a-z0-9][a-z0-9-]*\.release\.md")
 _HOW = "see changelog.d/README.md"
+# What the running servers' update check looks for in a release's notes (cli/version.py): only a
+# release's own text may hold it (pre-QA r5 on #731).
+SECURITY_MARKER = "**Security release:**"
+# towncrier's start marker (pyproject.toml), or a comment that would hide the rest of the notes.
+_COMMENT = "<!--"
 
 
 def fragment_problems(root: Path) -> list[str]:
@@ -45,6 +50,11 @@ def fragment_problems(root: Path) -> list[str]:
             continue
         shown = f"{DIRECTORY}/{name}"
         entry, release = _ENTRY.fullmatch(name), _RELEASE.fullmatch(name)
+        if path.is_symlink():
+            # towncrier reads through a link: the build would copy whatever it points at, on the
+            # machine that builds the release, into the public notes (pre-QA r5 on #731).
+            found.append(f"{shown} is a symbolic link: a fragment is a file of its own ({_HOW}).")
+            continue
         if not path.is_file() or not (entry or release):
             found.append(
                 f"{shown} isn't a fragment name, so the notes would leave it out: name it "
@@ -69,31 +79,27 @@ def _content_problem(text: str, pr: str | None) -> str | None:
     if not text.strip():
         return "it's empty."
     lines = text.strip("\n").splitlines()
-    # A heading would end the section it's assembled into: towncrier writes the headings.
-    if any(re.match(r"#{1,6} ", line) for line in _outside_code(lines)):
+    # Line by line, code blocks too: every reader of CHANGELOG.md (publish.yml's awk, the release
+    # gate) is line-based, so a heading inside a fence still ends the section (pre-QA r5 on #731).
+    if any(re.match(r"#{1,6} ", line) for line in lines):
         return f"it has a heading; the notes add the category headings ({_HOW})."
+    if _COMMENT in text:
+        return "it has `<!--`, which would hide the rest of the notes (towncrier's marker too)."
     if pr is None:
         return None
+    if SECURITY_MARKER in text:
+        return (
+            f"only a release's own text (+<name>.release.md) says {SECURITY_MARKER}: the "
+            f"servers' update check announces any release whose notes hold it ({_HOW})."
+        )
     if not lines[0].startswith("- "):
         return "an entry starts with `- `, as it would under its heading in CHANGELOG.md."
-    if any(re.match(r"[-*+] ", line) for line in _outside_code(lines[1:])):
+    if any(re.match(r"[-*+] ", line) for line in lines[1:]):
         return f"it holds more than one entry; give each its own file ({_HOW})."
     number = re.search(r"\(#([0-9]+)", lines[0])
     if number is None or number.group(1) != pr:
         return f"its first (#N) isn't #{pr}, the PR number in its name."
     return None
-
-
-def _outside_code(lines: list[str]) -> list[str]:
-    """``lines`` without the ones inside fenced code blocks."""
-    kept, fenced = [], False
-    for line in lines:
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-            continue
-        if not fenced:
-            kept.append(line)
-    return kept
 
 
 def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | None:

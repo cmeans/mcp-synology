@@ -10,7 +10,9 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   `+<name>.release.md`, printed before the categories.
 - **Content:** the entry exactly as it would appear under its `### ` heading in `CHANGELOG.md`:
   `- **Title** (#PR): what changed and why — closes #N`, on one line, with no heading. Its first
-  `(#N)` is the file's PR number.
+  `(#N)` is the file's PR number. No line starts like a heading (`#` to `######` and a space), in a
+  code block too: indent its lines. No `<!--`, and only a `+<name>.release.md` says `**Security release:**`. A fragment is a file
+  of its own, never a symbolic link.
 - **Order:** the notes list each category's entries highest PR number first; within one PR,
   `<PR>.<type>.1.md` prints before `<PR>.<type>.md`.
 - **Checked by** `python scripts/changelog_fragments.py check` (CI): names, content, and that a
