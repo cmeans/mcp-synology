@@ -146,8 +146,10 @@ def fragments_problem(root: Path) -> str | None:
         return None
     return (
         f"changelog.d/ still holds {len(left)} fragment(s) ({', '.join(left)}), changes that "
-        f"aren't in this version's notes: assemble them in the release PR (see {_RELEASE_STEPS}), "
-        "or, if this is a later commit, tag the release PR's squash commit."
+        f"aren't in this version's notes: assemble them in the release PR (see {_RELEASE_STEPS}). "
+        "If this is the release PR's own squash commit, they merged after its build: move them "
+        "into the version's notes in a PR that deletes them, and tag that PR's squash commit. If "
+        "it's a later commit, tag the release PR's squash commit."
     )
 
 

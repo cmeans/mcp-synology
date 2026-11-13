@@ -24,6 +24,10 @@ def _dir(tmp_path: Path, files: dict[str, str]) -> Path:
     fragments.mkdir()
     for name, text in {"README.md": "how\n", "template.md": "{{ x }}\n", **files}.items():
         (fragments / name).write_text(text, encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n<!-- towncrier release notes start -->\n",
+        encoding="utf-8",
+    )
     return tmp_path
 
 
@@ -205,13 +209,14 @@ def test_a_second_entry_of_its_own_counts(branch: Path) -> None:
     assert script.branch_problem(branch, "main", 731, []) is None
 
 
-def test_a_release_fragment_counts(branch: Path) -> None:
-    """A release PR writes +security.release.md before its build."""
-    (branch / "changelog.d" / "+security.release.md").write_text(
-        "**Security release:** x\n", encoding="utf-8"
+def test_a_release_fragment_isnt_a_prs_own(branch: Path) -> None:
+    """Pre-QA r2 on #731: counting +<name>.release.md let any PR pass by adding one; a release
+    PR's build removes it with the rest, so it passes by removal."""
+    (branch / "changelog.d" / "+notes.release.md").write_text(
+        "- **my feature** (#12): x\n", encoding="utf-8"
     )
     _commit(branch)
-    assert script.branch_problem(branch, "main", 731, []) is None
+    assert script.branch_problem(branch, "main", 731, []) is not None
 
 
 def test_removing_some_fragments_isnt_a_release(branch: Path) -> None:
@@ -221,7 +226,10 @@ def test_removing_some_fragments_isnt_a_release(branch: Path) -> None:
     _git(branch, "branch", "-f", "base")
     (branch / "changelog.d" / "700.fixed.md").unlink()
     _commit(branch)
-    assert script.branch_problem(branch, "base", 731, []) is not None
+    problem = script.branch_problem(branch, "base", 731, [])
+    # Release-shaped: it names what's left and says to rebuild, not to add a fragment.
+    assert problem is not None and "leaves 1 (701.fixed.md)" in problem, problem
+    assert "merge main and run the build again" in problem
 
 
 def test_another_prs_fragment_renamed_to_ours_is_refused(branch: Path) -> None:
@@ -263,3 +271,51 @@ def test_moving_its_own_entry_to_another_category_counts(branch: Path) -> None:
     (branch / "changelog.d" / "731.added.md").rename(branch / "changelog.d" / "731.fixed.md")
     _commit(branch)
     assert script.branch_problem(branch, "base", 731, []) is None
+
+
+_HEAD = "# Changelog\n\n## Unreleased\n\n<!-- towncrier release notes start -->\n\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "says"),
+    [
+        (_HEAD + "## 1.0.0 (2026-01-01)\n\n- x\n", None),
+        (
+            "# Changelog\n\n## Unreleased\n\n## 1.0.0 (2026-01-01)\n",
+            "0 of towncrier's start marker",
+        ),
+        (_HEAD + _HEAD, "2 of towncrier's start marker"),
+        (
+            _HEAD.replace("\n\n<!--", "\n\n### Fixed\n\n- **x** (#1): y\n\n<!--")
+            + "## 1.0.0 (x)\n",
+            "besides towncrier's marker",
+        ),
+        (_HEAD + "- **stray** (#1): y\n\n## 1.0.0 (x)\n", "besides towncrier's marker"),
+        (
+            "# Changelog\n\n<!-- towncrier release notes start -->\n\n## 1.0.0 (x)\n",
+            "no '## Unreleased'",
+        ),
+    ],
+)
+def test_the_changelogs_layout_is_checked(tmp_path: Path, text: str, says: str | None) -> None:
+    """Pre-QA r2 on #731: without the marker the build writes above '# Changelog', and an entry
+    under Unreleased would reach the tag gate only after the release PR merged."""
+    (tmp_path / "CHANGELOG.md").write_text(text, encoding="utf-8")
+    found = script.changelog_problems(tmp_path)
+    if says is None:
+        assert found == []
+    else:
+        assert any(says in problem for problem in found), found
+
+
+def test_the_repos_own_changelog_is_laid_out_right() -> None:
+    assert script.changelog_problems(ROOT) == []
+
+
+def test_check_runs_the_layout_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root = _dir(tmp_path, {})
+    (root / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n- **x** (#1): y\n", encoding="utf-8"
+    )
+    assert script.main(["check"], root) == 1
+    assert "start marker" in capsys.readouterr().out

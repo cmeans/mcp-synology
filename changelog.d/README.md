@@ -16,3 +16,5 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
 - **Checked by** `python scripts/changelog_fragments.py check` (CI): names, content, and that a
   PR adds or changes a fragment named for its own number, unless it has the `no changelog` label
   (ask the maintainer for it; the check reads the labels when it runs, so rerun it after).
+  Removing every fragment, as the release PR's build does, also passes; a `+<name>.release.md`
+  alone doesn't count as a PR's own fragment.

@@ -133,14 +133,24 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
             removed = True
             continue
         entry = _ENTRY.fullmatch(name)
-        if status in ("A", "M") and (
-            entry and entry.group("pr") == str(pr) or _RELEASE.fullmatch(name)
-        ):
+        # A release's own text (+<name>.release.md) never counts: the release PR's build removes
+        # it with the rest, so counting it only let any PR pass by adding one (pre-QA r2 on #731).
+        if status in ("A", "M") and entry and entry.group("pr") == str(pr):
             return None
     # A release PR's build assembles every fragment and removes them all; removing some and
     # leaving others is no release (pre-QA r2 on #731).
-    if removed and not _fragments_left(root):
+    left = _fragments_left(root)
+    if removed and not left:
         return None
+    if removed:
+        # Release-shaped: it removes fragments, but some are still here, most likely merged after
+        # its build. Adding one of its own would put a bogus entry in the next release.
+        return (
+            f"this PR removes CHANGELOG fragments but leaves {len(left)} ({', '.join(left)}): a "
+            "release PR assembles every one, so merge main and run the build again. For a "
+            "backport's carry-back or a fix made for a release before its tag, which add no "
+            f"entry of their own, ask the maintainer for the {SKIP_LABEL!r} label."
+        )
     return (
         "this PR adds no CHANGELOG fragment of its own: add "
         f"{DIRECTORY}/{pr}.<added|changed|fixed>.md "
@@ -150,9 +160,46 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
     )
 
 
-def _fragments_left(root: Path) -> bool:
+def _fragments_left(root: Path) -> list[str]:
     directory = root / DIRECTORY
-    return directory.is_dir() and any(p.name not in NOT_FRAGMENTS for p in directory.iterdir())
+    if not directory.is_dir():
+        return []
+    return sorted(p.name for p in directory.iterdir() if p.name not in NOT_FRAGMENTS)
+
+
+MARKER = "<!-- towncrier release notes start -->"
+
+
+def changelog_problems(root: Path) -> list[str]:
+    """Why `CHANGELOG.md` isn't laid out as the build needs (pre-QA r2 on #731): one
+    `## Unreleased` heading with towncrier's start marker under it and nothing else in that
+    section. Without the marker the build writes the release above `# Changelog`; an entry
+    there would ship unchecked, and the release gate would refuse the tag only after the release
+    PR merged."""
+    try:
+        text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"couldn't read CHANGELOG.md: {type(error).__name__}"]
+    found: list[str] = []
+    markers = text.count(MARKER)
+    if markers != 1:
+        found.append(
+            f"CHANGELOG.md holds {markers} of towncrier's start marker, {MARKER!r}; it needs "
+            "exactly one, on its own under '## Unreleased', where the release's section goes."
+        )
+    heading = re.search(r"^## Unreleased[ \t]*$", text, re.MULTILINE)
+    if heading is None:
+        found.append("CHANGELOG.md has no '## Unreleased' heading above its releases.")
+        return found
+    rest = text[heading.end() :]
+    following = re.search(r"^## ", rest, re.MULTILINE)
+    section = rest[: following.start() if following else None]
+    if section.replace(MARKER, "").strip():
+        found.append(
+            "CHANGELOG.md's '## Unreleased' holds something besides towncrier's marker: an "
+            f"entry goes in a fragment, {DIRECTORY}/<PR>.<added|changed|fixed>.md ({_HOW})."
+        )
+    return found
 
 
 def _annotation(message: str) -> str:
@@ -168,7 +215,7 @@ def main(argv: list[str], root: Path = Path()) -> int:
     check.add_argument("--pr", type=int, help="the PR's number (with --base)")
     check.add_argument("--labels", default="", help="the PR's labels, comma-separated")
     args = parser.parse_args(argv)
-    found = fragment_problems(root)
+    found = fragment_problems(root) + changelog_problems(root)
     if args.base:
         if args.pr is None:
             parser.error("--base needs --pr")

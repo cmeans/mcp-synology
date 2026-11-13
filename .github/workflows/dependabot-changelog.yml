@@ -112,16 +112,16 @@ jobs:
           update_type = os.environ.get("UPDATE_TYPE") or "version-update"
 
           deps = json.loads(deps_json)
-          if not deps:
-              # Nothing to record — exit cleanly.
-              print("No dependencies in metadata; skipping.")
-              raise SystemExit(0)
-
-          parts = [
-              f"{d['dependencyName']} {d.get('prevVersion', '?')}→{d.get('newVersion', '?')}"
-              for d in deps
-          ]
-          summary = ", ".join(parts)
+          if deps:
+              parts = [
+                  f"{d['dependencyName']} {d.get('prevVersion', '?')}→{d.get('newVersion', '?')}"
+                  for d in deps
+              ]
+              title = f"Bump {label} group: {', '.join(parts)}"
+          else:
+              # No dependency list in the metadata: the PR's title says what it bumps. A PR
+              # without a fragment fails CI's changelog job (#731), so write one anyway.
+              title = os.environ.get("PR_TITLE", "").strip() or f"Bump {label} dependencies"
 
           # Severity hint from update-type — security updates are the
           # interesting category at release time.
@@ -129,9 +129,7 @@ jobs:
           if "security" in update_type:
               tag = " — picks up upstream security advisory; see PR body for CVE links."
 
-          entry = (
-              f"- **Bump {label} group: {summary}** (#{pr_number}){tag}\n"
-          )
+          entry = f"- **{title}** (#{pr_number}){tag}\n"
 
           # One file per PR in changelog.d (#731); the release PR assembles them.
           path = pathlib.Path("changelog.d") / f"{pr_number}.changed.md"

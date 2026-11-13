@@ -741,6 +741,7 @@ def test_fragments_left_in_changelog_d_are_refused(repo: Path) -> None:
     problem = script.fragments_problem(repo)
     assert problem is not None
     assert "900.fixed.md" in problem
+    assert "move them into the version's notes" in problem
     assert problem in script.problems("v1.2.3", repo)
 
 
