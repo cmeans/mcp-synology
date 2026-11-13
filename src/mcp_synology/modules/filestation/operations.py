@@ -2214,6 +2214,13 @@ async def _recreate_missing_folders(
             suggestion=(
                 "Restore them to a folder this DSM account can write to (dest_folder), or have "
                 "the folder's permissions changed in DSM."
+                # Permissions can't help a folder under a file (pre-QA r6 on #714).
+                + (
+                    " Changing permissions won't help the folders under a file: restore their "
+                    "items with dest_folder."
+                    if blocked
+                    else ""
+                )
                 + _restore_split_advice(denied + blocked, wanted)
             ),
         )

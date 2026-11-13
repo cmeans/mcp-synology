@@ -2398,6 +2398,11 @@ class TestPathUnderAFile:
         error = _error(exc)
         assert error["code"] == "permission_denied", error
         assert not error["suggestion"].endswith(_SPLIT), error
+        # Pre-QA r6 on #714: fixing permissions wouldn't help the folder under a file.
+        assert error["suggestion"].endswith(
+            " Changing permissions won't help the folders under a file: restore their items "
+            "with dest_folder."
+        ), error
         # QA r3 on #714: the folders under a file are named too.
         assert error["message"] == (
             "Restore files refused: no permission to use the original folder /video/no. "
