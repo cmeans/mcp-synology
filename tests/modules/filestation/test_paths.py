@@ -2378,6 +2378,27 @@ class TestPathUnderAFile:
         assert error["code"] == "permission_denied", error
         assert error["suggestion"].endswith(_SPLIT) is others
 
+    async def test_a_restore_refused_for_both_reasons_counts_both_as_stuck(self) -> None:
+        """Pre-QA r5 on #714: with items from a denied folder and from one under a file, and
+        none from a fine folder, the 407 refusal told the model to restore "the items from
+        other folders" in a call of their own, though those can't go back either."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        class _Both(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/no":
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [{"path": "/video/no", "code": 407}]}
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                _Both(), share="/video", paths=["no/b.txt", "f.txt/x/c.txt"]
+            )  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "permission_denied", error
+        assert not error["suggestion"].endswith(_SPLIT), error
+
     async def test_a_dsm_error_in_the_search_finds_nothing(self) -> None:
         """Pre-QA r4 on #714: a DSM error code on a parent's getinfo ends the search with no
         file found, so the path keeps DSM's own 401."""
@@ -2591,6 +2612,17 @@ class TestPathUnderAFile:
         assert set(found.values()) == {"/video/f.txt"}
         assert len(found) == 40
         assert len(client.calls) == 2, client.calls  # one search: halving finds it in two
+
+    async def test_paths_at_different_depths_under_one_file_share_its_search(self) -> None:
+        """Pre-QA r5 on #714: without the shortcut, paths at rising depth under one file each
+        searched again (n/2 requests for n paths), since halving reads other parents."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        client = _UnderFile()
+        missing = [("/video/f.txt/" + "/".join(["d"] * depth), 401) for depth in range(1, 41)]
+        found = await files_above(client, missing)  # type: ignore[arg-type]
+        assert set(found.values()) == {"/video/f.txt"} and len(found) == 40
+        assert len(client.calls) <= 2, client.calls
 
     async def test_a_file_named_like_its_prefix_gets_its_own_search(self) -> None:
         """Pre-QA r2 on #702: the shared search is for paths under the file found, not for one

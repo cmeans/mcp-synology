@@ -2179,6 +2179,13 @@ async def _recreate_missing_folders(
         found = await find_missing_paths(client, wanted + parents, as_sent=True)
     except SynologyError as e:
         synology_error_response("Restore files", e)
+    # An original folder under a file is found first, so either refusal's advice knows every
+    # folder that can't take its items back (pre-QA r5 on #714).
+    try:
+        under = await files_above(client, found)
+    except SynologyError as e:
+        synology_error_response("Restore files", e)
+    blocked = [path for path in wanted if path in under]
     # A destination this account can't use is refused before anything moves: found only at its
     # item's turn, it came after earlier items were restored (#482).
     denied = [path for path, code in found if code == 407 and path in wanted]
@@ -2201,16 +2208,12 @@ async def _recreate_missing_folders(
             value=denied[0],
             suggestion=(
                 "Restore them to a folder this DSM account can write to (dest_folder), or have "
-                "the folder's permissions changed in DSM." + _restore_split_advice(denied, wanted)
+                "the folder's permissions changed in DSM."
+                + _restore_split_advice(denied + blocked, wanted)
             ),
         )
     # An original folder under a file is refused before anything moves too: found only at its
     # item's turn, it came after earlier items were restored (QA r1 on #714).
-    try:
-        under = await files_above(client, found)
-    except SynologyError as e:
-        synology_error_response("Restore files", e)
-    blocked = [path for path in wanted if path in under]
     if blocked:
         texts = [under_file_text(path, under[path]) for path in blocked]
         error_response(
