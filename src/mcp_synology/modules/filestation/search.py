@@ -79,7 +79,12 @@ async def search_files(
     # The folder first (#517): DSM answers a missing folder with 600 "Search folder access
     # denied", a padded missing one and a file with a task it then loses, so a model would
     # retry or read an empty answer. A check that can't tell leaves DSM's answer.
-    kind = await folder_kind(client, normalized)
+    try:
+        kind = await folder_kind(client, normalized)
+    except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's, a refused
+        # re-login (#448): named for search_files, not the server's fallback label (QA r1 on
+        # #718)
+        synology_error_response("Search files", e)
     if kind is not None and kind.kind == "missing":
         # A path under a file names the file, so the model needn't look for it (pre-QA r1).
         blocked = f": {shown(kind.under_file)} is a file" if kind.under_file else ""

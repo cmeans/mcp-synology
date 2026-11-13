@@ -3568,3 +3568,18 @@ async def test_a_copy_into_a_destination_getinfo_denies_is_refused(code: int) ->
         await copy_files(client, paths=["/video/a"], dest_folder="/video/dst")  # type: ignore[arg-type,list-item]
     assert _error(exc)["code"] == "permission_denied"
     assert "start" not in [m for m, _ in client.calls]
+
+
+async def test_search_a_refused_relogin_on_the_check_is_named_for_search() -> None:
+    """QA r1 on #718: folder_kind re-raises a refused re-login; search_files named it through
+    the server's fallback label."""
+    from mcp_synology.core.errors import AuthenticationError
+    from mcp_synology.modules.filestation.search import search_files
+
+    client = _FakeClient(methods={"getinfo": AuthenticationError("Login refused", code=400)})
+    with pytest.raises(ToolError) as exc:
+        await search_files(client, folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+    error = _error(exc)
+    assert error["code"] == "auth_failed", error
+    assert error["message"].startswith("Search files failed"), error
+    assert "start" not in [m for m, _ in client.calls]

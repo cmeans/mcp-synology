@@ -59,12 +59,14 @@ async def test_listing_an_unreadable_path_is_permission_denied(nas_client: Any) 
 async def test_unreadable_path_without_the_check(
     nas_client: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If getinfo fails, DSM's own DirSize answer (errors, no totals) is mapped, not 0 B."""
-    from mcp_synology.core.errors import DsmReplyError
+    """If DSM refuses the getinfo check with an error code (it can't tell), DSM's own DirSize
+    answer (errors, no totals) is mapped, not 0 B. (A reply that isn't DSM's ends the call
+    instead, #705.)"""
+    from mcp_synology.core.errors import error_from_code
     from mcp_synology.modules.filestation import metadata
 
     async def check_fails(*_args: Any) -> dict[str, Any]:
-        raise DsmReplyError("unreadable reply")
+        raise error_from_code(400, "SYNO.FileStation.List")
 
     monkeypatch.setattr(metadata, "_getinfo_entry", check_fails)
     with pytest.raises(ToolError) as exc:

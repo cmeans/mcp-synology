@@ -411,9 +411,11 @@ class TestGetDirSize:
         status: dict[str, Any] | None = None,
         *,
         transport_error: bool = False,
+        proxy: str | None = None,
     ) -> None:
-        """getinfo answers with ``entry`` (or fails, if None); DirSize finishes with
-        ``status`` (default 0 B, 0 files)."""
+        """getinfo answers with ``entry`` (or a DSM error code, if None, which can't tell;
+        ``proxy``: a 502 or a page that isn't DSM's instead); DirSize finishes with ``status``
+        (default 0 B, 0 files)."""
 
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
@@ -423,8 +425,12 @@ class TestGetDirSize:
                 assert params.get("additional") == '["perm"]'
                 if transport_error:
                     raise httpx.ConnectError("connection refused", request=request)
-                if entry is None:
+                if proxy == "502":
                     return httpx.Response(502, text="<html>Bad Gateway</html>")
+                if proxy == "page":
+                    return httpx.Response(200, text="<html>Sign in</html>")
+                if entry is None:
+                    return httpx.Response(200, json={"success": False, "error": {"code": 400}})
                 files = entry.get("_files", [entry])
                 return httpx.Response(200, json={"success": True, "data": {"files": files}})
             if method == "start":
@@ -542,6 +548,22 @@ class TestGetDirSize:
         result = await get_dir_size(mock_client, path="/video")
         assert "Total size" in result
         assert calls[:2] == ["getinfo", "start"]
+
+    @respx.mock
+    @pytest.mark.parametrize("proxy", ["502", "page"])
+    async def test_dir_size_a_proxys_answer_to_the_check_ends_the_call(
+        self, mock_client: DsmClient, proxy: str
+    ) -> None:
+        """#705: after a proxy's 502 (or a page that isn't DSM's) on the check, DirSize
+        started and reported a size; a NAS that doesn't answer ends the call (#704's rule)."""
+        calls: list[str] = []
+        self._getinfo_then_dirsize(None, calls, proxy=proxy)
+        with pytest.raises(ToolError) as exc_info:
+            await get_dir_size(mock_client, path="/video")
+        err = json.loads(str(exc_info.value))["error"]
+        assert err["code"] == "unavailable", err
+        assert err["message"].startswith("Get directory size failed"), err
+        assert calls == ["getinfo"]
 
     @respx.mock
     async def test_dir_size_network_error_on_the_check_ends_the_call(

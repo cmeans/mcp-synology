@@ -450,8 +450,7 @@ class TestFolderCheckStalls:
     @pytest.mark.parametrize("answer", ["502", "html"])
     @respx.mock
     async def test_a_proxy_stall_ends_the_call(self, mock_client: DsmClient, answer: str) -> None:
-        from mcp_synology.core.errors import DsmHttpError, DsmReplyError
-
+        """Named for search_files, not the server's fallback label (QA r1 on #718)."""
         methods: list[str] = []
 
         def side_effect(request: httpx.Request) -> httpx.Response:
@@ -461,8 +460,11 @@ class TestFolderCheckStalls:
             return httpx.Response(200, text="<html>login</html>")
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
-        with pytest.raises(DsmHttpError if answer == "502" else DsmReplyError):
+        with pytest.raises(ToolError) as exc_info:
             await search_files(mock_client, folder_path="/video", pattern="x")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "unavailable", error
+        assert error["message"].startswith("Search files failed"), error
         assert "start" not in methods, methods
 
     @pytest.mark.parametrize("data", [None, [], {"files": None}, {"files": [None]}])
