@@ -2162,7 +2162,9 @@ async def _recreate_missing_folders(
         - set(wanted)
     )
     try:
-        found = await find_missing_paths(client, wanted + parents)
+        # As sent: the checks below match against these paths, however DSM spells its entries
+        # (pre-QA r4 on #714).
+        found = await find_missing_paths(client, wanted + parents, as_sent=True)
     except SynologyError as e:
         synology_error_response("Restore files", e)
     # A destination this account can't use is refused before anything moves: found only at its

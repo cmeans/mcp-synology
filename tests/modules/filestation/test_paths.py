@@ -2344,6 +2344,50 @@ class TestPathUnderAFile:
         assert (error["param"], error["value"]) == ("dest_folder", "/video/f.txt/x"), error
         assert "start" not in [m for m, _ in client.calls]
 
+    async def test_a_dsm_error_in_the_search_finds_nothing(self) -> None:
+        """Pre-QA r4 on #714: a DSM error code on a parent's getinfo ends the search with no
+        file found, so the path keeps DSM's own 401."""
+        from mcp_synology.core.errors import error_from_code
+        from mcp_synology.modules.filestation.metadata import get_file_info
+
+        class _Refused(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo" and kwargs["params"]["path"] == "/video/f.txt":
+                    raise error_from_code(105, "SYNO.FileStation.List")
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await get_file_info(_Refused(), paths=["/video/f.txt/x"])  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        assert error["message"] == (
+            "Get file info failed: /video/f.txt/x: can't be read (DSM error 401)."
+        ), error
+
+    async def test_a_restore_matches_the_paths_it_sent(self) -> None:
+        """Pre-QA r4 on #714: the restore's up-front checks matched DSM's echoed spelling
+        against the paths it sent, so an echo in another case (`/Video`) let the first item
+        start before the refusal."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        class _Echo(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                answer = await super().request(api, method, **kwargs)
+                if method == "getinfo":
+                    for entry in answer.get("files", []):
+                        if "code" in entry:
+                            entry["path"] = entry["path"].replace("/video", "/Video", 1)
+                return answer
+
+        client = _Echo()
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                client,  # type: ignore[arg-type]
+                share="/video",  # type: ignore[arg-type]
+                paths=["ok/a.txt", "f.txt/x/b.txt"],
+            )
+        assert _error(exc)["code"] == "not_found"
+        assert "start" not in [m for m, _ in client.calls]
+
     async def test_paths_in_the_same_folders_share_the_parents_read(self) -> None:
         """Pre-QA r3 on #714: 50 paths whose 401 isn't from a file (their parents all
         folders) each searched again, rereading the same parents: 200 requests."""

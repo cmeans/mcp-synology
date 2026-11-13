@@ -557,13 +557,17 @@ def correct_recycle_status_from_observation(
 _WILDCARD_CHARS = ("*", "?")
 
 
-async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[str, int]]:
+async def find_missing_paths(
+    client: DsmClient, paths: list[str], *, as_sent: bool = False
+) -> list[tuple[str, int]]:
     """Return ``(path, dsm_code)`` for each path that ``getinfo`` reports as missing.
 
     DSM answers a missing path with a per-file ``{"code": 408, "path": ...}`` entry rather
     than a failed request (DSM 7.1 and 7.2.2; #161, #162). An answer with no entry for a
     path proves nothing either way, so that path isn't reported. A failed request raises
     ``SynologyError``, or a transport error with no answer, for the caller to map.
+    ``as_sent``: each path as it was sent, not as DSM's entry spells it, for a caller that
+    matches the result against its own paths (pre-QA r4 on #714).
     """
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     missing: list[tuple[str, int]] = []
@@ -573,7 +577,8 @@ async def find_missing_paths(client: DsmClient, paths: list[str]) -> list[tuple[
         )
         for entry in data.get("files", []):
             if "code" in entry:
-                missing.append((str(entry.get("path") or path), int(entry["code"])))
+                shown_as = path if as_sent else str(entry.get("path") or path)
+                missing.append((shown_as, int(entry["code"])))
     return missing
 
 
