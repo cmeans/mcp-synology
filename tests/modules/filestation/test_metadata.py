@@ -550,6 +550,11 @@ class TestGetDirSize:
                 "Get directory size failed: no permission to read /homes/admin on the NAS.",
             ),
             (
+                [{"code": 105, "path": "/homes/admin"}],
+                "permission_denied",
+                "Get directory size failed: no permission to read /homes/admin on the NAS.",
+            ),
+            (
                 [{"code": 401, "path": "/homes"}, {"code": 408, "path": "/homes/admin"}],
                 "not_found",
                 "Get directory size failed: /homes/admin doesn't exist on the NAS.",
@@ -566,7 +571,14 @@ class TestGetDirSize:
                 "Get directory size failed: DSM reported errors without saying what they were.",
             ),
         ],
-        ids=["unreadable", "entry-for-the-path", "other-code", "subfolder", "no-usable-code"],
+        ids=[
+            "unreadable",
+            "unreadable-105",
+            "entry-for-the-path",
+            "other-code",
+            "subfolder",
+            "no-usable-code",
+        ],
     )
     async def test_dir_size_status_errors_are_not_an_empty_folder(
         self,

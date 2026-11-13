@@ -749,7 +749,8 @@ async def paths_isdir(client: DsmClient, paths: list[str]) -> dict[str, bool]:
 
 
 # A per-path getinfo code that means no permission (DSM's 105, File Station's 407), read the
-# same way everywhere: missing_text, folder_kind, get_dir_size (QA r1 on #716).
+# same way by every getinfo reader: missing_text, folder_kind, get_dir_size (its check and a
+# finished status's errors), download_file's check, a restore's original folders (#716).
 NO_PERMISSION_CODES = frozenset({105, 407})
 _CHECK_ACCESS = "check it and the account's access to it in DSM."
 _OTHER_CODE = "DSM couldn't report the path: check it and the account's access to it in DSM."

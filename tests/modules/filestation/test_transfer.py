@@ -703,14 +703,16 @@ class TestDownloadFile:
         assert list(tmp_path.iterdir()) == []
 
     @respx.mock
+    @pytest.mark.parametrize("code", [407, 105])
     async def test_download_unreadable_path_refused_up_front(
-        self, mock_client: DsmClient, tmp_path: Path
+        self, mock_client: DsmClient, tmp_path: Path, code: int
     ) -> None:
-        """A path the user can't read (getinfo's 407 entry): DSM would answer the download
-        with the same bare 502 as a missing file (vdsm 7.1, 7.2.2), so it's refused first."""
+        """A path the user can't read (getinfo's 407 entry, or 105, as every getinfo reader
+        takes it, #716): DSM would answer the download with the same bare 502 as a missing
+        file (vdsm 7.1, 7.2.2), so it's refused first."""
         calls = self._route(
             httpx.Response(
-                200, json={"success": True, "data": {"files": [{"code": 407, "path": "/v"}]}}
+                200, json={"success": True, "data": {"files": [{"code": code, "path": "/v"}]}}
             ),
             httpx.Response(502, text="<html>DSM error page</html>"),
         )

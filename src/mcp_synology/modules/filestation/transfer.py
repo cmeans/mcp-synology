@@ -32,6 +32,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
+    NO_PERMISSION_CODES,
     UNDER_FILE_ADVICE,
     diagnose_under_file,
     files_above,
@@ -358,7 +359,7 @@ async def download_file(
         except SynologyError as e:  # a proxy's error status, a reply that isn't DSM's
             synology_error_response("Download", e)
         exists = False if blocker else None
-    elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
+    elif entry.get("code") in NO_PERMISSION_CODES:  # no permission (vdsm 7.1, 7.2.2; #716)
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"Download failed: no permission to read {shown(nas_path)} on the NAS.",

@@ -1068,14 +1068,16 @@ async def test_a_skip_report_out_of_time_doesnt_read_the_kinds(
     assert "1 skipped in whole or in part" in text, text
 
 
+@pytest.mark.parametrize("code", [407, 105])
 async def test_a_restore_whose_original_folder_is_refused_is_refused_up_front(
-    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, code: int
 ) -> None:
     """#482: a 407 original folder was found only at its item's turn, after earlier items were
-    restored. It's refused before anything moves."""
+    restored. It's refused before anything moves; a 105 too, as every getinfo reader takes it
+    (pre-QA r3 on #716)."""
     tool = next(t for t in TOOLS if t.name == "restore_origin")
     dsm = FakeDsm({src: PathScript() for src in tool.sources})
-    dsm.unclear["/s/o1"] = 407
+    dsm.unclear["/s/o1"] = code
     dsm.mount(respx_mock)
     with pytest.raises(ToolError) as refused:
         await tool.call(mock_client, TaskRecords())
