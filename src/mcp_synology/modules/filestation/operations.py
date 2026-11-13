@@ -508,7 +508,7 @@ async def _refuse_missing_destination(
         # ends a call with nothing started (QA r1 on #714).
         if not anything_done and not isinstance(e, SynologyError):
             raise  # a transport error: the server's own structured error
-        if not anything_done and no_answer(e):
+        if not anything_done and isinstance(e, SynologyError) and no_answer(e):
             # Named as the source check's is (pre-QA r3 on #714).
             synology_error_response(f"{operation} files", e)
         # A restore to several places runs this after earlier items finished: no reply it can use
