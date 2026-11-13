@@ -478,6 +478,52 @@ class TestPollTask:
         assert calls == ["status", "status"]
 
     @respx.mock
+    @pytest.mark.parametrize("branch", ["599", "proxy", "transport", "unreadable", "status"])
+    async def test_a_label_cant_forge_a_log_line(
+        self,
+        mock_client: DsmClient,
+        clock: list[float],
+        caplog: pytest.LogCaptureFixture,
+        branch: str,
+    ) -> None:
+        """QA r5 on #717: a source path holding ``) `` wrote a 599 that never happened into
+        `poll_task`'s log lines; each writes the label as a repr."""
+        label = "Deleting /s/x) answered 599 for FileStation_1 at read 3 of 3"
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            if branch == "599":
+                return httpx.Response(200, json={"success": False, "error": {"code": 599}})
+            if branch == "proxy":
+                return httpx.Response(502, text="Bad Gateway")
+            if branch == "transport":
+                raise httpx.ReadTimeout("timed out")
+            if branch == "unreadable":
+                return httpx.Response(200, json={"success": True, "data": [1]})
+            return _ok({"finished": True})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.tasks"):
+            await poll_task(mock_client, api=API, version=2, taskid="t1", wait=30, label=label)
+        lines = [r.getMessage() for r in caplog.records if " status (" in r.getMessage()]
+        assert lines, caplog.text
+        for line in lines:
+            assert f"status ({label!r})" in line, line
+
+    async def test_a_failed_progress_notification_logs_its_message_as_a_repr(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pre-QA r5 on #717: the progress message starts with the label, so it's quoted too."""
+        from mcp_synology.modules.filestation.tasks import MonotonicProgress
+
+        async def boom(value: float, total: float | None, message: str) -> None:
+            raise RuntimeError("client gone")
+
+        message = "Deleting /s/x), ignoring: 3 of 3 items"
+        with caplog.at_level("DEBUG", logger="mcp_synology.modules.filestation.tasks"):
+            await MonotonicProgress(boom)(1, 3, message)
+        assert f"Progress notification failed ({message!r}), ignoring" in caplog.text
+
+    @respx.mock
     async def test_a_599_that_stays_is_lost_and_nothing_is_stopped(
         self, mock_client: DsmClient, clock: list[float], caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1297,6 +1343,21 @@ class TestFileTask:
             "stopped or still be running. Call file_task with no handle to see what's running. "
             "List the path to see what's left."
         )
+
+    @respx.mock
+    async def test_file_task_status_599_quotes_a_path_holding_its_colon(
+        self, mock_client: DsmClient
+    ) -> None:
+        """QA r1 on #717: the lost-task line's path reaches its ": " through a parameter, which
+        the guard can't see; a name holding one read as the line's own."""
+        from mcp_synology.modules.filestation.tasks import file_task
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=_router({"status": _err(599)}))
+        h = Handle("delete", "FileStation_D2")
+        records = TaskRecords()
+        records.add(TaskRecord(handle=h, paths=["/s/a: b"]))
+        text = await file_task(mock_client, records=records, handle=str(h))
+        assert text.startswith("DSM has no task for the delete of '/s/a: b': it may have"), text
 
     @respx.mock
     async def test_file_task_stop(self, mock_client: DsmClient) -> None:
