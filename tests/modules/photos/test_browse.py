@@ -778,6 +778,10 @@ class TestGetPhoto:
                 {"camera": "aperture —", "lens": "EF"},
                 '"aperture —" · lens EF · aperture — · exposure — · ISO —',
             ),
+            (
+                {"camera": "3200", "iso": "100"},
+                '"3200" · lens — · aperture — · exposure — · ISO 100',
+            ),
             ({"camera": "1/30 s"}, '"1/30 s" · lens — · aperture — · exposure — · ISO —'),
             ({"camera": "Isotope X"}, "Isotope X · lens — · aperture — · exposure — · ISO —"),
             # U+0387 at the edge makes a separator with the label only in NFC (QA r1 on #722).

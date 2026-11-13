@@ -745,17 +745,18 @@ _CAMERA_MARKS = (" · ",)
 _MISSING = "—"
 
 
-def _part(value: object, marks: tuple[str, ...], *placeholders: str) -> str:
+def _part(value: object, marks: tuple[str, ...]) -> str:
     """One part of the Location or Camera line, JSON-quoted as `quoted_name` quotes a name
     when it's needed (#710): when it holds one of the line's ``marks``, also with the space
     the line writes around it (`· F1.0` after `lens ` makes a separator of its own, pre-QA
-    r1), or is ``—`` or one of ``placeholders`` (the Camera line's ``aperture —`` and the
-    like), which would read as missing. ``""`` for no value."""
+    r1), or is ``—``, which would read as missing (the Camera line's other placeholders,
+    ``aperture —`` and the like, start with a label: `_camera_model`). ``""`` for no
+    value."""
     text = "" if value is None else str(value)
     if not text:
         return ""
     padded = unicodedata.normalize("NFC", f" {text} ")
-    if text in (_MISSING, *placeholders) or any(m in padded for m in marks):
+    if text == _MISSING or any(m in padded for m in marks):
         return json_quoted(text)
     return quoted_name(text, "", marks=marks)
 
@@ -813,9 +814,9 @@ def _camera(exif: dict[str, Any]) -> str:
     return " · ".join([_camera_model(str(exif.get("camera") or "")) or _MISSING, *details])
 
 
-# The labels the Camera line writes before a value, and its placeholders.
+# The labels the Camera line writes before a value (its placeholders start with one too:
+# `aperture —`).
 _CAMERA_LABELS = re.compile(r"(?:lens|aperture|exposure|iso)\b", re.IGNORECASE)
-_CAMERA_PLACEHOLDERS = ("aperture —", "exposure —", "lens —", "ISO —")
 
 
 def _camera_model(model: str) -> str:
@@ -830,7 +831,7 @@ def _camera_model(model: str) -> str:
         or _BARE_NUMBER.fullmatch(model)
     ):
         return json_quoted(model)
-    return _part(model, _CAMERA_MARKS, *_CAMERA_PLACEHOLDERS)
+    return _part(model, _CAMERA_MARKS)
 
 
 async def _exif_table(ph: Photos, item_id: int) -> str:
