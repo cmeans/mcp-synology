@@ -537,14 +537,15 @@ def test_a_long_chain_in_a_root_spelled_through_a_link_isnt_outside(
     for i in range(1, 3000):
         (dl / f"l{i}").symlink_to(f"l{i - 1}")
     value = str(tmp_path / spelled / "dl" / "l2999" / "f")
-    try:
+    if sys.version_info >= (3, 13):  # realpath follows it: inside, allowed
         refuse_outside_roots("Op", "local_path", value, Path(value), [dl.resolve()], module="x")
-    except ToolError as exc:
-        text = str(exc)
-        err = json.loads(text[text.index("{") :])["error"]
-        assert err["code"] == "invalid_parameter", err
-        assert "too many symlinks to follow" in err["message"], err
-        assert sys.version_info < (3, 13), err
+        return
+    with pytest.raises(ToolError) as exc:  # QA r4 on #712: a refusal, never allowed
+        refuse_outside_roots("Op", "local_path", value, Path(value), [dl.resolve()], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert "too many symlinks to follow" in err["message"], err
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
@@ -666,6 +667,38 @@ def test_a_relative_path_that_cant_be_resolved_is_told_to_be_absolute(
     err = json.loads(text[text.index("{") :])["error"]
     assert err["code"] == "invalid_parameter", err
     assert err["suggestion"] == "Pass an absolute local path.", err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+@pytest.mark.skipif(sys.version_info >= (3, 13), reason="realpath follows loops from 3.13")
+@pytest.mark.parametrize(("name", "said"), [("loop", "a symlink loop"), ("l2999", "too many")])
+def test_a_relative_loop_or_chain_keeps_its_own_advice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, said: str
+) -> None:
+    """QA r4 on #712: a relative path that fails on a loop or a long chain was told "Pass an
+    absolute local path.", which wouldn't change the answer; that advice is for a working
+    folder that's gone."""
+    import json
+
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from mcp_synology.core.local_paths import refuse_outside_roots
+
+    root = (tmp_path / "ok").resolve()
+    root.mkdir()
+    (root / "loop").symlink_to("loop")
+    (root / "l0").mkdir()
+    for i in range(1, 3000):
+        (root / f"l{i}").symlink_to(f"l{i - 1}")
+    monkeypatch.chdir(root)
+    value = f"{name}/f"
+    with pytest.raises(ToolError) as exc:
+        refuse_outside_roots("Op", "local_path", value, Path(value), [root], module="x")
+    text = str(exc.value)
+    err = json.loads(text[text.index("{") :])["error"]
+    assert err["code"] == "invalid_parameter", err
+    assert said in err["message"], err
+    assert "Pass an absolute local path." not in err["suggestion"], err
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")

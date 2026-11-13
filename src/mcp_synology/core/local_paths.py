@@ -118,6 +118,14 @@ def _resolve(path: str | Path) -> Path:
         raise ValueError(msg) from e
 
 
+def _working_folder_failed(path: str | Path, error: ValueError) -> bool:
+    """Whether ``path`` couldn't be resolved because of the working folder: relative, and
+    the OS refused (`_resolve`'s ``OSError``, as when that folder is gone), not a loop, a long
+    chain or a NUL byte, which an absolute path wouldn't fix (QA r4 on #712)."""
+    relative = not (os.path.isabs(path) or str(path).startswith("~"))
+    return relative and isinstance(error.__cause__, OSError)
+
+
 def _lexical(path: str | Path) -> Path:
     """``~`` and ``..`` handled, symlinks not followed."""
     return Path(os.path.normpath(os.path.abspath(Path(path).expanduser())))
@@ -126,18 +134,17 @@ def _lexical(path: str | Path) -> Path:
 def _leads_to(path: str | Path) -> Path | None:
     """Where ``path`` leads: ``os.path.realpath``'s answer, which follows links as far as they
     go and stops at a loop without raising. A chain of links too long for its recursion
-    (3.11/3.12, one level per link) is followed in its longest prefix realpath can resolve,
-    with the rest as spelled, so a root spelled through a link (`/home` for `/var/home`)
-    still holds it (pre-QA r5 on #712); None when a ``..`` follows the part that couldn't be
-    followed, as where it leads then isn't known. The prefix is found by halving: every prefix
-    longer than one that fails fails too, and each try runs the whole chain again (pre-QA r6:
-    one try per part took 27 s for 5,000 parts, blocking the event loop). The first link that
-    can't be followed counts as where it's spelled: a link in an allowed folder to a long
-    chain outside is "too many symlinks", not outside (pre-QA r7; following one more hop
-    takes about 25 ms and only moves the limit). Only 3.11/3.12 get here: realpath is
-    iterative from 3.13, so this can go once the floor is 3.13. Raises what
-    ``expanduser``, ``cwd`` and ``realpath`` raise (an unknown ~user, the working folder
-    gone)."""
+    (3.11/3.12, one level per link) is followed in its longest prefix realpath can resolve, with
+    the rest as spelled, so a root spelled through a link (`/home` for `/var/home`) still holds
+    it (pre-QA r5 on #712); None when a ``..`` follows the part that couldn't be followed, as
+    where it leads then isn't known. The prefix is found by halving: every prefix longer than
+    one that fails fails too, and each try follows the chain again, up to the recursion limit
+    (pre-QA r6: one try per part took 27 s for 5,000 parts, blocking the event loop). The first
+    link that can't be followed counts as where it's spelled: a link in an allowed folder to a
+    long chain outside is "too many symlinks", not outside (pre-QA r7; following one more hop
+    takes about 25 ms and only moves the limit). Only 3.11/3.12 get here: realpath is iterative
+    from 3.13, so this can go once the floor is 3.13. Raises what ``expanduser``, ``cwd`` and
+    ``realpath`` raise (an unknown ~user, the working folder gone)."""
     expanded = Path(path).expanduser()
     current = expanded if expanded.is_absolute() else Path.cwd() / expanded
     try:
@@ -365,8 +372,8 @@ def refuse_outside_roots(
             suggestion=(
                 "Pass a plain local path without NUL characters, symlink loops or long chains "
                 "of symlinks."
-                if os.path.isabs(path) or str(path).startswith("~") or "\x00" in value
-                else "Pass an absolute local path."  # a relative one (pre-QA r7 on #712)
+                if not _working_folder_failed(path, e)
+                else "Pass an absolute local path."  # pre-QA r7, QA r4 on #712
             ),
         )
     if refused is None:
