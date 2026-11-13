@@ -507,7 +507,7 @@ async def _refuse_missing_destination(
         # No answer, a proxy's error status or a reply that isn't DSM's (a `SynologyError` too)
         # ends a call with nothing started (QA r1 on #714).
         if not anything_done and not isinstance(e, SynologyError):
-            raise  # a transport error: the server's own structured error
+            raise  # a transport error or another error that isn't DSM's: the server's own
         if not anything_done and isinstance(e, SynologyError) and no_answer(e):
             # Named as the source check's is (pre-QA r3 on #714).
             synology_error_response(f"{operation} files", e)
@@ -2139,6 +2139,18 @@ async def restore_from_recycle_bin(
         return result + note
 
 
+def _restore_split_advice(stuck: list[str], wanted: list[str]) -> str:
+    """The advice to add when a restore is refused for some of its original folders and others
+    are fine (QA r2 on #714): `dest_folder` puts every item of a call in that one folder, so
+    the plain retry with it would move the fine ones out of their own folders too."""
+    if not set(wanted) - set(stuck):
+        return ""
+    return (
+        " dest_folder puts every item of a call in that one folder, so restore the items from "
+        "other folders in a call of their own first: those go back where they were."
+    )
+
+
 async def _recreate_missing_folders(
     client: DsmClient, folders: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -2189,7 +2201,7 @@ async def _recreate_missing_folders(
             value=denied[0],
             suggestion=(
                 "Restore them to a folder this DSM account can write to (dest_folder), or have "
-                "the folder's permissions changed in DSM."
+                "the folder's permissions changed in DSM." + _restore_split_advice(denied, wanted)
             ),
         )
     # An original folder under a file is refused before anything moves too: found only at its
@@ -2213,7 +2225,7 @@ async def _recreate_missing_folders(
             retryable=False,
             param="dest_folder",  # as the 407 refusal above: where it would restore to
             value=blocked[0],
-            suggestion=RESTORE_UNDER_FILE_ADVICE,
+            suggestion=RESTORE_UNDER_FILE_ADVICE + _restore_split_advice(blocked, wanted),
         )
     gone = {path for path, code in found if code == 408}
     missing = [path for path in wanted if path in gone]

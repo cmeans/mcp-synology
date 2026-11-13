@@ -2086,6 +2086,10 @@ class _UnderFile(_FakeClient):
 
 
 _BLOCKED = "/video/f.txt is a file"
+_SPLIT = (
+    " dest_folder puts every item of a call in that one folder, so restore the items from "
+    "other folders in a call of their own first: those go back where they were."
+)
 
 
 class TestPathUnderAFile:
@@ -2339,10 +2343,40 @@ class TestPathUnderAFile:
             f"  /video/f.txt/y doesn't exist on the NAS: {_BLOCKED}\n"
             "Nothing was restored."
         ), error["message"]
-        assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE
+        # QA r2 on #714: ok/a.txt is fine, and dest_folder would move it too: split the call.
+        assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE + _SPLIT, error
         # Pre-QA r3 on #714: where it would restore to, as the 407 refusal names it.
         assert (error["param"], error["value"]) == ("dest_folder", "/video/f.txt/x"), error
         assert "start" not in [m for m, _ in client.calls]
+
+    @pytest.mark.parametrize("others", [False, True])
+    async def test_a_restores_refusal_splits_the_call_only_when_others_are_fine(
+        self, others: bool
+    ) -> None:
+        """QA r2 on #714: with every original folder refused, dest_folder for all is the
+        answer; with others fine, they go in a call of their own (407 and under a file)."""
+        from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+        paths = ["f.txt/x/b.txt", *(["ok/a.txt"] if others else [])]
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(_UnderFile(), share="/video", paths=paths)  # type: ignore[arg-type]
+        assert _error(exc)["suggestion"].endswith(_SPLIT) is others
+
+        denied = _FakeClient(
+            codes={"/video/no": 407},
+            existing={
+                "/video",
+                "/video/ok",
+                "/video/#recycle/no/b.txt",
+                "/video/#recycle/ok/a.txt",
+            },
+        )
+        paths = ["no/b.txt", *(["ok/a.txt"] if others else [])]
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(denied, share="/video", paths=paths)  # type: ignore[arg-type]
+        error = _error(exc)
+        assert error["code"] == "permission_denied", error
+        assert error["suggestion"].endswith(_SPLIT) is others
 
     async def test_a_dsm_error_in_the_search_finds_nothing(self) -> None:
         """Pre-QA r4 on #714: a DSM error code on a parent's getinfo ends the search with no

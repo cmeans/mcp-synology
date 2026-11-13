@@ -741,10 +741,9 @@ async def files_above(client: DsmClient, missing: Sequence[tuple[str, int]]) -> 
     for path, code in missing:
         if code != 401 or path in found:
             continue
-        # A file already found above another path needs no second search (pre-QA r1 on #702:
-        # 40 paths under one file cost 160 requests).
-        known = next((f for f in found.values() if path.startswith(f + "/")), None)
-        blocker = known or await _file_above(client, path, version, seen)
+        # Parents read for an earlier path are kept (`seen`), so paths under one file share
+        # its reads (pre-QA r1 on #702: 40 paths under one file cost 160 requests).
+        blocker = await _file_above(client, path, version, seen)
         if blocker:
             found[path] = blocker
     return found
