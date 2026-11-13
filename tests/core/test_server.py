@@ -41,6 +41,8 @@ from mcp_synology.server import (
 )
 from tests.conftest import BASE_URL, make_test_config
 
+_MODULES_DIR = Path(__file__).parents[2] / "src" / "mcp_synology" / "modules"
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -1210,6 +1212,34 @@ class TestWithheldToolsNotice:
         assert "(it needs a DSM administrator account)" in line
         other = next(x for x in text.splitlines() if "The photos module" in x)
         assert "administrator" not in other
+
+    def test_downloadstation_says_what_its_quotes_mean_without_file_station(self) -> None:
+        """#708: Download Station quotes a destination or a file name through `shown()`, and
+        only File Station's PATH FORMAT said what the quotes mean."""
+        alone = self._instructions(modules={"downloadstation": {"enabled": True}})
+        assert "\n\nDOWNLOAD STATION:\n" in alone
+        flat = " ".join(alone.split())
+        assert "A folder or file name a reply shows in quotes" in flat
+        assert "pass what's inside the quotes" in flat
+        both = self._instructions(
+            modules={"filestation": {"enabled": True}, "downloadstation": {"enabled": True}}
+        )
+        assert "DOWNLOAD STATION:" not in both  # PATH FORMAT says it of every reply
+        assert "PATH FORMAT:" in both
+
+    @pytest.mark.parametrize(
+        "module", sorted(p.name for p in _MODULES_DIR.iterdir() if (p / "__init__.py").exists())
+    )
+    def test_every_module_that_quotes_nas_text_says_what_quotes_mean(self, module: str) -> None:
+        """#708: a module whose replies quote NAS text with `shown()` (or `shown_beside`) gets
+        a line saying what the quotes mean when it's the only module enabled; local paths are
+        LOCAL MACHINE's (`shown_local`)."""
+        source = "\n".join(p.read_text() for p in (_MODULES_DIR / module).rglob("*.py"))
+        if not re.search(r"\bshown(?:_beside)?\(", source):
+            return
+        text = " ".join(self._instructions(modules={module: {"enabled": True}}).split())
+        said = r"shows? in quotes (\([^)]*\) )?is quoted to show its exact characters"
+        assert re.search(said, text), module
 
     def test_storage_section_only_when_storage_is_enabled(self) -> None:
         """#49: the STORAGE section says the tools need an administrator account."""

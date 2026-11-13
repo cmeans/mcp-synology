@@ -1265,12 +1265,31 @@ from Photos: name what will go and confirm with the user first. A long copy, mov
 hands off with a photos:<id> handle; follow up with photo_task."""
 
 
+# Only without File Station, whose PATH FORMAT says it of every reply (#708): Download
+# Station's replies quote a destination folder or a file name through `shown()` too.
+_DOWNLOADSTATION_NOTICE = """
+
+DOWNLOAD STATION:
+A folder or file name a reply shows in quotes ('video/a b ') is quoted to show its exact
+characters: pass what's inside the quotes. In one written with escapes (\\t, \\u200b, \\\\),
+each escape stands for the one character it names."""
+
+
 _STORAGE_NOTICE = """
 
 STORAGE:
 The storage tools read Storage Manager, which answers only a DSM administrator account; with
 any other account each one returns permission_denied. For any question about disks, RAID or
 free space, start with get_storage_overview."""
+
+
+def _downloadstation_notice(plan: _ModulePlan) -> str:
+    """What a quoted folder or file name in a Download Station reply means, when the module is
+    enabled without File Station (#708)."""
+    names = {name for name, *_ in plan}
+    if "downloadstation" in names and "filestation" not in names:
+        return _DOWNLOADSTATION_NOTICE
+    return ""
 
 
 def _storage_notice(plan: _ModulePlan) -> str:
@@ -1692,6 +1711,7 @@ def create_server(config: AppConfig) -> MCPServer:
     if replacement is None:
         # A full replacement file is the user's own; everything else gets the notices.
         instructions += _photos_notice(plan)
+        instructions += _downloadstation_notice(plan)
         instructions += _storage_notice(plan)
         instructions += _withheld_tools_notice(config, plan)
         local_paths = _local_paths_notice(config, plan, settings)

@@ -113,6 +113,8 @@ Task titles get a narrower pass (`redact_title`): DSM titles an HTTP task with i
 
 Plain text through the shared formatters. Text from the NAS (a task title, URI, destination or error detail) comes escaped from the client wherever it holds a control character other than a tab, a line or paragraph separator, a bidi control or a tag character, so it can't make a line of its own in a reply (#604). With no `destination`, `create_download` refuses when the user's default destination came escaped, since sending it back would name another folder; a default with a real backslash that looks like an escape is refused too, cautiously. Speeds use `format_speed` (`—` for 0), sizes are binary units, timestamps are **UTC and say so** (`YYYY-MM-DD HH:MM:SS UTC`, `—` for 0 / never; #137), consistent with `search_files` treating naive input dates as UTC.
 
+A destination folder (`edit_download`'s `not changed: destination is still <dest>`) or a `.torrent` file's name (`create_download`) is written through File Station's `shown()`, quoted only when needed (padding, an unprintable character), with Python's escapes. On a connection without File Station, whose PATH FORMAT says what such quotes mean, the server instructions add a DOWNLOAD STATION section that says it (#708); `tests/core/test_server.py` fails on any module whose replies call `shown()` without such a line when it's the only module enabled.
+
 ### Errors
 
 DS-specific codes (`core/downloadstation_errors.py`) are dispatched when the API name begins with `SYNO.DownloadStation`. Their meanings differ from File Station's use of the same numbers. Codes 105 and 106 still fall through to the common handlers, so **105 never re-auths** for DS calls either.
