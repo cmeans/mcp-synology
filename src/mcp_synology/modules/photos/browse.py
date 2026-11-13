@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import TYPE_CHECKING, Any
 
+from mcp_synology.core.display import json_quoted
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import (
     cut_escaped,
@@ -736,24 +738,54 @@ async def _item_block(ph: Photos, item: dict[str, Any], v7: bool) -> str:
     return format_key_value(pairs, title=f"Item {item['id']}: {item.get('filename', '')}")
 
 
+# What the Location and Camera lines put between their parts: a value holding one is
+# quoted, so it can't read as parts of its own (#710).
+_LOCATION_MARKS = (", ", " · ")
+_CAMERA_MARKS = (" · ",)
+_MISSING = "—"
+
+
+def _part(value: object, marks: tuple[str, ...]) -> str:
+    """One part of the Location or Camera line, JSON-quoted as `quoted_name` quotes a name
+    when it's needed (#710): when it holds one of the line's ``marks``, also with the space
+    the line writes around it (`· F1.0` after `lens ` makes a separator of its own, pre-QA
+    r1), or is ``—``, which would read as missing. A labeled placeholder (``aperture —``) is
+    quoted only where a slot has no label of its own (`_camera_model`, and the aperture and
+    exposure in `_camera`). ``""`` for no value."""
+    text = "" if value is None else str(value)
+    if not text:
+        return ""
+    padded = unicodedata.normalize("NFC", f" {text} ")
+    if text == _MISSING or any(m in padded for m in marks):
+        return json_quoted(text)
+    return quoted_name(text, "", marks=marks)
+
+
 def _location(add: dict[str, Any]) -> str:
     gps = add.get("gps") or {}
     address = add.get("address") or {}
     parts = []
     if gps.get("latitude") is not None and gps.get("longitude") is not None:
-        parts.append(f"{gps['latitude']}, {gps['longitude']}")
+        lat, lon = (_part(gps[k], _LOCATION_MARKS) for k in ("latitude", "longitude"))
+        parts.append(f"{lat}, {lon}")
     names = [str(address[k]) for k in _ADDRESS_PARTS if address.get(k)]
     if names:
-        parts.append(", ".join(dict.fromkeys(names)))
-    return " · ".join(parts) or "—"
+        parts.append(", ".join(_part(n, _LOCATION_MARKS) for n in dict.fromkeys(names)))
+    return " · ".join(parts) or _MISSING
 
 
-# A number or fraction with no unit ("1.5", "1/30"); anything else is shown as DSM sent it.
+# A number or fraction with no unit ("1.5", "1/30"), which gets one.
 _BARE_NUMBER = re.compile(r"[0-9]+(?:[./][0-9]+)?")
+# DSM's own forms, after the unit is added: "F1.5", "f/1.5"; "1/30 s", "2 s". The aperture
+# and exposure slots have no label, so any other value is quoted: `lens EF 50mm` there
+# would read as a second lens field (pre-QA r1 on #710).
+_APERTURE_FORM = re.compile(r"(?:F|f/)[0-9]+(?:\.[0-9]+)?")
+_EXPOSURE_FORM = re.compile(r"[0-9]+(?:[./][0-9]+)? s")
 
 
 def _camera(exif: dict[str, Any]) -> str:
-    camera = str(exif.get("camera") or "")
+    """The Camera line. Each value is EXIF text from the file, which whoever made it chose, so
+    one that could read as the line's structure is quoted (#710)."""
     # Photos sends these formatted: "F1.5", "1/30 s" on 1.3.4 (DSM 7.1.1); "F2.8", "1/2 s"
     # on 1.9.1 (vdsm DSM 7.2.2). Add the unit only when it's missing, so a bare number
     # still reads right.
@@ -763,15 +795,50 @@ def _camera(exif: dict[str, Any]) -> str:
     exposure = str(exif.get("exposure_time") or "")
     if _BARE_NUMBER.fullmatch(exposure):
         exposure = f"{exposure} s"
+
+    def unlabeled(value: str, form: re.Pattern[str], placeholder: str) -> str:
+        if not value:
+            return placeholder
+        return value if form.fullmatch(value) else json_quoted(value)
+
     details = [
-        f"lens {exif.get('lens') or '—'}",
-        aperture or "aperture —",
-        exposure or "exposure —",
-        f"ISO {exif.get('iso') or '—'}",
+        f"lens {_part(exif.get('lens') or '', _CAMERA_MARKS) or _MISSING}",
+        unlabeled(aperture, _APERTURE_FORM, "aperture —"),
+        unlabeled(exposure, _EXPOSURE_FORM, "exposure —"),
+        f"ISO {_part(exif.get('iso') or '', _CAMERA_MARKS) or _MISSING}",
     ]
-    if not camera and not any(exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")):
-        return "—"
-    return " · ".join([camera or "—", *details])
+    if not exif.get("camera") and not any(
+        exif.get(k) for k in ("lens", "aperture", "exposure_time", "iso")
+    ):
+        return _MISSING
+    return " · ".join([_camera_model(str(exif.get("camera") or "")) or _MISSING, *details])
+
+
+# The labels the Camera line writes before a value (its placeholders start with one too:
+# `aperture —`).
+# Also what starts like an aperture or exposure in any spelling (`f1.0`, `F/1.0`, `F 1.0`,
+# `1/30s`, `30 sec`; pre-QA r2 on #722), since that slot's form is DSM's and this one's is free.
+_CAMERA_LABELS = re.compile(
+    r"(?:lens|aperture|exposure|iso)(?![^\W\d_])"
+    r"|f ?/? ?[0-9]"
+    r"|[0-9]+(?:[./][0-9]+)? ?(?:s|sec)\b",
+    re.IGNORECASE,
+)
+
+
+def _camera_model(model: str) -> str:
+    """The camera model, the line's first slot, which has no label either: free text, so one
+    that reads as another slot (a label first, an aperture or exposure in DSM's form, a bare
+    number, a placeholder) is quoted, or `ISO 3200` there would read as a second ISO (QA r1 on
+    #722)."""
+    # NFKC: fullwidth `ＩＳＯ 3200` reads as `ISO 3200` (pre-QA r2).
+    folded = unicodedata.normalize("NFKC", model)
+    if model and (
+        # `_CAMERA_LABELS` starts DSM's aperture and exposure forms too (QA r2 on #722).
+        _CAMERA_LABELS.match(folded) or _BARE_NUMBER.fullmatch(folded)
+    ):
+        return json_quoted(model)
+    return _part(model, _CAMERA_MARKS)
 
 
 async def _exif_table(ph: Photos, item_id: int) -> str:
