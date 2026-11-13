@@ -461,7 +461,7 @@ class TestGetDirSize:
         assert err["code"] == error
         assert err["message"] == message
         if code == 407:
-            assert err["suggestion"] == "Check the DSM user's permissions for that shared folder."
+            assert err["suggestion"] == "Check the DSM user's permissions for that folder."
         assert calls == ["getinfo"]
 
     @respx.mock

@@ -633,7 +633,7 @@ def read_denied(entry: dict[str, Any]) -> bool:
 @dataclass(frozen=True)
 class FolderKind:
     """What `folder_kind` found: ``kind`` is ``"folder"``, ``"file"``, ``"missing"`` or
-    ``"denied"`` (a 407 entry, or a folder whose permissions say the user can't read it,
+    ``"denied"`` (a 105 or 407 entry, or a folder whose permissions say the user can't read it,
     #703); ``under_file`` is the file that makes a missing path impossible, for a path under a
     file."""
 
@@ -643,8 +643,8 @@ class FolderKind:
 
 async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     """One ``getinfo``: a folder, a file, a missing path (DSM's 408 entry) or one the user can't
-    read (a 407 entry, or a folder whose permissions deny reading, #703), or None when the
-    answer shows none of these (another code, or no entry) or DSM answers the request with an
+    read (a 105 or 407 entry, or a folder whose permissions deny reading, #703), or None when
+    the answer shows none of these (another code, or no entry) or DSM answers the request with an
     error code: a caller then lets DSM's own answer stand (#517).
 
     A NAS that doesn't answer ends the call, since the request after the check would wait as
@@ -667,7 +667,9 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     for entry in _files(data):
         if entry.get("code") == 408:
             return FolderKind("missing")
-        if entry.get("code") == 407 or (entry.get("isdir") is True and read_denied(entry)):
+        # 105 and 407 per path, as `missing_text` reads them (pre-QA r1 on #703).
+        code = entry.get("code")
+        if code in _NO_PERMISSION or (entry.get("isdir") is True and read_denied(entry)):
             return FolderKind("denied")
         if entry.get("code") == 401:
             # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm

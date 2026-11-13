@@ -365,7 +365,7 @@ async def download_file(
             retryable=False,
             param="path",
             value=nas_path,
-            suggestion="Check the DSM user's permissions for that shared folder.",
+            suggestion="Check the DSM user's permissions for that folder.",
         )
     elif entry.get("isdir"):
         is_folder = True

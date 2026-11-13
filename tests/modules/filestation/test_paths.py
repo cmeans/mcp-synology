@@ -2038,8 +2038,9 @@ class TestMoreShownSites:
         [
             {"path": "/video/x", "isdir": True, "additional": {"perm": {"acl": {"read": False}}}},
             {"path": "/video/x", "code": 407},
+            {"path": "/video/x", "code": 105},
         ],
-        ids=["read-false", "407"],
+        ids=["read-false", "407", "105"],
     )
     async def test_search_a_folder_the_account_cant_read(self, entry: dict[str, Any]) -> None:
         """#703: DSM answered an ACL-denied folder with 600 and a POSIX-denied one with a task
@@ -2062,6 +2063,24 @@ class TestMoreShownSites:
         assert "start" not in [m for m, _ in client.calls]
         # The check asks for the permissions.
         assert client.calls[0][1].get("additional") == '["perm"]', client.calls
+
+    async def test_search_a_file_the_account_cant_read_is_a_file(self) -> None:
+        """Pre-QA r1 on #703: only a folder is refused for read: false; a file stays "is a file,
+        not a folder", which is what the caller needs to change."""
+        from mcp_synology.modules.filestation.search import search_files
+
+        class _File(_FakeClient):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                if method == "getinfo":
+                    self.calls.append((method, kwargs["params"]))
+                    entry = {"path": "/video/x", "isdir": False}
+                    entry["additional"] = {"perm": {"acl": {"read": False}}}
+                    return {"files": [entry]}
+                return await super().request(api, method, **kwargs)
+
+        with pytest.raises(ToolError) as exc:
+            await search_files(_File(), folder_path="/video/x", pattern="x")  # type: ignore[arg-type]
+        assert _error(exc)["code"] == "invalid_parameter"
 
     async def test_search_a_folder_the_account_can_read(self) -> None:
         """#703: read: true (or no permissions shown) is searched as before."""

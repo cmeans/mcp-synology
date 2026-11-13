@@ -251,7 +251,7 @@ def _refuse_path(normalized: str, path: str, code: int, missing: list[tuple[str,
             retryable=False,
             param="path",
             value=path,
-            suggestion="Check the DSM user's permissions for that shared folder.",
+            suggestion="Check the DSM user's permissions for that folder.",
         )
 
 
