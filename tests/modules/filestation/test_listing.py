@@ -765,6 +765,55 @@ class TestListFiles:
             assert error["message"] == f"List files failed: {named} doesn't exist on the NAS."
 
     @respx.mock
+    async def test_a_refused_relogin_in_the_parent_walk_is_the_logins_error(
+        self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r2 on #705: `_file_above`'s re-raise of a refused re-login was unpinned: a
+        401 path whose parent's getinfo meets a refused login gave DSM's 401, not the login's
+        error (#448)."""
+        from mcp_synology.core.errors import AuthenticationError, error_from_code
+
+        real = mock_client.request
+
+        async def request(api: str, method: str, **kwargs: Any) -> Any:
+            path = (kwargs.get("params") or {}).get("path")
+            if method == "list":
+                raise error_from_code(401, api)
+            if method == "getinfo" and path == "/video/a.jpg/x":
+                return {"files": [{"code": 401}]}
+            if method == "getinfo":
+                raise AuthenticationError("Login refused", code=400)
+            return await real(api, method, **kwargs)
+
+        monkeypatch.setattr(mock_client, "request", request)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/x")
+        assert json.loads(str(exc_info.value))["error"]["code"] == "auth_failed"
+
+    @respx.mock
+    async def test_the_408_branch_names_the_file_above(self, mock_client: DsmClient) -> None:
+        """Pre-QA r2 on #705: List's 408 for a path whose getinfo is a 401 under a file named
+        no file, as the 401 branch does."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            params = request.url.params
+            if params["method"] != "getinfo":
+                return httpx.Response(200, json={"success": False, "error": {"code": 408}})
+            if params["path"] == "/video/a.jpg/x":
+                return httpx.Response(
+                    200, json={"success": True, "data": {"files": [{"code": 401}]}}
+                )
+            entry = {"isdir": False, "path": params["path"]}
+            return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await list_files(mock_client, path="/video/a.jpg/x")
+        assert json.loads(str(exc_info.value))["error"]["message"] == (
+            "List files failed: /video/a.jpg/x doesn't exist on the NAS: /video/a.jpg is a file."
+        )
+
+    @respx.mock
     async def test_a_refused_relogin_during_the_408_check_is_the_logins_error(
         self, mock_client: DsmClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:

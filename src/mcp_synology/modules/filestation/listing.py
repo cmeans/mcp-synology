@@ -388,10 +388,13 @@ async def list_files(
                 )
             # Name the path, quoted when padded: paths are taken exactly now (#488), and
             # DSM's own message names none, so `/video/Movies ` would read as a missing
-            # `Movies` the model can see listed (pre-QA on #515).
+            # `Movies` the model can see listed (pre-QA on #515). A file above it is named, as
+            # in the 401 branch (pre-QA r2 on #705).
+            above = kind.under_file if kind else None
+            blocked = f": {shown_path(above)} is a file" if above else ""
             error_response(
                 ErrorCode.NOT_FOUND,
-                f"List files failed: {shown_path(normalized)} doesn't exist on the NAS.",
+                f"List files failed: {shown_path(normalized)} doesn't exist on the NAS{blocked}.",
                 retryable=False,
                 param="path",
                 value=path,
