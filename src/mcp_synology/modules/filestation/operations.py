@@ -35,6 +35,7 @@ from mcp_synology.core.formatting import (
     then,
 )
 from mcp_synology.modules.filestation.batch import (
+    CHECKS_WITH_LIST_FILES,
     BatchOutcome,
     Budget,
     Item,
@@ -59,6 +60,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     missing_text,
     name_key,
+    never_sent,
     no_answer,
     normalize_path,
     path_exists,
@@ -145,11 +147,7 @@ async def create_folder(
             raise _create_partial(
                 _no_answer_error(e, p, given, force_parent), p, given, folders, rest, force_parent
             ) from None
-        # The path asked for, when DSM's reply doesn't name it (pre-QA r2 on #713: the error's
-        # list of what was created must not drop one).
-        folders.extend(
-            {**f, "path": f.get("path") or p} for f in (data.get("folders") or [{"path": p}])
-        )
+        folders.extend(_created_entries(data, p))
 
     lines = [format_status(f"Created {len(folders):,} folder(s):")]
     for f in folders:
@@ -158,6 +156,21 @@ async def create_folder(
         lines.append(f"  \U0001f4c1 {shown(path)}")
 
     return "\n".join(lines)
+
+
+def _created_entries(data: Any, p: str) -> list[dict[str, Any]]:
+    """The folders DSM's CreateFolder reply lists, each with the path asked for when the reply
+    doesn't name it as text, or the path asked for alone when it lists none (pre-QA r2 and r3
+    on #713: the error's list of what was created must not drop one, and an odd shape mustn't
+    raise after the folder was made)."""
+    listed = data.get("folders") if isinstance(data, dict) else None
+    entries = [f for f in listed if isinstance(f, dict)] if isinstance(listed, list) else []
+    if not entries:
+        return [{"path": p}]
+    return [
+        {**f, "path": f["path"] if isinstance(f.get("path"), str) and f["path"] else p}
+        for f in entries
+    ]
 
 
 def _no_answer_error(
@@ -171,7 +184,7 @@ def _no_answer_error(
     an error, and only when the error itself is (a proxy's 403 isn't). A connection never made
     sent nothing (writes never reuse one, #222): that folder wasn't created."""
     try:
-        if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+        if isinstance(e, httpx.TransportError) and never_sent(e):
             error_response(
                 ErrorCode.TIMEOUT
                 if isinstance(e, httpx.TimeoutException)
@@ -206,6 +219,10 @@ def _no_answer_error(
         )
         details["param"], details["value"] = "paths", given
         details["retryable"] = bool(details.get("retryable")) and force_parent
+        # It may exist now: check before asking for it again, as the transport branch says
+        # (pre-QA r3 on #713; the batch tools' `_not_retryable`).
+        if not CHECKS_WITH_LIST_FILES.search(str(details.get("suggestion") or "")):
+            _add_advice(details, "Check with list_files before running it again.")
         return rewrapped_error(body)
     raise AssertionError("unreachable")  # pragma: no cover
 

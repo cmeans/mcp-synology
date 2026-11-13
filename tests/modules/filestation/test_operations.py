@@ -333,20 +333,41 @@ class TestCreateFolderPartWay:
         assert json.loads(str(exc_info.value))["error"]["retryable"] is force_parent
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("exc", "code"),
+        [(httpx.ConnectError("refused"), "unavailable"), (httpx.ConnectTimeout("slow"), "timeout")],
+    )
+    @pytest.mark.parametrize("force_parent", [True, False])
     async def test_a_connection_never_made_on_a_later_path_didnt_create_it(
-        self, mock_client: DsmClient
+        self, mock_client: DsmClient, exc: Exception, code: str, force_parent: bool
     ) -> None:
-        """Writes never reuse a connection (#222): a refused connection sent nothing."""
-        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
-            side_effect=self._dsm({"b": httpx.ConnectError("refused")})
-        )
+        """Writes never reuse a connection (#222): one never made sent nothing, so asking for
+        that path again is safe either way (pre-QA r3 on #713 pinned both)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": exc}))
         with pytest.raises(ToolError) as exc_info:
-            await create_folder(mock_client, paths=["/video/a", "/video/b"])
+            await create_folder(
+                mock_client, paths=["/video/b", "/video/c"], force_parent=force_parent
+            )
         error = json.loads(str(exc_info.value))["error"]
-        assert error["code"] == "unavailable"
+        assert error["code"] == code
         assert error["retryable"] is True
         assert "it wasn't created." in error["message"], error["message"]
         assert "may have been created" not in error["message"]
+
+    @respx.mock
+    @pytest.mark.parametrize("force_parent", [True, False])
+    async def test_a_proxy_error_says_to_check_first(
+        self, mock_client: DsmClient, force_parent: bool
+    ) -> None:
+        """Pre-QA r3 on #713: the path may exist now, and the proxy's advice only said to try
+        again."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": "502"}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(
+                mock_client, paths=["/video/a", "/video/b"], force_parent=force_parent
+            )
+        suggestion = json.loads(str(exc_info.value))["error"]["suggestion"]
+        assert "Check with list_files before running it again." in suggestion, suggestion
 
     @respx.mock
     async def test_a_reply_without_the_folder_still_counts_it(self, mock_client: DsmClient) -> None:
@@ -386,6 +407,39 @@ class TestCreateFolderPartWay:
         message = json.loads(str(exc_info.value))["error"]["message"]
         assert message.startswith("Create folder failed"), message
         assert "may have been created" not in message and "Failed on" not in message
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {},
+            {"folders": []},
+            {"folders": ["x"]},
+            {"folders": {"path": "/video/a"}},
+            [1],
+            {"folders": [{"path": 5}]},
+        ],
+    )
+    async def test_an_odd_success_reply_counts_the_path_asked_for(
+        self, mock_client: DsmClient, data: Any
+    ) -> None:
+        """Pre-QA r3 on #713: such a reply raised after the folder was made, losing the lists;
+        the success reply counted 0 folders."""
+
+        def side_effect(request: httpx.Request) -> httpx.Response:
+            name = json.loads(dict(request.url.params)["name"])
+            if name == "b":
+                return httpx.Response(200, json={"success": False, "error": {"code": 418}})
+            return httpx.Response(200, json={"success": True, "data": data})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/a", "/video/b"])
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message.endswith("Already created before this failure: /video/a."), message
+        assert "Created 1 folder(s):\n  \U0001f4c1 /video/a" in await create_folder(
+            mock_client, paths=["/video/a"]
+        )
 
     def test_an_error_that_isnt_an_envelope_is_left_as_it_is(self) -> None:
         from mcp_synology.modules.filestation.operations import _create_partial
