@@ -2210,6 +2210,23 @@ class TestPathUnderAFile:
             f"Rename failed (DSM error 1200): /video/f.txt/x doesn't exist: {_BLOCKED}."
         )
 
+    async def test_upload_another_code_keeps_dsms_answer(self, tmp_path: Path) -> None:
+        """Pre-QA r2 on #702: only Upload's 401 is checked; another code is DSM's own."""
+        from mcp_synology.modules.filestation.transfer import upload_file
+
+        local = tmp_path / "up.txt"
+        local.write_text("x")
+        with pytest.raises(ToolError) as exc:
+            await upload_file(
+                _UnderFile(fails={"upload": 1100}),  # type: ignore[arg-type]
+                local_path=str(local),
+                dest_folder="/video/f.txt/x",  # type: ignore[arg-type]
+                allowed_roots=[tmp_path],
+            )
+        error = _error(exc)
+        assert "DSM error 1100" in error["message"], error
+        assert "is a file" not in error["message"], error
+
     @pytest.mark.parametrize("auth", [False, True])
     async def test_upload_file(self, tmp_path: Path, auth: bool) -> None:
         """DSM's 401 for a destination under a file; a re-login's 401 (a disabled account,
@@ -2291,8 +2308,10 @@ class TestPathUnderAFile:
         assert error["code"] != "not_found", error
         assert "is a file" not in error["message"], error
 
-    @pytest.mark.parametrize("tool", ["copy", "get_dir_size"])
-    async def test_a_check_before_a_request_ends_the_call_with_no_answer(self, tool: str) -> None:
+    @pytest.mark.parametrize("tool", ["copy", "get_dir_size", "download"])
+    async def test_a_check_before_a_request_ends_the_call_with_no_answer(
+        self, tool: str, tmp_path: Path
+    ) -> None:
         """Pre-QA r1 on #702: a check before anything starts lets no answer end the call, as
         the getinfo before it does; the copy then started after a full timeout."""
         from mcp_synology.modules.filestation import operations
@@ -2306,7 +2325,16 @@ class TestPathUnderAFile:
 
         client = _Stalls()
         with pytest.raises(httpx.ReadTimeout):
-            if tool == "copy":
+            if tool == "download":
+                from mcp_synology.modules.filestation.transfer import download_file
+
+                await download_file(
+                    client,  # type: ignore[arg-type]
+                    path="/video/f.txt/x",  # type: ignore[arg-type]
+                    dest_folder=str(tmp_path),
+                    allowed_roots=[tmp_path],
+                )
+            elif tool == "copy":
                 await operations.copy_files(
                     client,  # type: ignore[arg-type]
                     paths=["/video/a"],  # type: ignore[list-item]
@@ -2325,10 +2353,29 @@ class TestPathUnderAFile:
         found = await files_above(client, missing)  # type: ignore[arg-type]
         assert set(found.values()) == {"/video/f.txt"}
         assert len(found) == 40
-        assert len(client.calls) <= 4, client.calls
+        assert len(client.calls) == 2, client.calls  # one search: halving finds it in two
+
+    async def test_a_file_named_like_its_prefix_gets_its_own_search(self) -> None:
+        """Pre-QA r2 on #702: the shared search is for paths under the file found, not for one
+        whose name only starts with it (`/video/f.txt2/y` isn't under `/video/f.txt`)."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        class _Two(_UnderFile):
+            async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
+                path = (kwargs.get("params") or {}).get("path", "")
+                if method == "getinfo" and path == "/video/f.txt2":
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [{"path": path, "isdir": False}]}
+                if method == "getinfo" and path.startswith("/video/f.txt2/"):
+                    self.calls.append((method, kwargs["params"]))
+                    return {"files": [{"path": path, "code": 401}]}
+                return await super().request(api, method, **kwargs)
+
+        found = await files_above(_Two(), [("/video/f.txt/x", 401), ("/video/f.txt2/y", 401)])  # type: ignore[arg-type]
+        assert found == {"/video/f.txt/x": "/video/f.txt", "/video/f.txt2/y": "/video/f.txt2"}
 
     async def test_a_check_that_fails_keeps_dsms_answer(self) -> None:
-        """`file_above` is only a diagnosis: a check with no answer leaves DSM's error."""
+        """`diagnose_under_file` is only a diagnosis: a check with no answer leaves DSM's error."""
         from mcp_synology.modules.filestation.operations import create_folder
 
         class _Stalls(_UnderFile):

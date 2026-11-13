@@ -46,9 +46,9 @@ from mcp_synology.modules.filestation.helpers import (
     _escaped_repr,
     _is_dot,
     describe_transport_error,
+    diagnose_under_file,
     dsm_str,
     ensure_recycle_status,
-    file_above,
     files_above,
     find_missing_paths,
     missing_paths_suggestion,
@@ -140,7 +140,7 @@ async def create_folder(
             # DSM's 1100 "Insufficient filesystem permissions" for a folder under a file (vdsm
             # 7.1, #702), which points at permissions.
             if e.code == 1100:
-                blocker = await file_above(client, p)
+                blocker = await diagnose_under_file(client, p)
                 if blocker:
                     error_response(
                         ErrorCode.NOT_FOUND,
@@ -187,7 +187,7 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
         logger.warning("Couldn't check why DSM refused to rename %s (1200)", path, exc_info=True)
         return
     # getinfo's 401 entry, no answer either way: a path under a file (vdsm 7.1, #702).
-    blocker = await file_above(client, path) if source is None else None
+    blocker = await diagnose_under_file(client, path) if source is None else None
     if blocker:
         error_response(
             ErrorCode.NOT_FOUND,
@@ -491,11 +491,12 @@ async def _refuse_missing_destination(
     """Refuse before anything starts if the destination folder is missing or refused (#344).
 
     DSM answers a copy or move into a missing folder with 1002, "Destination error during
-    copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408
-    is `not_found`, 407 `permission_denied`, and a 401 for a folder under a file `not_found`
-    naming the file (#702). Any other DSM answer leaves it to the task, as before. No answer, or an unreadable one, stops a call with nothing started: starting then
-    would be with the duplicate-task guard down too, since it reads the same stalled DSM. With
-    ``anything_done`` (a restore's later destination), it goes on, so finished items aren't lost.
+    copy/move", whose suggestion points at permissions. getinfo tells the cases apart: 408 is
+    `not_found`, 407 `permission_denied`, and a 401 for a folder under a file `not_found` naming
+    the file (#702). Any other DSM answer leaves it to the task, as before. No answer, or an
+    unreadable one, stops a call with nothing started: starting then would be with the
+    duplicate-task guard down too, since it reads the same stalled DSM. With ``anything_done``
+    (a restore's later destination), it goes on, so finished items aren't lost.
     """
     try:
         found = await find_missing_paths(client, [dest])
@@ -537,7 +538,7 @@ async def _refuse_missing_destination(
                 "then retry."
             ),
         )
-    blocker = under.get(dest)
+    blocker = next(iter(under.values()), None)  # one path checked, however DSM spells it
     if blocker:
         error_response(
             ErrorCode.NOT_FOUND,

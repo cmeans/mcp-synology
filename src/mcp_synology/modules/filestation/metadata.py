@@ -328,8 +328,8 @@ async def get_dir_size(
         entry = {}
     code = entry.get("code")
     if code == 401:
-        # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). No answer
-        # ends the call, as the check above does.
+        # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). A transport
+        # error ends the call, as in the check above.
         blocker = (await files_above(client, [(normalized, 401)])).get(normalized)
         if blocker:
             error_response(

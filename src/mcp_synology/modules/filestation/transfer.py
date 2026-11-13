@@ -32,7 +32,8 @@ from mcp_synology.core.formatting import (
 from mcp_synology.core.local_paths import refuse_outside_roots
 from mcp_synology.modules.filestation.helpers import (
     UNDER_FILE_ADVICE,
-    file_above,
+    diagnose_under_file,
+    files_above,
     missing_paths_suggestion,
     normalize_path,
     paths_isdir,
@@ -199,7 +200,7 @@ async def upload_file(
         # DSM's 401 "Unknown error" for a destination under a file (vdsm 7.1, #702); a re-login
         # refused with its own 401 (a disabled account) isn't this path.
         if e.code == 401 and not isinstance(e, AuthenticationError):
-            blocker = await file_above(client, dest)
+            blocker = await diagnose_under_file(client, dest)
             if blocker:
                 error_response(
                     ErrorCode.NOT_FOUND,
@@ -352,7 +353,8 @@ async def download_file(
     if entry.get("code") == 408:  # getinfo's entry for a missing path (#161)
         exists = False
     elif entry.get("code") == 401:  # a path under a file (vdsm 7.1), which DSM answers 404
-        blocker = await file_above(client, nas_path)
+        # No answer ends the call, as before a request elsewhere (pre-QA r2 on #702).
+        blocker = (await files_above(client, [(nas_path, 401)])).get(nas_path)
         exists = False if blocker else None
     elif entry.get("code") == 407:  # no permission for it (vdsm 7.1 and 7.2.2)
         error_response(
