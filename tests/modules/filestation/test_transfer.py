@@ -1975,12 +1975,29 @@ class TestLocalPathsShown:
             "\uff40",
             *map(chr, range(0x275B, 0x2761)),
             *map(chr, range(0x1F676, 0x1F679)),
+            # Primes and reversed primes, and the modifier letters prime, double prime,
+            # apostrophe and double apostrophe (QA r1 on #724).
+            *map(chr, range(0x2032, 0x2038)),
+            "\u02b9",
+            "\u02ba",
+            "\u02bc",
+            "\u02ee",
         ]
         assert all(edge_quote(f"{m}a") and edge_quote(f"a{m}") for m in [*marks, *looks])
         assert not edge_quote("a") and not edge_quote("a-b")
+        # Inside a name a prime is part of it (12 inches).
+        assert not edge_quote("/s/Record 12\u2033 b")
+        assert not edge_quote("\u2031a")  # per ten thousand, the primes' neighbor
+
         # A combining mark on a final quote doesn't hide it (pre-QA r1).
         assert edge_quote("/s/a'\u0301") and edge_quote("/s/a\u00bb\u0301")
         assert not edge_quote("/s/e\u0301")
+
+    def test_the_quote_class_doesnt_rebind_the_mark_run_bound(self) -> None:
+        """QA r1 on #724: the quote class took the name of the lookbehinds' bound."""
+        from mcp_synology.core import display
+
+        assert display._MARKS == "{0,32}"
 
     @pytest.mark.skipif(os.sep != "/", reason="shown() splits on '/' only")
     @pytest.mark.parametrize(

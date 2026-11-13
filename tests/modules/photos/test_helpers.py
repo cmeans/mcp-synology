@@ -640,6 +640,9 @@ class TestQuotedNamesAndFolders:
             assert quoted_name(plain) == plain, plain
         assert quoted_name('Trip" (7)') == '"Trip\\" (7)"'
         assert quoted_name("a, b") == '"a, b"'
+        # Look-alikes at an end (QA r1 on #724): a double prime, a modifier apostrophe.
+        assert quoted_name("\u2033Trip\u2033") == '"\u2033Trip\u2033"'
+        assert quoted_name("\u02bcAnn\u02bc") == '"\u02bcAnn\u02bc"'
         assert quoted_name("a; b") == '"a; b"'  # delete_photo_albums' list ends with "; "
         assert quoted_name("a (b") == '"a (b"'
         assert quoted_name("a: b") == '"a: b"'
