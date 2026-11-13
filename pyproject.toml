@@ -121,3 +121,44 @@ markers = [
     "vdsm: requires virtual-dsm Docker container with KVM (not run in CI by default)",
 ]
 addopts = "-m 'not integration and not vdsm' --cov=mcp_synology --cov-fail-under=95"
+
+# CHANGELOG fragments (#731): each PR writes its entry as changelog.d/<PR>.<type>.md and the
+# release PR assembles them into the version's notes with
+# `uvx --from towncrier==26.9.0 towncrier build --version <version> --yes`. towncrier runs
+# through uvx, so it isn't a project dependency. scripts/changelog_fragments.py checks the names
+# and content (a misnamed file would otherwise be dropped from the notes) and that a PR adds one.
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+template = "changelog.d/template.md"
+title_format = "## {version} ({project_date})"
+start_string = "<!-- towncrier release notes start -->\n"
+issue_format = ""
+wrap = false
+all_bullets = false
+orphan_prefix = "+"
+# Not fragments: anything else in changelog.d makes `towncrier build` fail, not skip it.
+ignore = ["README.md", "template.md"]
+
+# A release's free text (a `**Security release:** …` line, an Upgrading block), written before
+# the categories with no heading, as `+<name>.release.md`. Never required by `towncrier check`.
+[[tool.towncrier.type]]
+directory = "release"
+name = "Release notes"
+showcontent = true
+check = false
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true

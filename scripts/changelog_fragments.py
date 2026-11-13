@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Check the CHANGELOG fragments in `changelog.d/` (#731).
+
+Each PR writes its CHANGELOG entry as a file there, and the release PR assembles them with
+towncrier (CLAUDE.md, "Bumping the version for a release"). towncrier's own checks leave two gaps
+this one closes: `towncrier build` would leave a misnamed file out of the notes (here it's
+refused), and `towncrier check` passes any PR that edits `CHANGELOG.md` (here a PR passes only by
+adding, changing or removing a fragment, or with the `no changelog` label).
+
+Standard library only. Each problem prints as a GitHub Actions error.
+
+Usage:
+    python scripts/changelog_fragments.py check
+    python scripts/changelog_fragments.py check --base <base commit> --labels "<label>,<label>"
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+DIRECTORY = "changelog.d"
+# Files in the directory that aren't fragments (also towncrier's `ignore`, in pyproject.toml).
+NOT_FRAGMENTS = frozenset({"README.md", "template.md"})
+SKIP_LABEL = "no changelog"
+_ENTRY = re.compile(r"(?P<pr>[1-9][0-9]*)\.(?:added|changed|fixed)(?:\.[1-9][0-9]*)?\.md")
+_RELEASE = re.compile(r"\+[a-z0-9][a-z0-9-]*\.release\.md")
+_HOW = "see changelog.d/README.md"
+
+
+def fragment_problems(root: Path) -> list[str]:
+    """Every reason a file in `changelog.d/` wouldn't assemble into the notes as written."""
+    directory = root / DIRECTORY
+    if not directory.is_dir():
+        return [f"{DIRECTORY}/ is missing: {_HOW}."]
+    found: list[str] = []
+    for path in sorted(directory.iterdir()):
+        name = path.name
+        if name in NOT_FRAGMENTS:
+            continue
+        shown = f"{DIRECTORY}/{name}"
+        entry, release = _ENTRY.fullmatch(name), _RELEASE.fullmatch(name)
+        if not path.is_file() or not (entry or release):
+            found.append(
+                f"{shown} isn't a fragment name, so the notes would leave it out: name it "
+                f"<PR>.<added|changed|fixed>.md, or +<name>.release.md for a release's own "
+                f"text ({_HOW})."
+            )
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            found.append(f"couldn't read {shown}: {type(error).__name__}")
+            continue
+        problem = _content_problem(text, entry.group("pr") if entry else None)
+        if problem:
+            found.append(f"{shown}: {problem}")
+    return found
+
+
+def _content_problem(text: str, pr: str | None) -> str | None:
+    """Why ``text`` isn't a fragment's content, or None. ``pr`` is the entry's PR number from its
+    name, or None for a release's own text."""
+    if not text.strip():
+        return "it's empty."
+    lines = text.strip("\n").splitlines()
+    # A heading would end the section it's assembled into: towncrier writes the headings.
+    if any(re.match(r"#{1,6} ", line) for line in _outside_code(lines)):
+        return f"it has a heading; the notes add the category headings ({_HOW})."
+    if pr is None:
+        return None
+    if not lines[0].startswith("- "):
+        return "an entry starts with `- `, as it would under its heading in CHANGELOG.md."
+    if any(line.startswith("- ") for line in _outside_code(lines[1:])):
+        return f"it holds more than one entry; give each its own file ({_HOW})."
+    number = re.search(r"\(#([0-9]+)", lines[0])
+    if number is None or number.group(1) != pr:
+        return f"its first (#N) isn't #{pr}, the PR number in its name."
+    return None
+
+
+def _outside_code(lines: list[str]) -> list[str]:
+    """``lines`` without the ones inside fenced code blocks."""
+    kept, fenced = [], False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced:
+            kept.append(line)
+    return kept
+
+
+def branch_problem(root: Path, base: str, labels: list[str]) -> str | None:
+    """Why this branch needs a fragment it doesn't have, or None: it adds, changes or removes one
+    (a release PR removes them), or has the skip label."""
+    if SKIP_LABEL in labels:
+        return None
+    try:
+        changed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", "--no-renames", f"{base}...HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"couldn't list this branch's changes against {base}: {type(error).__name__}"
+    if any(
+        path.startswith(f"{DIRECTORY}/") and Path(path).name not in NOT_FRAGMENTS
+        for path in changed
+    ):
+        return None
+    return (
+        f"this PR adds no CHANGELOG fragment: add {DIRECTORY}/<PR>.<added|changed|fixed>.md "
+        f"({_HOW}; an entry in CHANGELOG.md itself doesn't count), or, for a change that needs "
+        f"no entry, the {SKIP_LABEL!r} label, then rerun this job."
+    )
+
+
+def _annotation(message: str) -> str:
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error::{escaped}"
+
+
+def main(argv: list[str], root: Path = Path()) -> int:
+    parser = argparse.ArgumentParser(prog="changelog_fragments.py")
+    commands = parser.add_subparsers(dest="command", required=True)
+    check = commands.add_parser("check", help="check the fragments (and a PR's, with --base)")
+    check.add_argument("--base", help="the PR's base commit: also require a fragment")
+    check.add_argument("--labels", default="", help="the PR's labels, comma-separated")
+    args = parser.parse_args(argv)
+    found = fragment_problems(root)
+    if args.base:
+        labels = [label.strip() for label in args.labels.split(",") if label.strip()]
+        problem = branch_problem(root, args.base, labels)
+        if problem:
+            found.append(problem)
+    for problem in found:
+        print(_annotation(problem))
+    if found:
+        return 1
+    print("The CHANGELOG fragments check passes.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

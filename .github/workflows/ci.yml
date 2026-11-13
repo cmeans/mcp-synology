@@ -47,6 +47,32 @@ jobs:
       - name: Verify server.json matches pyproject.toml
         run: python scripts/sync-server-json.py --check
 
+  # CHANGELOG fragments (#731): every file in changelog.d is a fragment towncrier will assemble,
+  # a PR adds one (or has the `no changelog` label: add it, then rerun this job), and the next
+  # release's notes still build with the pinned towncrier.
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      - name: Check the fragments
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            python scripts/changelog_fragments.py check --base "$BASE" --labels "$LABELS"
+          else
+            python scripts/changelog_fragments.py check
+          fi
+      - name: Build the next release's notes (draft)
+        run: uvx --from towncrier==26.9.0 towncrier build --draft --version 0.0.0 --date 2000-01-01 > /dev/null
+
   validate-server-json:
     runs-on: ubuntu-latest
     steps:
