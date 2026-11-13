@@ -317,6 +317,9 @@ async def list_files(
         # DSM answers 401 "Unknown error" for a path under a file (`…/file/child`, vdsm 7.1 to
         # 7.4.1, #517): one getinfo says it's missing, or a file, as for 408 below.
         if e.code == 401 and tell_files_apart and not isinstance(e, AuthenticationError):
+            # Only "missing" and "file" are read here: a denied folder is left to List's own
+            # 401 (#703 refuses it in search_files, which DSM answers worse); the 408 branch
+            # below refuses it as permission_denied.
             kind = await _checked_kind(client, normalized)
             if kind is not None and kind.kind == "missing":
                 blocked = f": {shown_path(kind.under_file)} is a file" if kind.under_file else ""
@@ -351,6 +354,19 @@ async def list_files(
             kind = await _checked_kind(client, normalized) if tell_files_apart else None
             checked = not tell_files_apart or kind is not None  # nothing to tell apart: 408
             isdir = {"file": False, "folder": True}.get(kind.kind) if kind else None
+            if kind is not None and kind.kind == "denied":
+                # List's 408 for a path getinfo says the account can't read (a 105 or 407
+                # entry, or read: false): "doesn't exist" would send the model looking for it
+                # (#716 beside #718's 408 check).
+                error_response(
+                    ErrorCode.PERMISSION_DENIED,
+                    f"List files failed: no permission to read {shown_path(normalized)} on the "
+                    "NAS.",
+                    retryable=False,
+                    param="path",
+                    value=path,
+                    suggestion="Check the DSM user's permissions for that folder.",
+                )
             if isdir is False:
                 error_response(
                     ErrorCode.INVALID_PARAMETER,

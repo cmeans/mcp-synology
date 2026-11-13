@@ -704,7 +704,7 @@ class TestListFiles:
                 raise httpx.ConnectError("refused", request=request)
             if getinfo == "timeout":
                 raise httpx.ReadTimeout("slow", request=request)
-            if getinfo == "407":  # an entry folder_kind can't read as file or missing
+            if getinfo == "407":  # a 407 entry: no permission, `denied` (#716)
                 return httpx.Response(
                     200, json={"success": True, "data": {"files": [{"code": 407}]}}
                 )
@@ -737,9 +737,15 @@ class TestListFiles:
         # A check DSM refused is in the debug log (pre-QA on #515).
         failed_check = "Couldn't check /video/a.jpg"  # folder_kind's (pre-QA r1 on #705)
         assert (failed_check in caplog.text) == (getinfo == "dsm-error")
-        # Pre-QA r1 on #705: an entry it can't read, or a malformed reply, can't tell either
+        if getinfo == "407":  # getinfo says no permission (#716): not "doesn't exist"
+            assert error["code"] == "permission_denied", error
+            assert (
+                error["message"] == f"List files failed: no permission to read {named} on the NAS."
+            )
+            return
+        # Pre-QA r1 on #705: a DSM error code or a malformed reply can't tell
         # (it was "doesn't exist", or a raw AttributeError/TypeError).
-        if getinfo in ("dsm-error", "407", "malformed", "null"):
+        if getinfo in ("dsm-error", "malformed", "null"):
             assert error["code"] == "not_found"
             assert error["message"] == (
                 f"List files failed: DSM says {named} doesn't exist (DSM error 408), and "

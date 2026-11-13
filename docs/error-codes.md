@@ -93,6 +93,11 @@ code — fix the underlying credential or 2FA state before re-running.
 **The account authenticated but DSM rejected the operation (DSM error 105, or File
 Station's 407, "Operation not permitted").**
 
+`search_files` and `get_dir_size` also refuse a folder up front, without asking DSM to
+do anything (and `list_files` after List answers 408 for one), when `getinfo` (asked with `additional=["perm"]`) gives a 105 or 407 entry
+for it or reports `acl.read: false`: a folder an ACL or POSIX mode denies, which DSM would otherwise answer with 600,
+a lost search task or 0 B (#336, #703). At debug level the log shows that `getinfo` reply.
+
 This is *not* a session issue. mcp-synology specifically does **not** re-authenticate
 on code 105 or 407 — that would mask the real problem and risk lockout.
 
@@ -727,8 +732,10 @@ Fix:
 5. **Code 600 ("Search folder access denied") from `search_files`:** before
    0.10.0, a search with no pattern, extension, size or date got this from
    DSM (with the default `filetype=all`), whatever the folder's permissions.
-   It now sends `pattern="*"` in that case and lists everything (#306). If it
-   still appears, check that the account can read the folder.
+   It now sends `pattern="*"` in that case and lists everything (#306). A folder
+   the account can't read is refused before the search starts, as
+   `permission_denied` (#703). If 600 still appears, check that the account can
+   read the folder.
 6. **"DSM couldn't list … (DSM error 408), though it's a folder that exists"
    from `list_files`:** DSM refused the listing as missing, but a check right
    after found the folder (it was probably created in between). Retry; if it
