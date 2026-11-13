@@ -128,7 +128,8 @@ class TestVdsmPathUnderAFile:
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert error["message"] == (
             f"{op.capitalize()} files refused: the destination folder {file}/{below} doesn't "
-            f"exist: {file} is a file. Nothing was {'copied' if op == 'copy' else 'moved'}."
+            f"exist on the NAS: {file} is a file. "
+            f"Nothing was {'copied' if op == 'copy' else 'moved'}."
         )
         assert "f1.txt" in await list_files(client, path=dated_folder)  # nothing moved
 

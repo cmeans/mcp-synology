@@ -2315,7 +2315,22 @@ class TestPathUnderAFile:
             "Nothing was restored."
         ), error["message"]
         assert error["suggestion"] == RESTORE_UNDER_FILE_ADVICE
+        # Pre-QA r3 on #714: where it would restore to, as the 407 refusal names it.
+        assert (error["param"], error["value"]) == ("dest_folder", "/video/f.txt/x"), error
         assert "start" not in [m for m, _ in client.calls]
+
+    async def test_paths_in_the_same_folders_share_the_parents_read(self) -> None:
+        """Pre-QA r3 on #714: 50 paths whose 401 isn't from a file (their parents all
+        folders) each searched again, rereading the same parents: 200 requests."""
+        from mcp_synology.modules.filestation.helpers import files_above
+
+        client = _FakeClient(existing={"/video/d", "/video/d/g", "/video/d/g/h", "/video/d/g/h/i"})
+        missing = [(f"/video/d/g/h/i/k{i}/leaf", 401) for i in range(50)]
+        found = await files_above(client, missing)  # type: ignore[arg-type]
+        assert found == {}
+        reads = [p["path"] for m, p in client.calls if m == "getinfo"]
+        assert len(reads) == len(set(reads)), reads  # no parent read twice
+        assert len(reads) <= 4 + 50, len(reads)  # the shared parents once, each k{i} once
 
     @pytest.mark.parametrize(
         "raised",
@@ -2339,8 +2354,12 @@ class TestPathUnderAFile:
                 return await super().request(api, method, **kwargs)
 
         client = _Proxy()
-        with pytest.raises((DsmHttpError, DsmReplyError)):
+        with pytest.raises(ToolError) as exc:
             await copy_files(client, paths=["/video/a"], dest_folder="/video/f.txt/x")  # type: ignore[arg-type,list-item]
+        error = _error(exc)
+        # Named as the source check's is (pre-QA r3 on #714).
+        assert error["message"].startswith("Copy files failed"), error
+        assert error["code"] == "unavailable", error
         assert "start" not in [m for m, _ in client.calls]
 
     @pytest.mark.parametrize(
@@ -2349,6 +2368,7 @@ class TestPathUnderAFile:
             ("get_file_info", "Get file info failed"),
             ("get_dir_size", "Get directory size failed"),
             ("download_file", "Download failed"),
+            ("restore", "Restore files failed"),
         ],
     )
     async def test_a_proxys_answer_to_the_check_names_the_tool(
@@ -2372,6 +2392,10 @@ class TestPathUnderAFile:
                 await get_file_info(client, paths=[path])
             elif tool == "get_dir_size":
                 await get_dir_size(client, path=path)
+            elif tool == "restore":
+                from mcp_synology.modules.filestation.operations import restore_from_recycle_bin
+
+                await restore_from_recycle_bin(client, share="/video", paths=["f.txt/x/a.txt"])
             else:
                 await download_file(
                     client, path=path, dest_folder=str(tmp_path), allowed_roots=[tmp_path]

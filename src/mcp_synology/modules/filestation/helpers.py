@@ -1218,30 +1218,38 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
     return None
 
 
-async def _file_above(client: DsmClient, path: str, version: int) -> str | None:
+async def _file_above(
+    client: DsmClient, path: str, version: int, seen: dict[str, dict[str, Any]] | None = None
+) -> str | None:
     """The file among ``path``'s parents, when one is; None when none is found or DSM answers
     a parent with an error code (#517). A NAS that doesn't answer raises, as in `folder_kind`.
 
     The parents read folders down to the file, then 401 below it (vdsm 7.1: `f0.txt` a file,
     `f0.txt/x` and `f0.txt/x/y` 401), so the file is found by halving the levels: about
     log2(depth) requests, not one per level, which a deep path would make outlast a client's
-    60 s (pre-QA r2)."""
+    60 s (pre-QA r2). ``seen``: the entries of parents already read in this call, shared across
+    paths, so paths in the same folders don't read them again (pre-QA r3 on #714: 50 paths
+    with 401 for another reason cost 200 requests)."""
     parts = path.rstrip("/").split("/")
     # Parent lengths below the share (never a file) to the nearest parent (pre-QA r5).
     low, high = 3, len(parts) - 1
     while low <= high:
         end = (low + high) // 2
         parent = "/".join(parts[:end])
-        try:
-            data = await client.request(
-                "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
-            )
-        except _NO_ANSWER:
-            raise
-        except SynologyError as e:
-            logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
-            return None
-        entry: dict[str, Any] = next(iter(_files(data)), {})
+        entry: dict[str, Any] | None = None if seen is None else seen.get(parent)
+        if entry is None:
+            try:
+                data = await client.request(
+                    "SYNO.FileStation.List", "getinfo", version=version, params={"path": parent}
+                )
+            except _NO_ANSWER:
+                raise
+            except SynologyError as e:
+                logger.debug("Couldn't check %s: %s: %s", parent, type(e).__name__, e)
+                return None
+            entry = next(iter(_files(data)), {})
+            if seen is not None:
+                seen[parent] = entry
         if entry.get("isdir") is False:
             return parent
         if entry.get("isdir") is True:
@@ -1286,13 +1294,14 @@ async def files_above(client: DsmClient, missing: Sequence[tuple[str, int]]) -> 
     in `folder_kind`."""
     version = min(2, client.negotiate_version("SYNO.FileStation.List", max_version=2))
     found: dict[str, str] = {}
+    seen: dict[str, dict[str, Any]] = {}  # parents read, shared by the paths' searches
     for path, code in missing:
         if code != 401 or path in found:
             continue
         # A file already found above another path needs no second search (pre-QA r1 on #702:
         # 40 paths under one file cost 160 requests).
         known = next((f for f in found.values() if path.startswith(f + "/")), None)
-        blocker = known or await _file_above(client, path, version)
+        blocker = known or await _file_above(client, path, version, seen)
         if blocker:
             found[path] = blocker
     return found

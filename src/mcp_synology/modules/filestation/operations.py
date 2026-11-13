@@ -508,8 +508,11 @@ async def _refuse_missing_destination(
     except Exception as e:
         # No answer, a proxy's error status or a reply that isn't DSM's (a `SynologyError` too)
         # ends a call with nothing started (QA r1 on #714).
-        if not anything_done and (no_answer(e) or not isinstance(e, SynologyError)):
-            raise
+        if not anything_done and not isinstance(e, SynologyError):
+            raise  # a transport error: the server's own structured error
+        if not anything_done and no_answer(e):
+            # Named as the source check's is (pre-QA r3 on #714).
+            synology_error_response(f"{operation} files", e)
         # A restore to several places runs this after earlier items finished: no reply it can use
         # mustn't lose them (#588). At WARNING, as DSM's 1002 that follows a missing folder points
         # at permissions.
@@ -2208,7 +2211,7 @@ async def _recreate_missing_folders(
                 "Nothing was restored.",
             ),
             retryable=False,
-            param="paths",
+            param="dest_folder",  # as the 407 refusal above: where it would restore to
             value=blocked[0],
             suggestion=RESTORE_UNDER_FILE_ADVICE,
         )
