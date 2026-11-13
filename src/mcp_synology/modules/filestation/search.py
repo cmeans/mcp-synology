@@ -96,6 +96,18 @@ async def search_files(
             value=folder_path,
             suggestion=missing_paths_suggestion([(normalized, 408)]),
         )
+    if kind is not None and kind.kind == "denied":
+        # DSM answers an ACL-denied folder with 600 and a POSIX-denied one with a task it then
+        # loses, which read as retryable (#703); get_dir_size refuses them the same way (#336).
+        error_response(
+            ErrorCode.PERMISSION_DENIED,
+            f"Search files failed: no permission to read {shown(normalized)} on the NAS.",
+            retryable=False,
+            param="folder_path",
+            value=folder_path,
+            suggestion="Check the DSM user's permissions for that folder, or search one this "
+            "account can read.",
+        )
     if kind is not None and kind.kind == "file":
         error_response(
             ErrorCode.INVALID_PARAMETER,

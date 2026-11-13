@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
 import subprocess
 import time
 import warnings
@@ -41,7 +42,7 @@ from tests.vdsm.ssh import ssh_exec
 from tests.vdsm.transport import MODES, rewrite_client
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -730,3 +731,26 @@ async def admin_client(
     )
     async for session in _user_session(admin, test_paths, dsm_version, "admin", dsm_transport):
         yield session
+
+
+@pytest.fixture
+def denied_folders(vdsm_container: VirtualDsmContainer, dsm_version: str) -> Iterator[str]:
+    """A folder in /testshare holding a.txt (4 B), acl/ (an ACL entry denies the test user)
+    and posix/ (root's, mode 700, no ACL), each with one 8-byte file. Made over SSH."""
+    password = str(load_golden_meta(dsm_version).get("admin_password", ""))
+    name = f"mcp336-{os.urandom(3).hex()}"
+    vol = f"/volume1/testshare/{name}"
+    acl = "/usr/syno/bin/synoacltool"
+    cmd = (
+        f"mkdir -p {vol}/acl {vol}/posix && printf aaaa > {vol}/a.txt && "
+        f"printf bbbbbbbb > {vol}/acl/b.txt && printf cccccccc > {vol}/posix/c.txt && "
+        f"chmod -R a+rX {vol} && {acl} -add {vol}/acl user:mcptest:deny:rwxpdDaARWcCo:fd-- && "
+        f"({acl} -del {vol}/posix || true) && chown -R root:root {vol}/posix && "
+        f"chmod -R 700 {vol}/posix"
+    )
+    try:
+        rc, out = _ssh(vdsm_container, password, f"sh -c {shlex.quote(cmd)}", 60)
+        assert rc == 0, out
+        yield f"/testshare/{name}"
+    finally:
+        _ssh(vdsm_container, password, f"rm -rf {vol}", 60)
