@@ -2018,13 +2018,14 @@ class TestMoreShownSites:
             await search_files(client, folder_path="/video/a/child", pattern="x")  # type: ignore[arg-type]
         assert "start" not in [m for m, _ in client.calls]
 
-    async def test_search_starts_when_the_check_cant_tell(self) -> None:
+    @pytest.mark.parametrize("code", [400, [105], {"a": 1}, True, "407"], ids=str)
+    async def test_search_starts_when_the_check_cant_tell(self, code: Any) -> None:
         """#517: a check DSM doesn't answer leaves the search to DSM, as before. (A 407 is
         no longer "can't tell": it's refused as denied, #703.)"""
         from mcp_synology.modules.filestation.search import search_files
 
         client = _FakeClient(
-            codes={"/video/x": 400},
+            codes={"/video/x": code},
             methods={
                 "start": {"taskid": "T1"},
                 "list": {"finished": True, "total": 0, "files": []},

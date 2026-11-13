@@ -665,13 +665,18 @@ async def folder_kind(client: DsmClient, path: str) -> FolderKind | None:
         logger.debug("Couldn't check %s: %s: %s", path, type(e).__name__, e)
         return None
     for entry in _files(data):
-        if entry.get("code") == 408:
+        # DSM's per-path code, read once and only as a whole number: a malformed one (a list,
+        # a dict, a bool) reads as "can't tell", never raises (pre-QA r2 on #716).
+        raw = entry.get("code")
+        code = raw if isinstance(raw, int) and not isinstance(raw, bool) else None
+        if code == 408:
             return FolderKind("missing")
-        # 105 and 407 per path, as `missing_text` reads them (pre-QA r1 on #703).
-        code = entry.get("code")
+        # 105 and 407 per path, as `missing_text` and `get_dir_size` read them (#703). Only a
+        # folder is refused for read: false: a file stays "is a file, not a folder", the thing
+        # the caller needs to change (get_dir_size refuses any path, which it can't measure).
         if code in NO_PERMISSION_CODES or (entry.get("isdir") is True and read_denied(entry)):
             return FolderKind("denied")
-        if entry.get("code") == 401:
+        if code == 401:
             # DSM's code for a path under a file (`…/file/child`, getinfo and List alike, vdsm
             # 7.1 to 7.4.1): a file among its parents means it can't exist.
             blocker = await _file_above(client, path, version)
