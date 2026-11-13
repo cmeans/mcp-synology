@@ -223,6 +223,23 @@ class TestCreateFolderPartWay:
         assert message.endswith(". Not tried: /video/b."), message
 
     @respx.mock
+    @pytest.mark.parametrize(
+        ("paths", "retryable"),
+        [(["/video/a", "/video/b"], False), (["/video/b", "/video/c"], True)],
+    )
+    async def test_a_retryable_error_isnt_once_something_was_created(
+        self, mock_client: DsmClient, paths: list[str], retryable: bool
+    ) -> None:
+        """DSM's 402 (busy) is retryable on its own; after a folder was created, the same list
+        again meets it as existing, so it isn't (418 above is never retryable, so it can't
+        tell)."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"b": 402}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=paths)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["retryable"] is retryable
+
+    @respx.mock
     async def test_one_path_keeps_the_error_as_it_was(self, mock_client: DsmClient) -> None:
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"a": 418}))
         with pytest.raises(ToolError) as exc_info:
