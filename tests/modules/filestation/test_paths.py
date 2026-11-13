@@ -3556,3 +3556,15 @@ class TestPlanIsTheOnlyWayIntoABatch:
                 budget=Budget(1.0),
                 records=None,
             )
+
+
+@pytest.mark.parametrize("code", [105, 407])
+async def test_a_copy_into_a_destination_getinfo_denies_is_refused(code: int) -> None:
+    """Pre-QA r4 on #716: the destination check refused only 407; a 105 started the copy."""
+    from mcp_synology.modules.filestation.operations import copy_files
+
+    client = _FakeClient(existing={"/video/a"}, codes={"/video/dst": code})
+    with pytest.raises(ToolError) as exc:
+        await copy_files(client, paths=["/video/a"], dest_folder="/video/dst")  # type: ignore[arg-type,list-item]
+    assert _error(exc)["code"] == "permission_denied"
+    assert "start" not in [m for m, _ in client.calls]

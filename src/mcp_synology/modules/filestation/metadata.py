@@ -26,6 +26,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.helpers import (
     NO_PERMISSION_CODES,
+    entry_code,
     files_above,
     missing_paths_suggestion,
     missing_text,
@@ -263,13 +264,7 @@ def _status_errors_response(normalized: str, path: str, errors: list[Any]) -> No
     The message names the path DSM's entry names, so a subfolder's code is never reported
     as the requested folder's.
     """
-    entries = [
-        e
-        for e in errors
-        if isinstance(e, dict)
-        and isinstance(e.get("code"), int)
-        and not isinstance(e["code"], bool)
-    ]
+    entries = [e for e in errors if isinstance(e, dict) and entry_code(e) is not None]
     entry = next((e for e in entries if e.get("path") == normalized), None)
     if entry is None and entries:
         entry = entries[0]
@@ -324,7 +319,7 @@ async def get_dir_size(
     except SynologyError as e:
         logger.debug("Get directory size: path check failed: %s", e)
         entry = {}
-    code = entry.get("code")
+    code = entry_code(entry)
     if code == 401:
         # A path under a file (vdsm 7.1): DirSize would report it as 0 B too (#702). A transport
         # error ends the call, as in the check above.
@@ -341,7 +336,7 @@ async def get_dir_size(
                 value=path,
                 suggestion=missing_paths_suggestion([(normalized, 408)]),
             )
-    if isinstance(code, int) and not isinstance(code, bool):
+    if code is not None:
         _refuse_path(normalized, path, code, [(str(entry.get("path") or normalized), code)])
     if read_denied(entry):
         _refuse_path(normalized, path, 407, [(normalized, 407)])

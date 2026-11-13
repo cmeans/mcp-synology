@@ -555,7 +555,7 @@ async def _refuse_missing_destination(
             value=dest,
             suggestion=RESTORE_UNDER_FILE_ADVICE if operation == "Restore" else UNDER_FILE_ADVICE,
         )
-    if 407 in codes:
+    if codes & NO_PERMISSION_CODES:  # 105 or 407, as every getinfo reader (pre-QA r4 on #716)
         error_response(
             ErrorCode.PERMISSION_DENIED,
             f"{operation} files refused: no permission to use the destination folder {shown(dest)}."
