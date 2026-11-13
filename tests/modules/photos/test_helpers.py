@@ -9,14 +9,17 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
+from mcp_synology.core.display import shown
 from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
 from mcp_synology.modules.photos.helpers import (
+    QUOTES_HINT,
     Photos,
     Ref,
     check_folder_path,
     check_space,
     encode,
     id_list,
+    in_reply_quotes,
     is_indexing,
     one_ref,
     page_footer,
@@ -24,8 +27,11 @@ from mcp_synology.modules.photos.helpers import (
     parse_expires,
     photo_time,
     prefix,
+    quoted_name,
     refs,
+    shown_folder,
     taken,
+    with_quotes_hint,
 )
 from tests.modules.photos.dsm import CAPTURE_191, PEOPLE, FakePhotos, captured, install, make_client
 
@@ -448,15 +454,16 @@ class TestNames:
 
     @respx.mock
     async def test_ambiguous_name_lists_ids(self) -> None:
-        people = {"list": [{"id": 1, "name": "Jo"}, {"id": 2, "name": "jo"}]}
+        people = {"list": [{"id": 1, "name": "Jo, A"}, {"id": 2, "name": "jo, a"}]}
         install(FakePhotos().on("SYNO.Foto.Browse.Person", "list", 1, people))
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").person(Ref("person_name", name="JO"))
+                await Photos(client, "personal", "Op").person(Ref("person_name", name="JO, A"))
         err = _error(exc)
         assert (err["code"], err["param"]) == ("invalid_parameter", "person_name")
-        assert "1 (Jo)" in str(err["message"]) and "2 (jo)" in str(err["message"])
+        # A name holding the list's ", " is quoted, so the candidates can't run together.
+        assert ': 1 "Jo, A", 2 "jo, a".' in str(err["message"]), err
         assert err["suggestion"] == "Ask the user which one they mean, then pass its person_id."
 
     @respx.mock
@@ -556,16 +563,16 @@ class TestOneRef:
 
     @respx.mock
     async def test_tag_ids_ambiguous_casefold_refused_with_candidates(self) -> None:
-        tags = {"list": [{"id": 3, "name": "Beach"}, {"id": 7, "name": "beach"}]}
+        tags = {"list": [{"id": 3, "name": "Beach, sun"}, {"id": 7, "name": "beach, sun"}]}
         install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags))
         client = make_client()
         async with client:
             with pytest.raises(ToolError) as exc:
-                await Photos(client, "personal", "Op").tag_ids(["BEACH"])
+                await Photos(client, "personal", "Op").tag_ids(["BEACH, SUN"])
         err = _error(exc)
         assert err["code"] == "invalid_parameter"
         assert err["param"] == "tag"
-        assert "3 (Beach)" in str(err["message"]) and "7 (beach)" in str(err["message"])
+        assert ': 3 "Beach, sun", 7 "beach, sun".' in str(err["message"]), err
 
 
 class TestPlaceNode:
@@ -584,7 +591,7 @@ class TestPlaceNode:
     async def test_place_missing_from_the_filter_tree(self) -> None:
         from mcp_synology.modules.photos.helpers import Photos
 
-        place = {"id": 1, "name": "Nowhere", "country_id": 77, "first_level": "Nowhere"}
+        place = {"id": 1, "name": "No (where)", "country_id": 77, "first_level": "Nowhere"}
         fake = FakePhotos().on("SYNO.Foto.Browse.Geocoding", "list", 1, {"list": [place]})
         fake.on("SYNO.Foto.Search.Filter", "list", 2, {"geocoding": []})
         install(fake)
@@ -594,6 +601,7 @@ class TestPlaceNode:
                 await Photos(client, "personal", "Op").place_node(1, param="condition")
         assert _error(exc)["code"] == "invalid_parameter"
         assert "can't be used in a smart album condition" in str(_error(exc)["message"])
+        assert 'place 1 "No (where)" can' in str(_error(exc)["message"])  # quoted (#700)
 
     def test_missing_note_empty(self) -> None:
         from mcp_synology.modules.photos.helpers import Photos
@@ -621,3 +629,137 @@ def test_id_limit_refusals_name_what_and_separate_thousands() -> None:
             assert f"at most 1,000 {noun} per call." in str(e)
         else:
             raise AssertionError("1,001 ids accepted")
+
+
+class TestQuotedNamesAndFolders:
+    """#700: a name or folder set in a line of text can't read as the line's structure."""
+
+    def test_a_name_is_quoted_only_when_its_line_would_misread(self) -> None:
+        """Maintainer, 2026-11-12, on #709: quotes only when they're needed."""
+        for plain in ("Trip 2024", "beach", "Jo", "x is shared with", "a:b", "2024", "Caf\u00e9"):
+            assert quoted_name(plain) == plain, plain
+        assert quoted_name('Trip" (7)') == '"Trip\\" (7)"'
+        assert quoted_name("a, b") == '"a, b"'
+        assert quoted_name("a; b") == '"a; b"'  # delete_photo_albums' list ends with "; "
+        assert quoted_name("a (b") == '"a (b"'
+        assert quoted_name("a: b") == '"a: b"'
+        assert quoted_name("a \u00b7 b") == '"a \u00b7 b"'
+        assert quoted_name("a \u2192 b") == '"a \u2192 b"'
+        assert quoted_name("Trip:") == '"Trip:"'
+        assert quoted_name(" pad") == '" pad"'
+        assert quoted_name("pad ") == '"pad "'
+        assert quoted_name("(unnamed)") == '"(unnamed)"'  # can't pass for the placeholder
+        assert quoted_name("'a'") == "\"'a'\""
+        assert quoted_name("a\\b") == '"a\\\\b"'
+        assert quoted_name("Ann\u200b") == '"Ann\\u200b"'
+        assert quoted_name("x matching y") == "x matching y"
+        assert quoted_name("x matching y", "(unnamed)", " matching ") == '"x matching y"'
+        assert quoted_name("") == "(unnamed)"
+        assert quoted_name(None, "(no subject)") == "(no subject)"
+        assert quoted_name(0) == "0"  # not text, but a name, not missing (QA r1)
+        assert quoted_name("'a") == '"\'a"'  # starts with a quote
+        assert quoted_name("a'") == '"a\'"'  # ends with one
+        assert quoted_name("12") == "12"
+        assert quoted_name("12", beside_id=True) == '"12"'  # `9 12` would read as two IDs
+        assert quoted_name("2024 trip", beside_id=True) == '"2024 trip"'
+        assert quoted_name("trip 2024", beside_id=True) == "trip 2024"
+        assert quoted_name("\u0661", beside_id=True) == '"\u0661"'  # any script's digit (QA r7)
+        assert quoted_name("\uff15 Trip", beside_id=True) == '"\uff15 Trip"'
+        assert quoted_name("\u201cTrip\u201d") == '"\u201cTrip\u201d"'  # typographic quotes
+        assert quoted_name("\u2018a") == '"\u2018a"' and quoted_name("a\u2019") == '"a\u2019"'
+        assert quoted_name("`Jo`") == '"`Jo`"'
+        assert quoted_name("Jo\u037e Ann") == '"Jo\u037e Ann"'  # NFC makes it "; "
+        assert quoted_name("a \u0387 b") == '"a \u0387 b"'  # NFC makes it " · "
+
+    def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
+        assert shown_folder("/Trips/2024") == "/Trips/2024"
+        assert shown_folder("/Trips (Shared Space)") == "'/Trips (Shared Space)'"
+        assert shown_folder("/a: b") == "'/a: b'"
+        assert shown_folder("/Trips:") == "'/Trips:'"  # ": (" with what follows (pre-QA r2)
+        assert shown_folder("/a:b") == "/a:b"
+        assert shown_folder("/a matching b") == "/a matching b"
+        assert shown_folder("/a matching b", " matching ") == "'/a matching b'"
+        assert shown_folder("/a, b") == "'/a, b'"  # shown()'s own rule (#685)
+        assert shown_folder("/pad \t (x)") == shown("/pad \t (x)")  # escapes kept
+        assert shown_folder(None) == "(unnamed)"  # a reply with no name (QA r1)
+        assert shown_folder("") == ""
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: only a name wholly in double quotes, as `quoted_name` writes one."""
+
+    def test_in_reply_quotes(self) -> None:
+        assert in_reply_quotes('"beach"')
+        assert in_reply_quotes('"a"')
+        for name in ('""', '"', "beach", "'beach'", '"beach', 'beach"', 'a "b" c', None, 0):
+            assert not in_reply_quotes(name), name
+
+    def test_hint_and_note(self) -> None:
+        assert with_quotes_hint("Try X.", '"a"') == f"Try X. {QUOTES_HINT}"
+        assert with_quotes_hint(None, '"a"') == QUOTES_HINT
+        assert with_quotes_hint("Try X.", "a") == "Try X."
+        assert with_quotes_hint(None, "a") is None
+
+
+class TestFolderPassedBackInQuotes:
+    """Pre-QA r4 on #709: a folder `shown_folder` quoted, passed back with the quotes."""
+
+    HINT = "If the path came from a reply in quotes, pass it without them."
+
+    @pytest.mark.parametrize("given", ["'/Trips (Shared Space)'", '"/Trips: x"', " '/x' "])
+    @respx.mock
+    async def test_a_quoted_path_not_found_hints(self, given: str) -> None:
+        install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
+        assert _error(exc)["suggestion"] == (
+            f"list_photo_collections type=folder lists them. {self.HINT}"
+        ), _error(exc)
+
+    @pytest.mark.parametrize("given", ["/nope", "/'a'", "'/a", "''", '""'])
+    @respx.mock
+    async def test_a_plain_path_has_no_hint(self, given: str) -> None:
+        install(FakePhotos().error("SYNO.Foto.Browse.Folder", "get", 2, 642))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").folder(Ref("folder_path", name=given))
+        assert self.HINT not in str(_error(exc)["suggestion"]), _error(exc)
+
+
+class TestNamesBesideAnId:
+    """Pre-QA r9 on #709: a name of digits right after an ID is quoted, or it reads as one."""
+
+    @respx.mock
+    async def test_person_candidates(self) -> None:
+        people = {"list": [{"id": 1, "name": "12"}, {"id": 2, "name": "12"}]}
+        install(FakePhotos().on("SYNO.Foto.Browse.Person", "list", 1, people))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").person(Ref("person_name", name="12"))
+        assert ': 1 "12", 2 "12".' in str(_error(exc)["message"]), _error(exc)
+
+    @respx.mock
+    async def test_tag_candidates(self) -> None:
+        tags = {"list": [{"id": 3, "name": "2024Ab"}, {"id": 7, "name": "2024aB"}]}
+        install(FakePhotos().on("SYNO.Foto.Browse.GeneralTag", "list", 1, tags))
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").tag_ids(["2024AB"])
+        assert ': 3 "2024Ab", 7 "2024aB".' in str(_error(exc)["message"]), _error(exc)
+
+    @respx.mock
+    async def test_place(self) -> None:
+        place = {"id": 1, "name": "5th Ave", "country_id": 77, "first_level": "Nowhere"}
+        fake = FakePhotos().on("SYNO.Foto.Browse.Geocoding", "list", 1, {"list": [place]})
+        fake.on("SYNO.Foto.Search.Filter", "list", 2, {"geocoding": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await Photos(client, "personal", "Op").place_node(1, param="condition")
+        assert 'place 1 "5th Ave" can' in str(_error(exc)["message"]), _error(exc)

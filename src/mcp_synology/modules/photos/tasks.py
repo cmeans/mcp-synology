@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, NoReturn
 import anyio
 import httpx
 
-from mcp_synology.core.display import plain_quoted
 from mcp_synology.core.errors import (
     DsmHttpError,
     DsmReplyError,
@@ -49,6 +48,7 @@ from mcp_synology.modules.photos.helpers import (
     not_found,
     one_ref,
     refs,
+    shown_folder,
     space_label,
 )
 
@@ -312,7 +312,7 @@ async def copy_or_move(
         verb = "copying" if operation == "copy" else "moving"
         status, why = await _wait(source, task, timeout)
         what = _what(len(found), len(moved))
-        where = f"{dest.get('name')} ({space_label(dst)})"
+        where = f"{shown_folder(dest.get('name'))} ({space_label(dst)})"
         if why is not None:
             lines = [
                 f"{'Copy' if operation == 'copy' else 'Move'} of {what} to {where}: "
@@ -424,16 +424,11 @@ async def delete_photo_folders(
         described = []
         for folder_id, path in resolved.items():
             count = await ph.call("Browse.Item", "count", {"folder_id": folder_id})
-            described.append(f"{path} ({int(count.get('count') or 0):,} item(s) directly in it)")
+            # Quoted when it holds ", " (#693: it would read as two) or " (" (#700).
+            items = int(count.get("count") or 0)
+            described.append(f"{shown_folder(path)} ({items:,} item(s) directly in it)")
         if len(described) == 1:
-            # A folder named "a, b" is quoted, so it can't read as two (pre-QA r1 on #693).
-            (path,) = resolved.values()
-            one = (
-                described[0]
-                if ", " not in path
-                else described[0].replace(path, plain_quoted(path), 1)
-            )
-            return "\n".join(await _run_delete(ph, [], list(resolved), timeout, one))
+            return "\n".join(await _run_delete(ph, [], list(resolved), timeout, described[0]))
         # Named by their count, and listed last one a line (#693), so a folder named "a, b"
         # can't read as two.
         what = f"{len(described)} folders (listed last)"
@@ -469,7 +464,7 @@ async def _target(
         except _NO_ANSWER:
             pass
         else:
-            return f" to {path}{suffix}", True
+            return f" to {shown_folder(path)}{suffix}", True
     return f" to folder {folder['id']}{suffix}", False
 
 

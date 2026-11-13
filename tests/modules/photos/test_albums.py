@@ -53,7 +53,7 @@ class TestCreate:
         async with client:
             out = await photo_album(client, action="create", name="mcp-spec-album", ids=[12, 99])
         assert fake.one(NORMAL, "create").params == {"name": "mcp-spec-album", "item": [12]}
-        assert 'Created album "mcp-spec-album" (id 4) with 1 item(s).' in out
+        assert "Created album mcp-spec-album (id 4) with 1 item(s)." in out
         assert "Not found: 99" in out
         assert "another album already has this name" in out
         assert "Album 4: mcp-spec-album · normal · 2 item(s)" in out
@@ -98,6 +98,7 @@ class TestCreate:
         }
         assert fake.one(COND, "peek_item_count").params["condition"] == cond
         assert "Matches 1,234 item(s) now." in out
+        assert "Created smart album mcp-spec-smart (id " in out  # quoted (#700)
 
     @respx.mock
     async def test_place_condition_uses_the_filter_tree_node(self) -> None:
@@ -158,7 +159,7 @@ class TestChange:
         async with client:
             out = await photo_album(client, action="rename", album_id=4, name="Trip")
         assert fake.one(ALBUM, "set_name").params == {"id": 4, "name": "Trip"}
-        assert 'Renamed album 4 to "Trip".' in out
+        assert "Renamed album 4 to Trip." in out
 
     @respx.mock
     async def test_add_skips_missing_ids(self) -> None:
@@ -340,7 +341,7 @@ class TestChange:
         async with client:
             out = await photo_album(client, action="copy", album_id=4, name="copy")
         assert fake.one(NORMAL, "copy").params == {"name": "copy", "source_album_id": 4}
-        assert "(id 6)" in out
+        assert "Copied album 4 to copy (id 6)" in out  # quoted (#700)
 
     @respx.mock
     async def test_smart_album_items_refused(self) -> None:
@@ -449,6 +450,7 @@ class TestShareLink:
         ]
         assert "(expired)" in out
         assert "eve (download)" in out and "group 101 (view)" in out
+        assert out.startswith("Album 4 mcp-spec-album-renamed is shared."), out
 
     @respx.mock
     async def test_update_needs_a_shared_album(self) -> None:
@@ -725,7 +727,7 @@ class TestDeleteAlbums:
         async with client:
             out = await delete_photo_albums(client, album_ids=[4], album_names=["nope"])
         assert fake.one(ALBUM, "delete").params == {"id": [4]}
-        assert 'Deleted 1 album(s): 4 "mcp-spec-album"; their photos stay' in out
+        assert "Deleted 1 album(s): 4 mcp-spec-album; their photos stay" in out
         assert "Not found: named 'nope'" in out
 
     @respx.mock
@@ -828,6 +830,162 @@ class TestDsmErrors:
         assert "160" in _error(exc)["message"]
 
 
+def test_album_line_quotes_a_name_holding_its_separator() -> None:
+    """#709: the line joins with " · ", so a name holding it is quoted."""
+    line = album_line({"id": 9, "name": "a \u00b7 b", "type": "normal", "item_count": 1})
+    assert line.startswith('Album 9: "a \u00b7 b" \u00b7 normal \u00b7 1 item(s)'), line
+
+
 def test_album_line_separates_thousands() -> None:
     line = album_line({"id": 9, "name": "Trip", "type": "normal", "item_count": 12_345})
     assert "· 12,345 item(s) ·" in line
+
+
+class TestCraftedNames:
+    """#700: an album name in plain quotes could close its quotes early (`Trip" (7)` read
+    as album 7); a name holding a `"` (or a separator) is now JSON-quoted, its `"` written `\\"`."""
+
+    NAME = 'Trip" (7)'
+    SHOWN = '"Trip\\" (7)"'
+
+    @respx.mock
+    async def test_create(self) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
+        fake.on(ITEM, "get", 2, _items(12))
+        fake.on(NORMAL, "create", 1, captured("album-create"))
+        fake.on(ALBUM, "get", 1, _album())
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(client, action="create", name=self.NAME, ids=[12])
+        assert f"Created album {self.SHOWN} (id 4) with 1 item(s)." in out, out
+
+    @respx.mock
+    async def test_create_smart(self) -> None:
+        fake = FakePhotos().on(ALBUM, "list", 2, {"list": []})
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on(COND, "peek_item_count", 2, {"count": 1})
+        fake.on(COND, "create", 2, captured("condalbum-create"))
+        fake.on(ALBUM, "get", 1, _album(id=7, type="condition"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(
+                client, action="create_smart", name=self.NAME, condition={"keywords": ["sun"]}
+            )
+        assert f"Created smart album {self.SHOWN} (id " in out, out
+
+    @respx.mock
+    @pytest.mark.parametrize("action", ["rename", "copy"])
+    async def test_rename_and_copy(self, action: str) -> None:
+        fake = FakePhotos().on(ALBUM, "get", 1, _album())
+        fake.on(ALBUM, "set_name", 1, {}).on(NORMAL, "copy", 1, captured("album-copy"))
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_album(client, action=action, album_id=4, name=self.NAME)
+        verb = "Renamed" if action == "rename" else "Copied"
+        assert f"{verb} album 4 to {self.SHOWN}" in out, out
+
+    @respx.mock
+    async def test_share_link_head(self) -> None:
+        shared = captured("album-get-shared")
+        shared["list"][0]["name"] = self.NAME
+        fake = FakePhotos().on(ALBUM, "get", 1, shared).on(SHARE, "update", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await photo_share_link(client, action="update", album_id=4, public="none")
+        assert out.startswith(f"Album 4 {self.SHOWN} is shared."), out
+
+    @respx.mock
+    async def test_delete_summary(self) -> None:
+        listed = captured("album-list")
+        for album in listed["list"]:
+            if album["id"] == 4:
+                album["name"] = self.NAME
+        fake = FakePhotos().on(ALBUM, "list", 2, listed).on(ALBUM, "delete", 1, {})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, album_ids=[4])
+        assert f"Deleted 1 album(s): 4 {self.SHOWN}; their photos stay" in out, out
+
+
+class TestNamesPassedBackInQuotes:
+    """QA r1 on #709: an album name in a reply's quotes, passed back, is set with the quotes
+    (noted), and an album or condition tag looked up that way and not found gets a hint."""
+
+    HINT = "If the name came from a reply in quotes, pass it without them."
+
+    @respx.mock
+    async def test_an_unknown_condition_tag_in_quotes_hints(self) -> None:
+        fake = FakePhotos().on(ALBUM, "get", 1, _album(type="condition"))
+        fake.on("SYNO.Foto.UserInfo", "me", 1, captured("userinfo-me"))
+        fake.on("SYNO.Foto.Browse.GeneralTag", "list", 1, captured("tag-list"))
+        install(fake)
+        client = make_client()
+        async with client:
+            with pytest.raises(ToolError) as exc:
+                await photo_album(
+                    client, action="set_condition", album_id=4, condition={"tags": ['"2024"']}
+                )
+            with pytest.raises(ToolError) as plain:
+                await photo_album(
+                    client, action="set_condition", album_id=4, condition={"tags": ["no-such"]}
+                )
+        assert _error(exc)["suggestion"] == self.HINT, _error(exc)
+        assert _error(plain).get("suggestion") != self.HINT
+
+    @respx.mock
+    async def test_delete_and_share_members_by_a_name_in_quotes_hint(self) -> None:
+        """Pre-QA r4 on #709: delete_photo_albums and a share's members look names up too."""
+        fake = FakePhotos().on(ALBUM, "list", 2, captured("album-list")).on(ALBUM, "delete", 1, {})
+        fake.on("SYNO.Foto.Sharing.Misc", "list_user_group", 1, {"list": []})
+        install(fake)
+        client = make_client()
+        async with client:
+            out = await delete_photo_albums(client, album_names=['"mcp-spec-album"'])
+            plain = await delete_photo_albums(client, album_names=["nope"])
+            with pytest.raises(ToolError) as exc:
+                await _permission(
+                    Photos(client, "personal", "Op"), None, [{"name": '"alex"', "role": "view"}]
+                )
+            with pytest.raises(ToolError) as bare:
+                await _permission(
+                    Photos(client, "personal", "Op"), None, [{"name": "alex", "role": "view"}]
+                )
+        assert out.splitlines()[-1] == (f"  Not found: named '\"mcp-spec-album\"' ({self.HINT})"), (
+            out
+        )
+        assert plain.splitlines()[-1] == "  Not found: named 'nope'", plain
+        assert _error(exc)["suggestion"] == self.HINT, _error(exc)
+        assert "suggestion" not in _error(bare), _error(bare)
+
+    @respx.mock
+    async def test_a_padded_quoted_name_gets_the_hint(self) -> None:
+        """QA r2 on #709: a padded quoted name gets the hint as the stripped lookup does."""
+        install(FakePhotos().on(ALBUM, "list", 2, captured("album-list")))
+        client = make_client()
+        async with client:
+            padded = await delete_photo_albums(client, album_names=[' "mcp-spec-album" '])
+        assert padded.splitlines()[-1].endswith(f"({self.HINT})"), padded
+
+
+@respx.mock
+async def test_deleted_albums_quote_a_name_of_digits() -> None:
+    """Pre-QA r9 on #709: `9 12, 12 2024 trip` read as four IDs (the #614 confusion)."""
+    albums = {"list": [{"id": 9, "name": "12"}, {"id": 12, "name": "2024 trip"}]}
+    install(FakePhotos().on(ALBUM, "list", 2, albums).on(ALBUM, "delete", 1, {}))
+    client = make_client()
+    async with client:
+        out = await delete_photo_albums(client, album_ids=[9, 12])
+    assert out.startswith('Deleted 2 album(s): 9 "12", 12 "2024 trip"; their photos'), out
+
+
+def test_share_block_quotes_an_album_named_with_digits() -> None:
+    """Pre-QA r9 on #709: `Album 4 12 is shared.` read as two IDs."""
+    from mcp_synology.modules.photos.albums import _share_block
+
+    line = _share_block({"id": 4, "name": "12", "shared": True}).splitlines()[0]
+    assert line == 'Album 4 "12" is shared.', line

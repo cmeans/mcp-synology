@@ -18,6 +18,7 @@ from mcp_synology.core.formatting import (
 )
 from mcp_synology.modules.filestation.paths import refuse_bad_name
 from mcp_synology.modules.photos.helpers import (
+    QUOTES_HINT,
     V7,
     Photos,
     Ref,
@@ -26,12 +27,15 @@ from mcp_synology.modules.photos.helpers import (
     check_ids,
     check_space,
     in_batches,
+    in_reply_quotes,
     invalid,
     not_found,
     one_ref,
     parse_expires,
+    quoted_name,
     refs,
     rejected_text,
+    shown_folder,
     space_label,
 )
 
@@ -102,7 +106,7 @@ async def photo_folder(
                 "Browse.Folder", "create", {"target_id": int(under["id"]), "name": leaf}
             )
             made = data["folder"]
-            return f"Created {made.get('name')} (id {made['id']}, {space_label(sp)})."
+            return f"Created {shown_folder(made.get('name'))} (id {made['id']}, {space_label(sp)})."
         assert folder is not None  # checked above
         target = await ph.folder(folder)
         fid = int(target["id"])
@@ -115,7 +119,7 @@ async def photo_folder(
                     value=folder.given,
                 )
             data = await ph.call("Browse.Folder", "rename", {"id": fid, "name": leaf})
-            return f"Renamed folder {fid} to {data['folder'].get('name')}."
+            return f"Renamed folder {fid} to {shown_folder(data['folder'].get('name'))}."
         found, _missing = await ph.items([int(item_id or 0)])
         if not found:
             not_found(
@@ -170,15 +174,16 @@ async def tag_photos(
                 )
                 for data in replies:
                     add_rejected(rejected, data.get("error_list") or [])
-            shown = ", ".join(t for t in names if t not in unknown)
+            shown = ", ".join(quoted_name(t) for t in names if t not in unknown)
             if tag_ids:
                 verb = "Added tags" if action == "add" else "Removed tags"
                 where = "to" if action == "add" else "from"
                 lines.append(f"{verb} {shown} {where} {len(found):,} item(s) ({space_label(sp)}).")
             if unknown:
+                gone = ", ".join(quoted_name(t) for t in unknown)
+                hint = f" {QUOTES_HINT}" if any(in_reply_quotes(t) for t in unknown) else ""
                 lines.append(
-                    f"  No item has the tag(s) {', '.join(unknown)}, so there was nothing to "
-                    "remove."
+                    f"  No item has the tag(s) {gone}, so there was nothing to remove.{hint}"
                 )
             if rejected:
                 lines.append(
@@ -348,7 +353,7 @@ def person_line(person: dict[str, Any]) -> str:
         cover = f", cover: item {key.split('_')[0]}"
     shown = "visible" if person.get("show", True) else "hidden"
     return (
-        f"Person {person['id']}: {person.get('name') or '(unnamed)'} "
+        f"Person {person['id']}: {quoted_name(person.get('name'))} "
         f"({int(person.get('item_count') or 0):,} items, {shown}{cover})."
     )
 
@@ -457,7 +462,7 @@ async def merge_people(
         count = f"{int(items):,}" if items is not None else "?"
         return (
             f"Merged {len(merged):,} people into person {keep_id} "
-            f'"{now.get("name") or "(unnamed)"}" (now {count} items).'
+            f"{quoted_name(now.get('name'), beside_id=True)} (now {count} items)."
         )
     except SynologyError as e:
         synology_error_response(op, e)
@@ -466,6 +471,8 @@ async def merge_people(
 # -- photo_request ------------------------------------------------------------------
 
 _REQUEST_ACTIONS = ("create", "list", "update", "delete")
+
+
 _LIBRARY = {"personal": "personal_space", "shared": "shared_space"}
 
 
@@ -484,7 +491,8 @@ def _expiry(value: int) -> str:
 def _request_block(req: dict[str, Any]) -> str:
     space = "Shared Space" if req.get("library") == "shared_space" else "personal space"
     lines = [
-        f'Photo request "{req.get("subject", "")}" → {req.get("folder_home_path", "")} ({space})',
+        f"Photo request {quoted_name(req.get('subject'), '(no subject)')} → "
+        f"{shown_folder(req.get('folder_home_path'))} ({space})",
         f"  Link:      {req.get('sharing_link', '—')}",
         f"  Limit:     {_limit(int(req.get('filesize_limit') or 0))} · "
         f"{_expiry(int(req.get('expiration') or 0))}",
@@ -548,7 +556,9 @@ async def photo_request(
                 [
                     str(e.get("passphrase", "")),
                     str(e.get("subject", "")),
-                    str(e.get("folder_home_path", ""))
+                    # The cell adds " (shared)" after the folder: one holding " (" is
+                    # quoted, so a folder named "/Up (shared)" can't read as Shared Space's.
+                    shown_folder(e.get("folder_home_path"))
                     + (" (shared)" if e.get("library") == "shared_space" else ""),
                     _limit(int(e.get("filesize_limit") or 0)),
                     _expiry(int(e.get("expiration") or 0)).removeprefix("expires "),
@@ -576,7 +586,8 @@ async def photo_request(
             await ph.call("PhotoRequest", "delete", {"passphrase": [request]}, personal=True)
             req = existing[str(request)]
             return (
-                f'Deleted photo request "{req.get("subject", "")}" ({request}); its link stops '
+                f"Deleted photo request {quoted_name(req.get('subject'), '(no subject)')} "
+                f"({request}); its link stops "
                 "working."
             )
         fields: dict[str, Any] = {}
@@ -587,9 +598,11 @@ async def photo_request(
         if folder_path is not None:
             # A path only: DSM takes a request's folder by path (`12` is `/12`).
             path = check_folder_path(folder_path, "folder_path", advice=_REQUEST_FOLDER_ADVICE)
-            # Checked here, so a typo isn't a request into a folder that doesn't exist.
+            # Checked here, so a typo isn't a request into a folder that doesn't exist. The
+            # caller's own text goes in, so a path passed back in a reply's quotes gets the
+            # hint (QA r2 on #709); `folder` checks it the same way.
             await Photos(client, sp, op).folder(
-                Ref("folder_path", name=path), missing_advice=_REQUEST_MISSING_ADVICE
+                Ref("folder_path", name=folder_path), missing_advice=_REQUEST_MISSING_ADVICE
             )
             fields["library"] = _LIBRARY[sp]
             fields["folder_home_path"] = path

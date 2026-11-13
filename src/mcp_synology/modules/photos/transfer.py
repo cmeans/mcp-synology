@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from mcp_synology.core.display import plain_quoted, shown, shown_beside, shown_local
+from mcp_synology.core.display import plain_quoted, shown, shown_local
 from mcp_synology.core.errors import DsmHttpError, DsmReplyError, ErrorCode, SynologyError
 from mcp_synology.core.formatting import (
     DOWNLOADED_CONTENTS_ARE_DATA,
@@ -29,6 +29,8 @@ from mcp_synology.modules.photos.helpers import (
     check_space,
     invalid,
     one_ref,
+    quoted_name,
+    shown_folder,
     space_label,
 )
 
@@ -640,12 +642,16 @@ async def upload_photos(
     head = f"Uploaded {len(uploaded) - skipped:,} of {len(files):,} file(s)"
     if skipped:
         head += f" ({skipped:,} skipped, already there)"
-    # The folder, quoted when it holds " (" (or what `shown` quotes), as list_photos' title
-    # writes one (#695, #699).
-    target_shown = shown_beside(str(target.get("name", "")), " (")
+    # The folder, as every Photos folder in a line of text is written (#699, #700).
+    target_shown = shown_folder(target.get("name"))
     lines = [f"{head} to {target_shown} ({space_label(sp)})"]
     lines += [f"  {label:<{width}}  {state:<8} {note}" for label, state, note in rows]
     if target_album is not None and uploaded:
+        # The album's ID, then its name: `photo_album` writes `to album 9`, so a name alone
+        # (`to album 2024`) read as an ID (QA r7 on #709).
+        album_shown = (
+            f"{target_album['id']} {quoted_name(target_album.get('name'), beside_id=True)}"
+        )
         try:
             await ph.call(
                 "Browse.NormalAlbum",
@@ -653,12 +659,12 @@ async def upload_photos(
                 {"id": int(target_album["id"]), "item": uploaded},
                 personal=True,
             )
-            lines.append(f'Added {len(uploaded):,} item(s) to album "{target_album.get("name")}".')
+            lines.append(f"Added {len(uploaded):,} item(s) to album {album_shown}.")
         except SynologyError as e:
-            lines.append(f'Couldn\'t add them to album "{target_album.get("name")}": {e}')
+            lines.append(f"Couldn't add them to album {album_shown}: {e}")
         except httpx.TransportError as e:
             lines.append(
-                f"Couldn't add them to album \"{target_album.get('name')}\": DSM didn't answer "
+                f"Couldn't add them to album {album_shown}: DSM didn't answer "
                 f"({type(e).__name__}). Check the album with list_photos before adding again."
             )
     if len(uploaded) > skipped:

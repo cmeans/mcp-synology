@@ -1252,7 +1252,11 @@ list_photo_collections return; for files outside Photos, File Station's tools ta
 when that module is enabled. Taken times are the photo's own local clock time (the
 camera's, or the NAS's for a file without EXIF): don't convert them. A name or folder a
 reply shows in quotes is quoted to show its exact characters: pass what's inside the quotes,
-each escape (\\", \\u200b) standing for the one character it names."""
+each escape standing for the one character it names. A name's quotes use JSON's escapes
+(\\", \\u200b; a \\udb80\\udc00 pair is one character), a folder's ('...', or "..." when it holds
+a ') Python's (\\', \\xa0, \\U000f0000). A name the NAS's text needed escaped (\\n) shows
+doubled inside quotes (\\\\n); decoded, it gives that escape back to pass. A folder like that
+can't be given by path: pass its ID."""
 
 # Only when the Photos WRITE tools are registered (#318).
 _PHOTOS_WRITE_NOTICE = """

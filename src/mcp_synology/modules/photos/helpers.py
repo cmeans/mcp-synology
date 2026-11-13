@@ -15,11 +15,13 @@ import datetime
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import httpx
 
+from mcp_synology.core.display import _edge_quote, json_quoted, plain_quoted, shown
 from mcp_synology.core.errors import (
     DsmHttpError,
     DsmReplyError,
@@ -60,6 +62,89 @@ def prefix(space: Space) -> str:
 
 def space_label(space: Space) -> str:
     return "Shared Space" if space == "shared" else "personal space"
+
+
+# What the lines that name an album, person, tag, place or request put around the name: a
+# name holding one is quoted, so it can't read as the line's structure (#700).
+_NAME_MARKS = (", ", "; ", " (", ": ", " · ", " → ")
+
+
+def quoted_name(
+    name: object, unnamed: str = "(unnamed)", *also: str, beside_id: bool = False
+) -> str:
+    """An album's, person's, tag's, place's or request's name in a line of a reply: as is,
+    or JSON-quoted (`json_quoted`, #695) only when it's needed (maintainer, 2026-11-12, on
+    #709), as `shown_folder` does for a folder. Needed when the name:
+
+    - holds what its line puts around a name (`_NAME_MARKS`, or ``also``), checked in NFC
+      too, where U+037E and U+0387 become ``;`` and ``·``;
+    - holds a character JSON escapes (a quote, a backslash, one that draws nothing);
+    - has whitespace at an end, starts or ends with any quote mark File Station counts
+      (`_edge_quote`: typographic quotes and a backtick too), starts with ``(`` (it would
+      read as the server's placeholder) or ends with ``:``;
+    - with ``beside_id`` (the line writes it right after an ID: ``9 Trip``, ``person 12
+      Jo``), starts with a digit of any script, or ``9 12`` would read as two IDs (the #614
+      confusion; pre-QA r9 and QA r7 on #709).
+
+    ``unnamed`` (the server's placeholder, unquoted) when it has none. A name that isn't
+    text (``0``) is shown as text. A name made of words is shown as it is: wording isn't a
+    boundary (CLAUDE.md)."""
+    text = "" if name is None else str(name)
+    if not text:
+        return unnamed
+    quoted = json_quoted(text)
+    # NFC too: U+037E and U+0387 normalize to ";" and "·", and look the same (QA r7).
+    nfc = unicodedata.normalize("NFC", text)
+    needed = (
+        quoted != f'"{text}"'
+        or text != text.strip()
+        or _edge_quote(text)  # any quote mark File Station counts, typographic too (QA r7)
+        or text.startswith("(")
+        or text.endswith(":")
+        or any(m in text or m in nfc for m in (*_NAME_MARKS, *also))
+        # Any digit, not only ASCII: `9 ５ Trip` reads as IDs too (QA r7).
+        or (beside_id and text[:1].isdigit())
+    )
+    return quoted if needed else text
+
+
+def shown_folder(path: object, *also: str) -> str:
+    """A Photos folder path in a reply, as `shown` writes one, and plain-quoted when it holds
+    ``" ("`` or ``": "``, which the lines that name a folder put after it (``/Trips (Shared
+    Space)``, ``… to /Trips: 2 of 2 processed``), so a folder named ``/Trips (Shared Space)``
+    can't read as the space (#700); or ends in ``":"`` or holds ``also``, another marker its
+    line puts after it. A missing path (``None``, a DSM reply with no name) is the
+    placeholder ``(unnamed)``, unquoted, as `quoted_name` writes a missing name (QA r1)."""
+    if path is None:
+        return "(unnamed)"
+    text = str(path)
+    out = shown(text)
+    # A name ending in ":" makes ": " with the " (" after it (pre-QA r2).
+    marked = text.endswith(":") or any(m in text for m in (" (", ": ", *also))
+    return plain_quoted(text) if out == text and marked else out
+
+
+# Replies may show a name in "…" (`quoted_name`), so a model may pass one back with them. Advice
+# only, as File Station's for a quoted path (#692): a name that really has quotes still works.
+QUOTES_HINT = "If the name came from a reply in quotes, pass it without them."
+# A folder `shown_folder` quoted, passed back with its quotes (File Station's wording, #692).
+PATH_QUOTES_HINT = "If the path came from a reply in quotes, pass it without them."
+
+
+def in_reply_quotes(name: object, marks: str = '"') -> bool:
+    """Whether ``name`` starts and ends with one of ``marks`` around something: ``"`` as
+    `quoted_name` writes a name (QA r1 on #709; an empty name is ``(unnamed)``, never
+    ``""``, QA r2), ``'`` or ``"`` as `shown_folder` writes a folder (the root is ``/``,
+    never ``''``). The one rule for both, so they can't drift apart (pre-QA r7)."""
+    text = "" if name is None else str(name)
+    return len(text) >= 3 and text[0] == text[-1] and text[0] in marks
+
+
+def with_quotes_hint(suggestion: str | None, name: object) -> str | None:
+    """``suggestion``, with `QUOTES_HINT` added when ``name`` is in a reply's quotes."""
+    if not in_reply_quotes(name):
+        return suggestion
+    return f"{suggestion} {QUOTES_HINT}" if suggestion else QUOTES_HINT
 
 
 def check_space(operation: str, space: str) -> Space:
@@ -370,6 +455,8 @@ class Photos:
         """
         if ref is None:
             ref = Ref("folder_path", name="/")
+        # The path DSM is asked for, set for a path, not for an ID.
+        path: str | None = None
         if ref.id is not None:
             if ref.id < 0:
                 # No folder has a negative ID; nothing to ask DSM (#609).
@@ -388,13 +475,19 @@ class Photos:
             data = await self.call("Browse.Folder", "get", params, version=2)
         except SynologyError as e:
             if e.code == 642:
-                what = ref.id if ref.id is not None else repr(ref.name)
+                # The path DSM was asked for, not the caller's text: beside "starting with /"
+                # advice, `'Up'` read as if the "/" were missing (QA r3 on #709).
+                what = ref.id if ref.id is not None else repr(path)
+                advice = missing_advice or "list_photo_collections type=folder lists them."
+                given = (ref.name or "").strip()
+                if ref.id is None and in_reply_quotes(given, "'\""):
+                    advice = f"{advice} {PATH_QUOTES_HINT}"
                 not_found(
                     self.operation,
                     f"no folder {what} in the {space_label(self.space)}.",
                     param=ref.param,
                     value=ref.given,
-                    suggestion=missing_advice or "list_photo_collections type=folder lists them.",
+                    suggestion=advice,
                 )
             raise
         folder: dict[str, Any] = data["folder"]
@@ -467,9 +560,11 @@ class Photos:
                 f"no {kind} named {name!r}.",
                 param=ref.param,
                 value=name,
-                suggestion=hint,
+                suggestion=with_quotes_hint(hint, name),
             )
-        listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
+        listed = ", ".join(
+            f"{m['id']} {quoted_name(m.get('name'), beside_id=True)}" for m in matches[:10]
+        )
         invalid(
             self.operation,
             f"{len(matches):,} {kind}s are named {name!r}: {listed}.",
@@ -543,7 +638,7 @@ class Photos:
         if node is None:
             invalid(
                 self.operation,
-                f"place {place_id} ({place.get('name', '')}) can't be "
+                f"place {place_id} {quoted_name(place.get('name'), beside_id=True)} can't be "
                 "used in a smart album condition here.",
                 param=param,
                 value=place_id,
@@ -586,7 +681,9 @@ class Photos:
                 continue
             matches = folded.get(name.casefold(), [])
             if len(matches) > 1:
-                listed = ", ".join(f"{m['id']} ({m.get('name', '')})" for m in matches[:10])
+                listed = ", ".join(
+                    f"{m['id']} {quoted_name(m.get('name'), beside_id=True)}" for m in matches[:10]
+                )
                 invalid(
                     self.operation,
                     f"{len(matches):,} tags match {name!r} ignoring case: {listed}.",

@@ -563,13 +563,14 @@ async def test_album_ids_and_names_are_never_taken_for_each_other(photos: DsmCli
         assert out == f"No albums deleted.\n  Not found: ID {missing}", out
 
         out = await delete_photo_albums(photos, album_names=[str(holiday)])
-        assert "Deleted 1 album(s): " in out and f'"{holiday}"' in out, out
+        # A name of digits right after an ID is quoted, so it can't read as one (#709).
+        assert "Deleted 1 album(s): " in out and f' "{holiday}"; their photos' in out, out
         named.remove(str(holiday))
         listed = await list_photo_collections(photos, type="album")
         assert f"t614-holiday-{tag}" in listed, listed  # the album with that ID is still there
 
         out = await delete_photo_albums(photos, album_ids=[holiday])
-        assert f'Deleted 1 album(s): {holiday} "t614-holiday-{tag}"' in out, out
+        assert f"Deleted 1 album(s): {holiday} t614-holiday-{tag};" in out, out
         holiday = 0
     finally:
         if named:
