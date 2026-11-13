@@ -19,6 +19,7 @@ from mcp_synology.core.formatting import (
     synology_error_response,
 )
 from mcp_synology.modules.filestation.helpers import (
+    doesnt_exist_text,
     dsm_str,
     file_type_icon,
     folder_kind,
@@ -87,10 +88,9 @@ async def search_files(
         synology_error_response("Search files", e)
     if kind is not None and kind.kind == "missing":
         # A path under a file names the file, so the model needn't look for it (pre-QA r1).
-        blocked = f": {shown(kind.under_file)} is a file" if kind.under_file else ""
         error_response(
             ErrorCode.NOT_FOUND,
-            f"Search files failed: {shown(normalized)} doesn't exist on the NAS{blocked}.",
+            f"Search files failed: {doesnt_exist_text(normalized, kind.under_file)}.",
             retryable=False,
             param="folder_path",
             value=folder_path,

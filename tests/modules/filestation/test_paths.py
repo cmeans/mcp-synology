@@ -1921,7 +1921,14 @@ class TestMoreShownSites:
         assert "/video/f.txt is a file, not a folder" in error["message"]
         assert "start" not in [m for m, _ in client.calls]
 
-    async def test_search_a_path_under_a_file_names_the_file(self) -> None:
+    @pytest.mark.parametrize(
+        ("file", "shown_file"),
+        # QA r3 on #706: a file holding ": " is quoted, or it reads as the sentence's own.
+        [("/video/f.txt", "/video/f.txt"), ("/video/f: g.txt", "'/video/f: g.txt'")],
+    )
+    async def test_search_a_path_under_a_file_names_the_file(
+        self, file: str, shown_file: str
+    ) -> None:
         """#517 (pre-QA r1): getinfo answers 401 for a path under a file; the nearest parent is
         the file, so the path can't exist, and the reply names the file."""
         from mcp_synology.modules.filestation.search import search_files
@@ -1930,19 +1937,18 @@ class TestMoreShownSites:
             async def request(self, api: str, method: str, **kwargs: Any) -> dict[str, Any]:
                 if method == "getinfo":
                     path = kwargs["params"]["path"]
-                    if path == "/video/f.txt":
+                    if path == file:
                         return {"files": [{"path": path, "isdir": False}]}
                     return {"files": [{"path": path, "code": 401}]}
                 return await super().request(api, method, **kwargs)
 
         client = _UnderFile(methods={"start": {"taskid": "T1"}})
         with pytest.raises(ToolError) as exc:
-            await search_files(client, folder_path="/video/f.txt/x/y", pattern="x")  # type: ignore[arg-type]
+            await search_files(client, folder_path=f"{file}/x/y", pattern="x")  # type: ignore[arg-type]
         error = _error(exc)
         assert error["code"] == "not_found"
         assert error["message"] == (
-            "Search files failed: /video/f.txt/x/y doesn't exist on the NAS: "
-            "/video/f.txt is a file."
+            f"Search files failed: {file}/x/y doesn't exist on the NAS: {shown_file} is a file."
         )
         assert "start" not in [m for m, _ in client.calls]
 
@@ -3554,7 +3560,11 @@ class TestPathBeforeItsSeparator:
                         # f-string (`{shown_beside(dest, ' (')}/`): the behavior tests hold it.
                         continue
                     ok = (isinstance(text_after, str) and text_after.startswith(marker)) or (
-                        isinstance(text_before, str) and text_before.endswith(marker)
+                        isinstance(text_before, str)
+                        and text_before.endswith(marker)
+                        # Only where no separator follows (`…: <file> is a file`): one that
+                        # does is the marker (QA r3: `' ('` → `': '` passed after "NAS: ").
+                        and not text_after.startswith((" (", ": ", " to ", " and "))
                     )
                     if not ok:
                         bad.append(f"{f.relative_to(src)}:{node.lineno}: {ast.unparse(call)}")

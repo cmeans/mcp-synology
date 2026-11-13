@@ -790,6 +790,15 @@ def under_file_text(path: str, file: str) -> str:
     return f"{shown(path)} doesn't exist on the NAS: {shown_beside(file, ': ')} is a file"
 
 
+def doesnt_exist_text(path: str, under_file: str | None) -> str:
+    """A missing path in words, naming the file above it when there is one: the one sentence
+    `list_files` (both branches) and `search_files` write (QA r3 on #706: two of them wrote
+    the file raw after its ": ")."""
+    if under_file:
+        return under_file_text(path, under_file)
+    return f"{shown(path)} doesn't exist on the NAS"
+
+
 def missing_text(path: str, code: int, under_file: str | None) -> str:
     """A path ``getinfo`` couldn't report, in words (#620: "(DSM error 408)" alone left the
     model to translate DSM's code; a 407 was called "not found"), keeping the code.

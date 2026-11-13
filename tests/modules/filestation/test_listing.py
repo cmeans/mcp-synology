@@ -791,7 +791,14 @@ class TestListFiles:
         assert json.loads(str(exc_info.value))["error"]["code"] == "auth_failed"
 
     @respx.mock
-    async def test_the_408_branch_names_the_file_above(self, mock_client: DsmClient) -> None:
+    @pytest.mark.parametrize(
+        ("file", "shown_file"),
+        # QA r3 on #706: a file holding ": " is quoted, or it reads as the sentence's own.
+        [("/video/a.jpg", "/video/a.jpg"), ("/video/a: b.jpg", "'/video/a: b.jpg'")],
+    )
+    async def test_the_408_branch_names_the_file_above(
+        self, mock_client: DsmClient, file: str, shown_file: str
+    ) -> None:
         """Pre-QA r2 on #705: List's 408 for a path whose getinfo is a 401 under a file named
         no file, as the 401 branch does."""
 
@@ -799,7 +806,7 @@ class TestListFiles:
             params = request.url.params
             if params["method"] != "getinfo":
                 return httpx.Response(200, json={"success": False, "error": {"code": 408}})
-            if params["path"] == "/video/a.jpg/x":
+            if params["path"] == f"{file}/x":
                 return httpx.Response(
                     200, json={"success": True, "data": {"files": [{"code": 401}]}}
                 )
@@ -808,9 +815,9 @@ class TestListFiles:
 
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
-            await list_files(mock_client, path="/video/a.jpg/x")
+            await list_files(mock_client, path=f"{file}/x")
         assert json.loads(str(exc_info.value))["error"]["message"] == (
-            "List files failed: /video/a.jpg/x doesn't exist on the NAS: /video/a.jpg is a file."
+            f"List files failed: {file}/x doesn't exist on the NAS: {shown_file} is a file."
         )
 
     @respx.mock
@@ -875,6 +882,9 @@ class TestListFiles:
             ("407", "filestation_error"),  # a parent it can't read: DSM's error stands
             # A proxy's stall ends the call (pre-QA r4, #282), named for the tool (#705).
             ("502", "unavailable"),
+            # QA r3 on #706: a file holding ": " is quoted (the sentence `doesnt_exist_text`
+            # writes for both branches and search_files).
+            ("colon", "not_found"),
         ],
     )
     @respx.mock
@@ -900,9 +910,10 @@ class TestListFiles:
                 entry = {"isdir": parent == "folder", "path": params["path"]}
             return httpx.Response(200, json={"success": True, "data": {"files": [entry]}})
 
+        file = "/video/a: b.jpg" if parent == "colon" else "/video/a.jpg"
         respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=side_effect)
         with pytest.raises(ToolError) as exc_info:
-            await list_files(mock_client, path="/video/a.jpg/x/child")
+            await list_files(mock_client, path=f"{file}/x/child")
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == code
         if parent == "502":
@@ -911,6 +922,11 @@ class TestListFiles:
             assert error["message"] == (
                 "List files failed: /video/a.jpg/x/child doesn't exist on the NAS: "
                 "/video/a.jpg is a file."
+            )
+        if parent == "colon":
+            assert error["message"] == (
+                "List files failed: /video/a: b.jpg/x/child doesn't exist on the NAS: "
+                "'/video/a: b.jpg' is a file."
             )
 
     @respx.mock

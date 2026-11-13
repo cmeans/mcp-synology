@@ -26,6 +26,7 @@ from mcp_synology.core.formatting import (
 from mcp_synology.modules.filestation.helpers import (
     FolderKind,
     correct_recycle_status_from_observation,
+    doesnt_exist_text,
     dsm_str,
     ensure_recycle_status,
     file_type_icon,
@@ -326,13 +327,9 @@ async def list_files(
         if e.code == 401 and tell_files_apart and not isinstance(e, AuthenticationError):
             kind = await _checked_kind(client, normalized)
             if kind is not None and kind.kind == "missing":
-                blocked = (
-                    f": {shown_beside(kind.under_file, ': ')} is a file" if kind.under_file else ""
-                )
                 error_response(
                     ErrorCode.NOT_FOUND,
-                    f"List files failed: {shown_path(normalized)} doesn't exist on the NAS"
-                    f"{blocked}.",
+                    f"List files failed: {doesnt_exist_text(normalized, kind.under_file)}.",
                     retryable=False,
                     param="path",
                     value=path,
@@ -401,10 +398,9 @@ async def list_files(
             # `Movies` the model can see listed (pre-QA on #515). A file above it is named, as
             # in the 401 branch (pre-QA r2 on #705).
             above = kind.under_file if kind else None
-            blocked = f": {shown_path(above)} is a file" if above else ""
             error_response(
                 ErrorCode.NOT_FOUND,
-                f"List files failed: {shown_path(normalized)} doesn't exist on the NAS{blocked}.",
+                f"List files failed: {doesnt_exist_text(normalized, above)}.",
                 retryable=False,
                 param="path",
                 value=path,
