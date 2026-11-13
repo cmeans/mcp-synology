@@ -3521,6 +3521,45 @@ class TestPathBeforeItsSeparator:
                         hits.append(f"{f.relative_to(src)}:{node.lineno}: {ast.unparse(call)}")
         assert hits == [], hits
 
+    def test_each_beside_marker_matches_its_line(self) -> None:
+        """QA r2 on #717: a site with the wrong marker (`shown_beside(p, ": ")` before " (")
+        passed every test. A literal marker must start the text right after the call, or end
+        the text right before it (the file above a path under one: `…: <file> is a file`)."""
+        import ast
+
+        src = Path(__file__).resolve().parents[3] / "src" / "mcp_synology"
+        bad = []
+        for f in sorted(src.rglob("*.py")):
+            for node in ast.walk(ast.parse(f.read_text())):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                values = node.values
+                for i, here in enumerate(values):
+                    call = here.value if isinstance(here, ast.FormattedValue) else None
+                    if not (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id in ("shown_beside", "shown_local_beside")
+                        and len(call.args) == 2
+                        and isinstance(call.args[1], ast.Constant)
+                    ):
+                        continue
+                    marker = call.args[1].value
+                    after = values[i + 1] if i + 1 < len(values) else None
+                    before = values[i - 1] if i else None
+                    text_after = after.value if isinstance(after, ast.Constant) else None
+                    text_before = before.value if isinstance(before, ast.Constant) else None
+                    if text_after is None or (text_after == "/" and i + 2 == len(values)):
+                        # A field or a `+` join follows, or only a folder's slash ends the
+                        # f-string (`{shown_beside(dest, ' (')}/`): the behavior tests hold it.
+                        continue
+                    ok = (isinstance(text_after, str) and text_after.startswith(marker)) or (
+                        isinstance(text_before, str) and text_before.endswith(marker)
+                    )
+                    if not ok:
+                        bad.append(f"{f.relative_to(src)}:{node.lineno}: {ast.unparse(call)}")
+        assert bad == [], bad
+
     @pytest.mark.parametrize(
         ("path", "code", "want"),
         [
