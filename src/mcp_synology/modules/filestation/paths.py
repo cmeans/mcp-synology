@@ -27,8 +27,8 @@ import regex
 
 from mcp_synology.core.display import (
     NAME_BYTES,
-    _escaped_repr,
     draws_nothing,
+    escaped_repr,
     invisible_problem,
     is_invisible_problem,
     is_selector_problem,
@@ -280,8 +280,8 @@ def refuse_planted_bin(
     for raw, path, dest in zip(given, resolved, dests, strict=True):
         if normalize_path(path).rsplit("/", 1)[-1] == "#recycle" and makes_a_bin(dest):
             _refuse(
-                f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(raw)} would land in "
-                f"{_escaped_repr(dest)} as '#recycle', the name of its recycle bin. Nothing "
+                f"{_OP_WORDS.get(tool, tool)} refused: {escaped_repr(raw)} would land in "
+                f"{escaped_repr(dest)} as '#recycle', the name of its recycle bin. Nothing "
                 "was changed.",
                 param,
                 raw,
@@ -362,7 +362,7 @@ def refuse_same_names(
         first_raw, first = landings.setdefault((landing, name_key(name)), (raw, source))
         if first == source:
             continue
-        pair = f"{_escaped_repr(first_raw)} and {_escaped_repr(raw)}"
+        pair = f"{escaped_repr(first_raw)} and {escaped_repr(raw)}"
         if not clashes:
             names = (
                 "the same name"
@@ -370,7 +370,7 @@ def refuse_same_names(
                 else "names that match ignoring case, which some file systems treat as one"
             )
             first_clash = raw
-            lead = f"{pair} would both land in {_escaped_repr(dest)} with {names}"
+            lead = f"{pair} would both land in {escaped_repr(dest)} with {names}"
             clashes.append(lead)
         else:
             clashes.append(pair)
@@ -400,8 +400,8 @@ def refuse_same_names(
             # One already at its destination doesn't land on anything: it's where it was.
             if landed and landed[1] != source and landed[1].rpartition("/")[0] != parent:
                 _refuse(
-                    f"{_OP_WORDS.get(tool, tool)} refused: {_escaped_repr(landed[0])} would land "
-                    f"in {_escaped_repr(folder)}, which holds {_escaped_repr(raw)}, so with "
+                    f"{_OP_WORDS.get(tool, tool)} refused: {escaped_repr(landed[0])} would land "
+                    f"in {escaped_repr(folder)}, which holds {escaped_repr(raw)}, so with "
                     "overwrite=true it could be replaced, depending on the order. Nothing was "
                     "changed.",
                     param,

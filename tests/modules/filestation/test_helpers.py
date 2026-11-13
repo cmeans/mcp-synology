@@ -1,4 +1,5 @@
-"""Tests for modules/filestation/helpers.py — path, size, polling, icons."""
+"""Tests for modules/filestation/helpers.py (path, size, polling, icons) and for the display rules
+moved to core/display.py in #697 (`invisible_problem`, `shown`, `json_quoted` and the rest)."""
 
 from __future__ import annotations
 

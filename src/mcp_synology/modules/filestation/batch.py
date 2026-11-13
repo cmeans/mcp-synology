@@ -36,7 +36,7 @@ import anyio
 import httpx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.display import _escaped_repr, shown
+from mcp_synology.core.display import escaped_repr, shown
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import ends_in_list, path_list, rewrapped_error, sentence, then
 from mcp_synology.modules.filestation import tasks as _tasks
@@ -725,8 +725,8 @@ def _with_progress(
     # A DSM error on a start or a status request names no path (QA round 5 on #480); one
     # that names a path inside the item, or a sibling starting with the same characters
     # (/video/a.txt, /video/a b), doesn't name the item either. A refusal quotes it as
-    # ``_escaped_repr`` writes it.
-    names_it = names_path(message, failed) or _escaped_repr(failed) in message
+    # ``escaped_repr`` writes it.
+    names_it = names_path(message, failed) or escaped_repr(failed) in message
     if not names_it:
         message = then(sentence(message), f"Failed on: {shown(failed)}.")
     details["param"] = "paths"

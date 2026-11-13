@@ -2140,9 +2140,9 @@ class TestInstructionComments:
 # Station too).
 # +178 by #701 (#695, pre-QA r5): SYNOLOGY PHOTOS says a name or folder shown in quotes is
 # quoted to show its exact characters (PATH FORMAT says it only with File Station).
-# +43 by #697: LOCAL MACHINE says a quoted local path can appear in its own section or a tool's
+# +49 by #697: LOCAL MACHINE says a quoted local path can appear in these instructions or a tool's
 # description too, not only in a reply.
-PAYLOAD_BUDGET_CHARS = 61_912
+PAYLOAD_BUDGET_CHARS = 61_918
 
 
 class TestPayloadBudget:

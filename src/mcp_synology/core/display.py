@@ -3,8 +3,8 @@ pass for the reply's own structure (#697): Unicode's characters that draw nothin
 (`invisible_problem`, #510, #515), `shown` for a NAS path, `shown_local` for a local one,
 `json_quoted` for a name in a line of text (#695), and the quoting helpers they share.
 
-Moved here from File Station's helpers so `core` can use them (`core/local_paths.py`);
-`modules/filestation/helpers.py` re-exports every name, so its callers are unchanged."""
+Moved here from File Station's helpers so `core` can use them (`core/local_paths.py`).
+Importers use `core.display` directly; `filestation.helpers` keeps no aliases."""
 
 from __future__ import annotations
 
@@ -419,7 +419,7 @@ def _hides(c: str) -> bool:
     return bool(_NOT_PRINTED.match(c)) or (c != " " and c.isspace())
 
 
-def _escaped_repr(path: str) -> str:
+def escaped_repr(path: str) -> str:
     """``repr(path)``, with every character that draws nothing written as ``\\uXXXX`` too
     (``repr`` leaves U+3164 or VS16 as is), so the quoted path shows what's hiding."""
     out = []
@@ -433,7 +433,7 @@ def _escaped_repr(path: str) -> str:
 
 
 def shown(path: str) -> str:
-    """``path`` for a message: as is, or quoted (`_escaped_repr`, with escapes) when a
+    """``path`` for a message: as is, or quoted (`escaped_repr`, with escapes) when a
     part has whitespace at its start or end, a character that doesn't print (a tab, a
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
@@ -442,7 +442,7 @@ def shown(path: str) -> str:
     which would read as a quoted name (#691).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
-    own text, shown exactly), or ``_escaped_repr``, which also shows what ``!r`` leaves as is
+    own text, shown exactly), or ``escaped_repr``, which also shows what ``!r`` leaves as is
     (`refuse_same_names`, `refuse_planted_bin`; the older ``!r`` refusals are on #458), but a
     path on this machine, refused or not, goes through `shown_local` (#691: repr doubles each
     Windows backslash); an
@@ -465,7 +465,7 @@ def shown(path: str) -> str:
     `formatting.path_list`). A line that puts other text between or after paths (" and ",
     " (to ") quotes a path holding it with `shown_beside`."""
     if any(_needs_escapes(part) for part in path.split("/") if part):
-        return _escaped_repr(path)
+        return escaped_repr(path)
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
@@ -484,7 +484,7 @@ def json_quoted(text: str) -> str:
     is ``\\"``, so neither a quote nor the line's own separators inside it can read as the
     line's structure, and each character that draws nothing or a message would hide (a
     zero-width space, a no-break space, a private-use character) is written ``\\uXXXX``, as
-    `_escaped_repr` writes one, so ``"Ann<ZWSP>"`` can't pass for ``"Ann"``. Still valid
+    `escaped_repr` writes one, so ``"Ann<ZWSP>"`` can't pass for ``"Ann"``. Still valid
     JSON for the same text (one outside the BMP as its surrogate pair).
 
     By `shown`'s rule (#515): a name Unicode uses as written (an emoji ZWJ sequence, a
@@ -499,7 +499,7 @@ def json_quoted(text: str) -> str:
     out = []
     for n, c in enumerate(plain):
         lead_mark = n == 1 and bool(_MARK.match(c))
-        # What `_escaped_repr` escapes, and the annotation characters, which repr escapes for
+        # What `escaped_repr` escapes, and the annotation characters, which repr escapes for
         # it (pre-QA r4 on #695: they were left raw).
         if lead_mark or _IGNORABLE.match(c) or c == _BRAILLE_BLANK or _hides(c) or c in _ANNOTATION:
             o = ord(c)
@@ -539,7 +539,7 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
     what `shown` would quote, padding, a tab, a character that draws nothing or ``", "``; then
     the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
-    `_escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
+    `escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
     FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
     read like a quoted one (pre-QA r2 on #691). A path that starts or ends with a quote is
     quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't normalized
@@ -548,7 +548,7 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     text = os.fspath(path)
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
     if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
-        return _escaped_repr(text)
+        return escaped_repr(text)
     if not text or ", " in text or _edge_quote(text):
         return plain_quoted(text)
     return text
@@ -564,13 +564,13 @@ def shown_beside(path: str, marker: str) -> str:
 
 def plain_quoted(path: str) -> str:
     """``path`` in quotes that hold it exactly: single quotes, or double when it holds a
-    single one; with both, or with a backslash, `_escaped_repr`'s form. In any quoted path a
+    single one; with both, or with a backslash, `escaped_repr`'s form. In any quoted path a
     backslash is then always an escape, as the server instructions say: a plain-quoted
     ``C:\temp`` would read as ``C:<TAB>emp`` (pre-QA r3 on #692)."""
     if "\\" in path:
-        return _escaped_repr(path)
+        return escaped_repr(path)
     if "'" not in path:
         return f"'{path}'"
     if '"' not in path:
         return f'"{path}"'
-    return _escaped_repr(path)
+    return escaped_repr(path)

@@ -1405,16 +1405,25 @@ class TestOnePathPerLine:
         `formatting.path_list`; the one exception is `file_task`'s table cell (`_list_reply`),
         which can't hold a line per path and joins them with ", ", quoted by `shown`."""
         root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
-        files = [*sorted((root / "filestation").glob("*.py")), root / "photos" / "tasks.py"]
+        # The display rules and core's local paths too, since #697 moved them to core.
+        core = root.parent / "core"
+        files = [
+            *sorted((root / "filestation").glob("*.py")),
+            root / "photos" / "tasks.py",
+            core / "display.py",
+            core / "local_paths.py",
+        ]
         allowed = {
             ("helpers.py", "validate_additional"),  # field names
-            ("helpers.py", "invisible_problem"),  # code points
+            ("core/display.py", "invisible_problem"),  # code points
             ("helpers.py", "validate_share_path"),  # share names, in an error of their own
             ("listing.py", "_recycle_column"),  # task kinds
             ("operations.py", "_skip_report"),  # counts
             ("search.py", "search_files"),  # filters
             ("tasks.py", "_list_reply"),  # the table cell (#693's exception)
             ("photos/tasks.py", "_what"),  # counts
+            # A description can't take a line per folder; `shown_local` quotes each (#697).
+            ("core/local_paths.py", "roots_for_description"),
         }
         found = set()
         for file in files:
@@ -1430,18 +1439,31 @@ class TestOnePathPerLine:
                         and isinstance(node.func.value, ast.Constant)
                         and node.func.value.value in (", ", "; ", " and ")
                     ):
-                        name = "photos/tasks.py" if file.parent.name == "photos" else file.name
+                        name = (
+                            file.name
+                            if file.parent.name == "filestation"
+                            else (f"{file.parent.name}/{file.name}")
+                        )
                         found.add((name, func.name))
         assert found <= allowed, sorted(found - allowed)
+        # And no entry is stale: each still names a join (QA r1 on #712: one outlived its code).
+        assert allowed <= found, sorted(allowed - found)
 
     def test_no_two_paths_share_a_line_unquoted(self) -> None:
         """Pre-QA r1: the join guard missed f-strings, ``f"List {a} and {b}"``. A separator a
         name can hold, between two values of one f-string, is allowed only when both are
-        quoted for it (`shown_beside`, `_escaped_repr`, which always quotes) or the line joins
+        quoted for it (`shown_beside`, `escaped_repr`, which always quotes) or the line joins
         no paths (listed here)."""
         root = Path(__file__).parents[3] / "src" / "mcp_synology" / "modules"
-        files = [*sorted((root / "filestation").glob("*.py")), root / "photos" / "tasks.py"]
-        quoting = {"shown_beside", "_escaped_repr"}
+        # The display rules and core's local paths too, since #697 moved them to core.
+        core = root.parent / "core"
+        files = [
+            *sorted((root / "filestation").glob("*.py")),
+            root / "photos" / "tasks.py",
+            core / "display.py",
+            core / "local_paths.py",
+        ]
+        quoting = {"shown_beside", "escaped_repr"}
         allowed = {
             ("batch.py", "_with_stop"),  # a message and what the stop did
             ("photos/tasks.py", "_counts"),  # counts
@@ -1459,7 +1481,11 @@ class TestOnePathPerLine:
 
         found = set()
         for file in files:
-            name = "photos/tasks.py" if file.parent.name == "photos" else file.name
+            name = (
+                file.name
+                if file.parent.name == "filestation"
+                else (f"{file.parent.name}/{file.name}")
+            )
             for func in ast.walk(ast.parse(file.read_text())):
                 if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
                     continue
@@ -1478,6 +1504,7 @@ class TestOnePathPerLine:
                         ):
                             found.add((name, func.name))
         assert found <= allowed, sorted(found - allowed)
+        assert allowed <= found, sorted(allowed - found)  # no stale entry (QA r1 on #712)
 
     def test_check_clause_quotes_a_name_holding_and(self) -> None:
         from mcp_synology.core.display import shown_beside
@@ -1562,7 +1589,7 @@ class TestPaddedPathsAreShownQuoted:
 
     async def test_copy_summary_and_skipped_list(self) -> None:
         """#519: the copied names and the skipped list, both quoted when padded."""
-        from mcp_synology.core.display import _escaped_repr
+        from mcp_synology.core.display import escaped_repr
         from mcp_synology.modules.filestation.operations import _copy_move_summary
 
         name = PADDED.rsplit("/", 1)[-1]
@@ -1574,7 +1601,7 @@ class TestPaddedPathsAreShownQuoted:
             0,
             [],
         )
-        assert f"  {_escaped_repr(name)}" in text.splitlines()
+        assert f"  {escaped_repr(name)}" in text.splitlines()
         skipped = await _copy_move_summary(
             _FakeClient(),  # type: ignore[arg-type]
             [PADDED, "/video/ok"],

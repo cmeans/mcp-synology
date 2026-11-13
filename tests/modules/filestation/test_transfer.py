@@ -2026,13 +2026,19 @@ class TestLocalPathsShown:
 
     def test_every_local_path_in_a_message_is_shown(self) -> None:
         """The guard: in the modules that write local paths (the two transfer modules,
-        `core/local_paths.py`, Download Station's tasks and the server's LOCAL PATHS, #697), a
-        local path's variable in an f-string (or
-        joined to text by ``+`` or ``%``, or passed to ``.format()``) goes
-        through `shown_local` (never ``!r``, which doubles Windows backslashes, nor `shown` on a
-        whole local path, which reads only ``/`` as a separator). `shown` is for a file's own
-        name (``name``, ``effective_name``, ``x.name``), and ``!r`` for the caller's own
-        ``filename`` refused as given. `_dest_name`, which builds a file name, is skipped."""
+        `core/local_paths.py`, Download Station's tasks and the server's instructions, #697), a
+        local path goes through `shown_local` (never ``!r``, which doubles Windows
+        backslashes, nor `shown` on a whole local path, which reads only ``/`` as a
+        separator). `shown` is for a file's own name (``name``, ``effective_name``,
+        ``x.name``), and ``!r`` for the caller's own ``filename`` refused as given.
+        `_dest_name`, which builds a file name, is skipped.
+
+        What it sees, by each file's local-path names: an f-string field; a ``+``, ``%`` or
+        ``.format()`` with text; a message argument (`path_list`, `refuse`, `error_response`'s
+        message, list items and generators in them); in `server.py` a dict's values; and
+        ``Path.home()``. What it can't see, and behavior tests hold instead (QA r1 on #712): a
+        path carried through another variable (``shown_value = value``) or under a name not
+        listed (a renamed loop variable)."""
         import ast
 
         root = Path(__file__).parents[3] / "src" / "mcp_synology"
@@ -2054,27 +2060,38 @@ class TestLocalPathsShown:
         targets = {
             "modules/filestation/transfer.py": transfer,
             "modules/photos/transfer.py": transfer,
-            # `r` is each allowed folder (`for r in roots`), so a raw `str(r)` is caught.
+            # `r` is each allowed folder (`for r in roots`): a raw `str(r)` is caught where it's
+            # written (an f-string, a `path_list` item), not under another loop name.
             "core/local_paths.py": {"value", "path", "refused", "resolved", "entry", "r"},
             "modules/downloadstation/tasks.py": {"torrent_file_path", "path"},
             "server.py": {"r", "root"},
         }
         allowed: set[tuple[str, str, str]] = set()
 
+        def called(call: ast.Call) -> str:
+            """A call's function name: ``f(...)`` or ``x.f(...)``."""
+            return getattr(call.func, "id", "") or getattr(call.func, "attr", "")
+
         def bare(expr: ast.expr, local: set[str]) -> set[str]:
-            """The local names in ``expr`` that aren't inside a `shown_local` call."""
+            """The local paths in ``expr`` that aren't inside a `shown_local` call: a local
+            name read (not a loop's own target, `for r in roots`), or ``Path.home()``."""
             inside: set[int] = set()
             for call in ast.walk(expr):
-                if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "shown_local":
+                if isinstance(call, ast.Call) and called(call) in ("shown_local", "_folder_shown"):
                     inside |= {id(x) for x in ast.walk(call)}
-            return {
-                x.id
-                for x in ast.walk(expr)
-                if isinstance(x, ast.Name)
-                and isinstance(x.ctx, ast.Load)  # not a loop's own target (`for r in roots`)
-                and x.id in local
-                and id(x) not in inside
-            }
+            # A conditional's test isn't written (`a if lexically_inside(path, …) else b`).
+            for cond in ast.walk(expr):
+                if isinstance(cond, ast.IfExp):
+                    inside |= {id(x) for x in ast.walk(cond.test)}
+            found = set()
+            for x in ast.walk(expr):
+                if id(x) in inside:
+                    continue
+                if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Load) and x.id in local:
+                    found.add(x.id)
+                if isinstance(x, ast.Call) and ast.unparse(x.func) == "Path.home":
+                    found.add("Path.home()")
+            return found
 
         def a_name(arg: ast.expr) -> bool:
             if isinstance(arg, ast.Name):
@@ -2090,6 +2107,20 @@ class TestLocalPathsShown:
                 if func.name == "_dest_name":
                     continue
                 for node in ast.walk(func):
+                    # A message argument (QA r1 on #712): `path_list`'s heading and items,
+                    # `refuse`'s text, `error_response`'s message (not `value=`, which is the
+                    # caller's text as sent, nor `param=`), and in `server.py` a dict's values (the
+                    # instructions' template variables, such as LOCAL MACHINE's `home_dir`).
+                    sent: list[ast.expr] = []
+                    if isinstance(node, ast.Call) and called(node) in ("path_list", "refuse"):
+                        sent = [*node.args]
+                    elif isinstance(node, ast.Call) and called(node) == "error_response":
+                        sent = [*node.args[1:]]
+                    elif isinstance(node, ast.Dict) and module == "server.py":
+                        sent = [v for v in node.values if v is not None]
+                    for arg in sent:
+                        if not isinstance(arg, ast.JoinedStr) and bare(arg, local):
+                            found.add((module, func.name, ast.unparse(arg)))
                     # A path joined by + or %, or passed to .format(), with a text (pre-QA r4).
                     joined: list[ast.expr] = []
                     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Mod):

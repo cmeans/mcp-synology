@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Default-ignorable code points (zero-width characters, joiners, variation selectors,
 # tags, soft hyphen, BOM, Hangul fillers; the bidi controls are among them), the other
-# characters the File Station checks say draw nothing (helpers' `_BRAILLE_BLANK` and
+# characters the File Station checks say draw nothing (`core/display.py`'s `_BRAILLE_BLANK` and
 # `_ANNOTATION`: a test keeps this in step), the line and paragraph separators, every
 # space but U+0020 (NBSP, U+3000, ...), and every control character but tab, LF and CR
 # (ESC draws nothing on GitHub, and in a terminal `ESC[2J` clears the screen).
