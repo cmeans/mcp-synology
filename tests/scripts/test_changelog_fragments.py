@@ -1152,13 +1152,38 @@ def test_a_destination_that_isnt_one_stays_text(tmp_path: Path) -> None:
     assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
 
 
-def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path) -> None:
-    """The token would push a 999-character label past CommonMark's limit, so the probe would
-    read it as text: the check refuses it instead of passing it."""
-    label = "a" * 995
+@pytest.mark.parametrize(
+    "label",
+    [
+        "a" * 995,
+        # QA r1 on #738: cmark-gfm counts UTF-8 bytes; 327 `漢` (981 bytes) passed by length.
+        "漢" * 327,
+        "é" * 490,
+    ],
+)
+def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path, label: str) -> None:
+    """The token would push a label near cmark-gfm's 999 bytes past the limit, so the probe
+    would read it as text: the check refuses it instead of passing it."""
     text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
     assert len(found) == 1 and "link reference" in found[0], found
+
+
+@pytest.mark.parametrize("text", ["- [ ]: foo (#731)\n", "- [  ]: foo (#731)\n"])
+def test_a_blank_label_isnt_a_definition(tmp_path: Path, text: str) -> None:
+    """QA r1 on #738: `[ ]:` isn't a definition (CommonMark needs a non-blank label), but the
+    token made it one, and it was refused."""
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert not any("link reference" in problem for problem in found), found
+
+
+@pytest.mark.parametrize("box", ["[ ]", "[x]", "[X]"])
+def test_a_definition_after_a_task_box_is_refused(tmp_path: Path, box: str) -> None:
+    """QA r1 on #738: the tasklist extension reads `- [ ] [docs]: url` as a definition, and the
+    candidate pattern couldn't see past the box."""
+    text = f"- **x** (#731): y\n\n  - {box} [docs]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
 
 
 def test_a_definition_the_fragment_uses_itself_is_refused(tmp_path: Path) -> None:
@@ -1234,6 +1259,45 @@ def test_a_pyproject_toml_that_isnt_utf8_is_named(tmp_path: Path) -> None:
     (root / "pyproject.toml").write_bytes(text.encode("utf-16"))
     found = script.changelog_problems(root)
     assert found and "pyproject.toml is UTF-16" in found[0], found
+
+
+def test_a_pyproject_toml_with_a_byte_order_mark_is_named(tmp_path: Path) -> None:
+    """QA r1 on #738: Notepad's "UTF-8" BOM made tomllib refuse the file, and the check said
+    the start_string was missing."""
+    root = _dir(tmp_path, {})
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    (root / "pyproject.toml").write_text("﻿" + text, encoding="utf-8")
+    assert script.changelog_problems(root) == [script._PYPROJECT_BOM]
+
+
+@pytest.mark.parametrize("opener", ["<?", "<![CDATA["])
+def test_a_processing_instruction_or_cdata_without_a_closer_is_linear(
+    tmp_path: Path, opener: str
+) -> None:
+    """QA r1 on #738: a lazy regex scanned to the end from every `<?` (4x per doubling)."""
+    import time
+
+    text = "- **x** (#731): y\n\n  <div\n  " + opener * (15_000 // len(opener)) + "\n"
+    started = time.monotonic()
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert time.monotonic() - started < 0.5, "quadratic again?"
+    assert len(found) == 1 and "holds raw HTML" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        # The first opener with a closer after it, before any tag.
+        ("  a <? b <? c ?>\n  <span>", 3),
+        ("  <![CDATA[ x\n  ]]> <span>", 3),
+        ("  <span> <?x?>", 3),
+    ],
+)
+def test_a_raw_html_refusal_names_the_first_run(tmp_path: Path, text: str, line: int) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n\n{text}\n"})
+    )
+    assert len(found) == 1 and f"line {line}," in found[0] and "raw HTML" in found[0], found
 
 
 def test_a_fence_closed_by_a_longer_run_still_ends_there(tmp_path: Path) -> None:

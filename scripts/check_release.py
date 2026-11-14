@@ -310,7 +310,13 @@ def problems(tag: str, root: Path) -> list[str]:
     # the fix, not the exception (pre-QA r2 on #735: which of the two to re-save).
     for name in ("pyproject.toml", "CHANGELOG.md"):
         try:
-            (root / name).read_bytes().decode("utf-8")
+            text = (root / name).read_bytes().decode("utf-8")
+            if name == "pyproject.toml" and text.startswith("﻿"):
+                # tomllib refuses the whole file (QA r1 on #738), as changelog_fragments.py says.
+                return [
+                    'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" '
+                    "save writes one): save it as UTF-8 without a BOM."
+                ]
         except UnicodeDecodeError:
             return [
                 f"{name} isn't UTF-8 (a Windows editor's or PowerShell's save does that): save "

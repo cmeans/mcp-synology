@@ -459,6 +459,16 @@ def test_a_file_that_isnt_utf8_is_a_refusal_not_a_traceback(
     assert f"{name} isn't UTF-8" in capsys.readouterr().out
 
 
+def test_a_pyproject_toml_with_a_byte_order_mark_is_named(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """QA r1 on #738: tomllib refused it, and the gate printed `TOMLDecodeError`."""
+    path = repo / "pyproject.toml"
+    path.write_text("﻿" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    assert script.main(["v1.2.3"], repo) == 1
+    assert "pyproject.toml starts with a byte-order mark" in capsys.readouterr().out
+
+
 def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:
     """The job fails only through this: `main()`'s return value has to become the exit code."""
     refused = subprocess.run(

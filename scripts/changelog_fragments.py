@@ -97,8 +97,12 @@ def _is_underline(text: str) -> bool:
 # then confirms (QA r4 on #732). A definition starts a line, after any indent, list markers or
 # `>`, so the pattern is anchored there and tried once a line: tried at every `[`, a run of `\[`
 # was quadratic (QA r5). Its label can run onto later lines, holds no unescaped `[`
-# (CommonMark), and `\` escapes any character, a line break included (pre-QA r10).
-_DEFINITION = re.compile(r"(?m)^[ \t>*+0-9.)-]*\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:")
+# (CommonMark), and `\` escapes any character, a line break included (pre-QA r10). A task-list
+# box (`- [ ] `, `- [x] `) may come before it: the tasklist extension reads what follows as a
+# definition (QA r1 on #738).
+_DEFINITION = re.compile(
+    r"(?m)^(?:[ \t>*+0-9.)-]|\[[ xX]\][ \t])*\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:"
+)
 # Where raw HTML is, outside code and backslash escapes (only for naming its line in a
 # refusal), by CommonMark's raw-HTML grammar: an open tag with its attributes, a closing tag,
 # a comment, a processing instruction, a declaration or CDATA. So an autolink (`<https://x>`,
@@ -108,8 +112,24 @@ _ATTRIBUTE = r"""\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|
 _RAW_TAG = re.compile(
     rf"<[A-Za-z][A-Za-z0-9-]*(?:{_ATTRIBUTE})*\s*/?>"
     r"|</[A-Za-z][A-Za-z0-9-]*\s*>"
-    r"|<!--|<\?[\s\S]*?\?>|<![A-Za-z][^>]*>|<!\[CDATA\[[\s\S]*?\]\]>"
+    r"|<!--|<![A-Za-z][^>]*>"
 )
+# A processing instruction and CDATA run to their closer, found with str.find (`_raw_tag_at`):
+# as a lazy regex, each `<?` with no `?>` after it scanned to the end (QA r1 on #738).
+_RUN_TO = (("<?", "?>"), ("<![CDATA[", "]]>"))
+
+
+def _raw_tag_at(text: str) -> int | None:
+    """Where the first raw HTML in ``text`` starts, or None. Only the first opener of each run
+    needs its closer: a later one would close at the same place or not at all."""
+    starts = [found.start()] if (found := _RAW_TAG.search(text)) else []
+    for opener, closer in _RUN_TO:
+        at = text.find(opener)
+        if at != -1 and text.find(closer, at + len(opener)) != -1:
+            starts.append(at)
+    return min(starts, default=None)
+
+
 # The pinned towncrier, as CLAUDE.md's release step 4 and CI's draft run it (a test checks the
 # three agree): towncrier isn't a project dependency, so a bare `towncrier` is missing or
 # unpinned (#735).
@@ -263,6 +283,12 @@ _HOW = "see changelog.d/README.md"
 SECURITY_MARKER = "**Security release:**"
 # towncrier's start marker (pyproject.toml), or a comment that would hide the rest of the notes.
 _COMMENT = "<!--"
+# A pyproject.toml that starts with a byte-order mark: tomllib refuses the whole file, so towncrier
+# can't read its settings either (QA r1 on #738). check_release.py says the same.
+_PYPROJECT_BOM = (
+    'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" save writes one): '
+    "save it as UTF-8 without a BOM."
+)
 
 
 def _read_text(path: Path, shown: str) -> tuple[str, str | None]:
@@ -481,10 +507,10 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
             # and `</li></ul>` closes the list (QA r4). Only the line holding it is named.
             body = "\n".join(lines)
             # An escape (`\<`, `\\`) is blanked first, so `\<b>` isn't a tag and `\\<br>` is.
-            found = _RAW_TAG.search(re.sub(r"\\[^\n]", "  ", _no_code(body)))
+            start = _raw_tag_at(re.sub(r"\\[^\n]", "  ", _no_code(body)))
             at = "it"
-            if found:
-                raw = body.count("\n", 0, found.start())
+            if start is not None:
+                raw = body.count("\n", 0, start)
                 at = f"line {raw + 1 + lead}, {lines[raw][:60]!r},"
             return (
                 f"{at} holds raw HTML, which GitHub renders as HTML or drops: write it in "
@@ -547,7 +573,9 @@ def _definition_problem(
     destination missed one on the next line of a quote). The token is random and not in the
     text, so a fragment can't write it to look like text (pre-QA r3)."""
     body = "\n".join(lines)
-    candidates = list(_DEFINITION.finditer(body))
+    # A blank label (`[ ]:`) isn't one (CommonMark), but the token would make it one (QA r1 on
+    # #738: a task item `- [ ]: x` was refused).
+    candidates = [c for c in _DEFINITION.finditer(body) if c[2].strip(" \t\n")]
     if not candidates:
         return None
     token = "qz" + secrets.token_hex(8)
@@ -565,7 +593,9 @@ def _definition_problem(
         number
         for number, found in enumerate(candidates)
         # A label made too long by the token stops being one: refuse it rather than pass it.
-        if f"{token}{number}x" not in rendered or len(found[2]) + len(token) + 8 > _LABEL_MAX
+        # cmark-gfm counts the label's UTF-8 bytes (QA r1 on #738: 327 `漢` passed by length).
+        if f"{token}{number}x" not in rendered
+        or len(found[2].encode("utf-8")) + len(token) + 8 > _LABEL_MAX
     ]
     if not defined:
         return None
@@ -811,9 +841,12 @@ def changelog_problems(root: Path) -> list[str]:
     if start is None:
         # A pyproject.toml that isn't UTF-8 has a start_string towncrier can't read either: say
         # how to save it, not that the key is missing (pre-QA r2 on #735).
-        _, unreadable = _read_text(root / "pyproject.toml", "pyproject.toml")
+        config, unreadable = _read_text(root / "pyproject.toml", "pyproject.toml")
         if unreadable:
             return [unreadable]
+        if config.startswith(_BOM):
+            # Notepad's "UTF-8" writes one, and tomllib can't read past it (QA r1 on #738).
+            return [_PYPROJECT_BOM]
         return ["pyproject.toml has no [tool.towncrier] start_string, which the build needs."]
     text, problem = _read_text(root / "CHANGELOG.md", "CHANGELOG.md")
     if problem:
