@@ -1172,6 +1172,50 @@ def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path, labe
     assert len(found) == 1 and "link reference" in found[0], found
 
 
+@pytest.mark.parametrize(
+    ("lines", "prefix"),
+    [
+        # QA r2 on #738: captured with each later line's indent or quote markers, these measured
+        # past the limit and passed; cmark-gfm counts them at 994-995 bytes, and GitHub links
+        # another entry's [label] to them.
+        (["a" * 248] * 4, "  "),
+        (["a" * 198] * 5, "  "),
+        (["a" * 165] * 6, "  "),
+        (["a" * 248] * 4, "  > "),
+    ],
+)
+def test_a_label_across_lines_near_the_limit_is_refused(
+    tmp_path: Path, lines: list[str], prefix: str
+) -> None:
+    label = f"\n{prefix}".join(lines)
+    text = f"- **x** (#731): see\n\n{prefix}[{label}]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
+
+
+def test_a_label_just_short_of_the_band_isnt_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA r2 on #738: the band's upper bound was unpinned. A label that, with the token, is
+    exactly the limit is measured by the render alone; here it isn't a definition (a
+    paragraph's continuation line), so it passes."""
+    monkeypatch.setattr(script.secrets, "token_hex", lambda _n: "ab" * 8)
+    token = "qz" + "ab" * 8 + "0x"
+    label = "a" * (script._LABEL_MAX - len(token))
+    text = f"- **x** (#731): x\n  [{label}]: not a definition here\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_label_refused_only_for_its_length_says_so(tmp_path: Path) -> None:
+    """QA r2 on #738: a near-limit label that can't be a definition (a paragraph's continuation)
+    was told it "defines a link reference"."""
+    text = f"- **x** (#731): x\n  [{'a' * 985}]: not a definition here\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 2," in found[0], found
+    assert "within reach of cmark-gfm's 1000-byte limit" in found[0], found
+    assert "defines a link reference, which" not in found[0], found
+
+
 @pytest.mark.parametrize("label", ["a" * 1001, "é" * 501, "漢" * 334])
 def test_a_label_past_the_limit_isnt_a_definition(tmp_path: Path, label: str) -> None:
     """Pre-QA r4 on #738: a label longer than cmark-gfm takes is text, and it was refused as a

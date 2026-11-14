@@ -568,8 +568,13 @@ def _pushed_past_the_limit(label: str, token: str, number: int) -> bool:
     definition, so it isn't refused (pre-QA r4: it was, as "defines a link reference"). A label
     within reach of the limit is refused even where it wouldn't be one (a paragraph's
     continuation line): the probe can't tell, and such a label is over 970 bytes."""
-    size = len(label.encode("utf-8"))
-    return size <= _LABEL_MAX < size + len(f"{token}{number}x")
+    # A label across lines is captured with each later line's indent and quote markers, which
+    # cmark-gfm drops before it counts (QA r2 on #738: one it counted at 995 bytes was captured at
+    # 1001, read as past the limit, and passed). So the low end leaves them out and the high end
+    # keeps them; dropping a `>` that is the label's own only widens the band.
+    low = len(re.sub(r"\n[ \t>]*", "\n", label).encode("utf-8"))
+    high = len(label.encode("utf-8"))
+    return low <= _LABEL_MAX < high + len(f"{token}{number}x")
 
 
 def _definition_problem(
@@ -615,6 +620,13 @@ def _definition_problem(
     found = candidates[defined[0]]
     index = body.count("\n", 0, found.start(1))
     at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
+    if f"{token}{defined[0]}x" in rendered:
+        # Refused only for its length: it may not be a definition at all (QA r2 on #738).
+        return (
+            f"{at} starts a label within reach of cmark-gfm's {_LABEL_MAX}-byte limit, so the "
+            f"check can't tell whether it defines a link reference or footnote (one would apply "
+            f"to all of CHANGELOG.md): shorten it ({_HOW})."
+        )
     if found[1]:
         return (
             f"{at} defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
