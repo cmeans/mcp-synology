@@ -727,3 +727,24 @@ def test_an_unreadable_tag_list_is_refused_not_assumed(
     assert "couldn't check what release/1.2.x contains" in (
         script.branch_problem(repo, "1.2.3") or ""
     )
+
+
+def test_fragments_left_in_changelog_d_are_refused(repo: Path) -> None:
+    """#731: the release PR assembles changelog.d's fragments into the notes and deletes them, so
+    one left is a change the version's notes don't mention."""
+    fragments = repo / "changelog.d"
+    fragments.mkdir()
+    (fragments / "README.md").write_text("how\n", encoding="utf-8")
+    (fragments / "template.md").write_text("{{ x }}\n", encoding="utf-8")
+    assert script.fragments_problem(repo) is None
+    (fragments / "900.fixed.md").write_text("- **x** (#900): y\n", encoding="utf-8")
+    problem = script.fragments_problem(repo)
+    assert problem is not None
+    assert "900.fixed.md" in problem
+    assert "move them into the version's notes" in problem
+    assert problem in script.problems("v1.2.3", repo)
+
+
+def test_no_changelog_d_passes(repo: Path) -> None:
+    """A backport branch cut before #731 has no changelog.d at all."""
+    assert script.fragments_problem(repo) is None

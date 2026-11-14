@@ -10,6 +10,8 @@ commit or with the wrong version is costly to undo. It checks that:
 - no section above that one has entries, and no Unreleased section anywhere does: a commit after
   the release commit would ship those changes with no notes and no live test. A later commit that
   added no entry still passes;
+- `changelog.d/` holds no fragments (#731): the release PR assembles them into the version's
+  notes, so one left there is a change the notes don't mention;
 - the tagged commit (HEAD) is on `origin/main` or, for a patch on a released line, this version's
   backport branch, `release/<major>.<minor>.x` (as v0.5.3 was, shipping a fix without main's
   unreleased work), cut at an earlier final tag of that line and not from `main`, and containing
@@ -126,6 +128,35 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
             )
         )
     return None
+
+
+# Files in changelog.d that aren't fragments (as in scripts/changelog_fragments.py).
+_NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
+
+
+def _named(names: list[str], limit: int = 10) -> str:
+    shown = ", ".join(names[:limit])
+    return shown if len(names) <= limit else f"{shown} and {len(names) - limit} more"
+
+
+def fragments_problem(root: Path) -> str | None:
+    """Say which CHANGELOG fragments are still in `changelog.d/`, or None: the release PR's
+    `towncrier build` assembles them into the version's notes and deletes them (#731), so one
+    left is a change that isn't in this version's notes."""
+    directory = root / "changelog.d"
+    if not directory.is_dir():
+        return None
+    left = sorted(p.name for p in directory.iterdir() if p.name not in _NOT_FRAGMENTS)
+    if not left:
+        return None
+    return (
+        f"changelog.d/ still holds {len(left)} fragment(s) ({_named(left)}), changes that "
+        f"aren't in this version's notes: assemble them in the release PR (see {_RELEASE_STEPS}). "
+        "If this is the release PR's own squash commit, they merged after its build: move them "
+        "into the version's notes in a PR that deletes them (it takes the 'no changelog' label), "
+        "and tag that PR's squash commit. If "
+        "it's a later commit, tag the release PR's squash commit."
+    )
 
 
 def server_json_problem(root: Path, version: str) -> str | None:
@@ -282,6 +313,7 @@ def problems(tag: str, root: Path) -> list[str]:
         server_json_problem(root, version),
         changelog_problem(changelog, version),
         unreleased_problem(changelog, version, tag_matches=tag == f"v{version}"),
+        fragments_problem(root),
         branch_problem(root, version, tag_matches=tag == f"v{version}"),
     )
     return [problem for problem in found if problem]
@@ -294,6 +326,11 @@ def _annotation(message: str) -> str:
 
 
 def main(argv: list[str], root: Path = Path()) -> int:
+    # A problem can quote a file name or CHANGELOG text: on a console that can't encode it, print
+    # an escape rather than crash (QA r5 on #732, as changelog_fragments.py does).
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="backslashreplace")
     if len(argv) != 1:
         print("usage: check_release.py <tag>", file=sys.stderr)
         return 2
