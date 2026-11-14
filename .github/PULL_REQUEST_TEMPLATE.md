@@ -23,12 +23,13 @@
 ## CHANGELOG
 
 <!--
-  Confirm the matching CHANGELOG.md entry under `## Unreleased`
-  (per CLAUDE.md § "Adding a CHANGELOG entry on every PR"). A release PR,
-  and any fix made for it before the tag, uses the version's notes instead.
-  Categories: Added / Changed / Fixed.
+  Add a fragment, changelog.d/<PR>.<added|changed|fixed>.md, holding the entry
+  as it would read in CHANGELOG.md (per CLAUDE.md § "Adding a CHANGELOG entry
+  on every PR" and changelog.d/README.md). Never edit CHANGELOG.md itself: the
+  release PR assembles the fragments. CI checks the fragment; a PR that needs
+  no entry asks the maintainer for the `no changelog` label.
 -->
 
-- [ ] Added a `## Unreleased` entry to `CHANGELOG.md` under the appropriate Keep-a-Changelog category (Added / Changed / Fixed), or for a release PR, in the version's notes
+- [ ] Added `changelog.d/<PR>.<added|changed|fixed>.md` (or, for a release PR, assembled the fragments into the version's notes)
 
 Closes #
