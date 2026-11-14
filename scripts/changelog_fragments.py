@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import re
+import secrets
 import subprocess
 import sys
 import tomllib
@@ -528,8 +529,8 @@ def _no_code(text: str) -> str:
     return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", blank, fenced)
 
 
-# A definition's destination (or a footnote's first word) after `]:`, on that line or the next.
-_DESTINATION = re.compile(r"[ \t]*\n?[ \t]*(<[^<>\n]*>|\S+)")
+# CommonMark's longest link label: one past it isn't a definition.
+_LABEL_MAX = 999
 
 
 def _definition_problem(
@@ -538,36 +539,34 @@ def _definition_problem(
     """Why the fragment defines a link reference or a footnote, or None. A definition applies to
     the whole document: `[label]` or `[^label]` in any other entry, or in an older release, would
     take its URL or its note, shown at the end of CHANGELOG.md (pre-QA r9 and QA r4 on #732).
-    It's read from the render, not rebuilt: each candidate's destination (a footnote's first
-    word) is swapped for a token of its own, and the notes are rendered once. A definition
-    renders nothing, so its token is gone, or left only in an `href` (a link that uses it) or the
-    footnotes section of a fragment that cites it (refused before this); text, code or a
-    paragraph shows its token (pre-QA r2 on #735: every rebuilt label missed a nesting of quotes
-    or a lazy line)."""
+    It's read from the render, not rebuilt (pre-QA r2 on #735: every rebuilt label missed a
+    nesting of quotes or a lazy line): a token is put at the start of each candidate's label and
+    the notes are rendered once. A definition renders nothing, so its token is gone; text, code
+    or a paragraph shows it. Only the label changes, so whether a line is a definition doesn't:
+    its quote markers, lazy lines and destination stay as written (pre-QA r3: a swapped
+    destination missed one on the next line of a quote). The token is random and not in the
+    text, so a fragment can't write it to look like text (pre-QA r3)."""
     body = "\n".join(lines)
     candidates = list(_DEFINITION.finditer(body))
     if not candidates:
         return None
+    token = "qz" + secrets.token_hex(8)
+    while token in body:
+        token = "qz" + secrets.token_hex(8)
     pieces: list[str] = []
-    tokens: list[tuple[int, str]] = []
     position = 0
     for number, found in enumerate(candidates):
-        # A destination ends on its own line, so it never runs past the next candidate's `]:`
-        # (`[a]:` then `[b]: url` swaps `[b]:` and `url`; GitHub reads both as text).
-        destination = _DESTINATION.match(body, found.end())
-        if destination is None:
-            continue
-        token = f"qzdef{number}zq"
-        pieces += [body[position : destination.start(1)], token]
-        position = destination.end(1)
-        tokens.append((number, token))
+        pieces += [body[position : found.start(2)], f"{token}{number}x"]
+        position = found.start(2)
     pieces.append(body[position:])
     probe = "\n".join([*before, *"".join(pieces).split("\n"), *after]) + "\n"
     rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
-    # A footnote the fragment references itself was refused already, by its rendered section;
-    # one it doesn't reference renders nothing, so its token is gone like a link's.
-    shown = re.sub(r'href="[^"]*"', "", rendered)
-    defined = [number for number, token in tokens if token not in shown]
+    defined = [
+        number
+        for number, found in enumerate(candidates)
+        # A label made too long by the token stops being one: refuse it rather than pass it.
+        if f"{token}{number}x" not in rendered or len(found[2]) + len(token) + 8 > _LABEL_MAX
+    ]
     if not defined:
         return None
     found = candidates[defined[0]]
@@ -810,7 +809,7 @@ def changelog_problems(root: Path) -> list[str]:
     merged."""
     start = _start_string(root)
     if start is None:
-        # A pyproject.toml that isn't UTF-8 has a start_string GitHub can't read either: say
+        # A pyproject.toml that isn't UTF-8 has a start_string towncrier can't read either: say
         # how to save it, not that the key is missing (pre-QA r2 on #735).
         _, unreadable = _read_text(root / "pyproject.toml", "pyproject.toml")
         if unreadable:

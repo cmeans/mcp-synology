@@ -1115,6 +1115,52 @@ def test_a_definition_in_nested_quotes_is_refused_in_release_text(
     assert len(found) == 1 and "line 1," in found[0] and "link reference" in found[0], found
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Pre-QA r3 on #735: a fixed token was guessable; written in the text or a link's title,
+        # it looked like text and the definition passed.
+        "- **x** (#731): see qzdef0zq\n\n  [bar]: https://evil.example\n",
+        '- **x** (#731): see [x](https://ok.example "qzdef0zq")\n\n  [bar]: https://evil.example\n',
+        # A destination on the next line, in a quote, nested, plain; one in angle brackets.
+        "- **x** (#731): see\n\n  > [bar]:\n  > https://evil.example\n",
+        "- **x** (#731): see\n\n  > > [bar]:\n  > > https://evil.example\n",
+        "- **x** (#731): see\n\n  [bar]:\n  https://evil.example\n",
+        "- **x** (#731): see\n\n  [bar]: <https://evil/a b>\n",
+    ],
+)
+def test_a_definition_the_probe_cant_be_fooled_about_is_refused(tmp_path: Path, text: str) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
+
+
+def test_the_token_is_drawn_again_when_the_text_holds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-QA r3 on #735: a token the fragment can write looks like text. The first one drawn
+    here is in the text, so the check must draw another."""
+    draws = iter(["ab12", "cd34"])
+    monkeypatch.setattr(script.secrets, "token_hex", lambda _n: next(draws))
+    text = "- **x** (#731): see qzab120x\n\n  [bar]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "link reference" in found[0], found
+
+
+def test_a_destination_that_isnt_one_stays_text(tmp_path: Path) -> None:
+    """Pre-QA r3 on #735: `[1]: <64>KiB` is text on GitHub, and was refused."""
+    text = "- **x** (#731): sizes\n\n  [1]: <64>KiB\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path) -> None:
+    """The token would push a 999-character label past CommonMark's limit, so the probe would
+    read it as text: the check refuses it instead of passing it."""
+    label = "a" * 995
+    text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "link reference" in found[0], found
+
+
 def test_a_definition_the_fragment_uses_itself_is_refused(tmp_path: Path) -> None:
     """Its token is left in an `href`: still a definition every other entry would get."""
     text = "- **x** (#731): y\n\n  see [foo]\n\n  [foo]: https://e.example\n"
