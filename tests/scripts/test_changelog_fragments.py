@@ -739,6 +739,74 @@ def test_the_towncrier_pins_agree() -> None:
         assert "towncrier==" in path.read_text(encoding="utf-8"), path
 
 
+@pytest.mark.parametrize(
+    ("name", "text", "line"),
+    [
+        ("731.fixed.md", "- **x** (#731): y\n\n  [tracking]: https://example.com/x\n", 3),
+        ("731.fixed.md", "- **x** (#731): see [a][b]\n\n  [b]: https://example.com\n", 3),
+        ("+x.release.md", "Text.\n\n[t]: https://example.com\n", 3),
+    ],
+)
+def test_a_link_reference_definition_is_refused(
+    tmp_path: Path, name: str, text: str, line: int
+) -> None:
+    """Pre-QA r9 on #732: it applies to the whole of CHANGELOG.md, so `[tracking]` in another
+    PR's entry, or an older release, became a link to its URL."""
+    found = script.fragment_problems(_dir(tmp_path, {name: text}))
+    assert len(found) == 1 and f"line {line}," in found[0], found
+    assert "defines a link reference" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Right after the entry's text, it's text, not a definition (GitHub agrees).
+        "- **x** (#731): y\n  [not]: a definition\n",
+        "- **x** (#731): y `[a]: b`\n",
+        "- **x** (#731): an [inline](https://example.com) link\n",
+    ],
+)
+def test_what_isnt_a_link_reference_definition_passes(tmp_path: Path, text: str) -> None:
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_long_run_of_dashes_is_read_in_linear_time(tmp_path: Path) -> None:
+    """Pre-QA r9 on #732: the underline regex took quadratic time on a long run of dashes (20,000
+    took 2.7 s; a megabyte, about 2 h of CI)."""
+    import time
+
+    text = "- **x** (#731): y\n  " + "-" * 200_000 + "x\n  ===\n"
+    started = time.monotonic()
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert time.monotonic() - started < 2, "quadratic again?"
+    assert len(found) == 1 and "line 3, '  ===', reads as a heading" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("text", "underline"),
+    [
+        ("---", True),
+        ("  ===  ", True),
+        ("  > - 1. ---", True),
+        ("-", True),
+        ("--x", False),
+        ("x---", False),
+        ("", False),
+        ("  ", False),
+        ("== x", False),
+    ],
+)
+def test_what_reads_as_an_underline(text: str, underline: bool) -> None:
+    assert script._is_underline(text) is underline
+
+
+def test_notes_that_dont_start_with_the_versions_heading_are_refused() -> None:
+    """The layout's first block is the version's `## ` heading; anything else is a problem."""
+    for text, kind in (("### Added\n\n- x\n", "heading"), ("Text.\n\n### Added\n\n- x\n", "split")):
+        layout = script._layout(text)
+        assert layout.problem is not None and layout.problem[0] == kind, (text, layout)
+
+
 def test_the_parser_pins_agree() -> None:
     """CI runs the check from the `changelog` dependency group, at uv.lock's versions (pre-QA r8
     on #732: pins copied into the workflow broke on a Dependabot bump of cffi); the tests run it

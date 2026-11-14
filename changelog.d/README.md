@@ -14,7 +14,7 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   - **How it renders is checked with cmark-gfm**, the parser GitHub's Markdown is built on: the
     fragment is placed between two other entries of its category, as a release assembles it, and
     must stay one item of that list, leaving the entries around it and the next category as they
-    were, with no heading or footnote in it. So indent any later line 2 spaces or more: at column 0 or 1, a
+    were, with no heading, footnote or link reference definition (`[label]: url`, which would apply to every entry: write links inline) in it. So indent any later line 2 spaces or more: at column 0 or 1, a
     fence, `>`, `1.`, `---`, a table after a blank line, a footnote definition, another `-`, `*`
     or `+`, or an HTML tag alone on a line (`<details>`, `<span>`) ends the entry and splits the
     notes or swallows the rest of them. HTML indented into the entry stays inside it. A

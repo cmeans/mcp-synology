@@ -66,8 +66,22 @@ _NEXT = "- **Next** (#3): the next category's entry"
 # GitHub's Markdown options, as far as structure goes, plus each block's source lines.
 _OPTIONS = Options.CMARK_OPT_SOURCEPOS | Options.CMARK_OPT_FOOTNOTES
 _HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
-# A setext heading's underline, at any depth (after a list marker or a quote's `>`).
-_UNDERLINE = re.compile(r"[ \t>*+0-9.)-]*?(?:=+|-+)[ \t]*$")
+# What may stand before a setext underline: indent, list markers and a quote's `>`.
+_UNDER_PREFIX = re.compile(r"[ \t>*+0-9.)-]*")
+
+
+def _is_underline(text: str) -> bool:
+    """Whether ``text`` is a setext heading's underline, at any depth (after list markers or a
+    quote's `>`): a run of `=` or `-` ending the line. Linear: a regex with a lazy prefix that can
+    hold `-` took quadratic time on a long run of dashes (pre-QA r9 on #732)."""
+    body = text.rstrip(" \t")
+    if not body or body[-1] not in "=-":
+        return False
+    return _UNDER_PREFIX.fullmatch(body.rstrip(body[-1])) is not None
+
+
+# A link reference definition's label, at any indent (a candidate the parser then confirms).
+_LINK_DEFINITION = re.compile(r"[ \t>]*\[([^\]\\]+)\]:")
 _VOID = frozenset({"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"})
 
 
@@ -113,7 +127,7 @@ class _Shape(HTMLParser):
         if tag in _HEADINGS and first is not None and last is not None and first != last:
             # A setext heading: name its underline, the line that makes it one. cmark-gfm's end
             # for one can run onto the next line, so the underline is looked for, not assumed.
-            underline = (n for n in range(first + 1, last + 1) if _UNDERLINE.match(self.at(n)))
+            underline = (n for n in range(first + 1, last + 1) if _is_underline(self.at(n)))
             line = next(underline, first)
         if self.depth == 0:
             gap = self._after()
@@ -358,6 +372,29 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
             "it opens a block it doesn't close (a code fence, most likely), which would swallow "
             "the rest of the notes."
         )
+    return _link_definition_problem(lines, lead, before, after)
+
+
+def _link_definition_problem(
+    lines: list[str], lead: int, before: list[str], after: list[str]
+) -> str | None:
+    """Why the fragment defines a link reference, or None. A definition applies to the whole
+    document, like a footnote: `[label]` in any other entry, or in an older release, would link to
+    its URL (pre-QA r9 on #732). Each candidate line is confirmed by rendering: a `[label]` after
+    the notes turns into a link only if the fragment defined it."""
+    for index, text in enumerate(lines):
+        found = _LINK_DEFINITION.match(text)
+        if found is None:
+            continue
+        probe = "\n".join([*before, *lines, *after, "", f"[{found[1]}]"]) + "\n"
+        rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
+        last = rendered.rstrip().rsplit("\n", 1)[-1]
+        if "<a " in last:
+            return (
+                f"line {index + 1 + lead}, {text[:60]!r}, defines a link reference, which would "
+                f"apply to all of CHANGELOG.md, other entries and older releases too: write the "
+                f"link inline, [text](url) ({_HOW})."
+            )
     return None
 
 
