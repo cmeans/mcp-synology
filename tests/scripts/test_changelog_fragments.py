@@ -149,6 +149,9 @@ def test_indented_lines_are_neither_headings_nor_entries(tmp_path: Path) -> None
         "  more\n  ---",
         "  - ## In a nested item",
         "  > ## In a block quote",
+        # Pre-QA r7 on #732: GitHub renders an ordered item's heading too.
+        "  1. # Ordered heading",
+        "  1) # Ordered heading",
     ],
 )
 def test_every_commonmark_heading_is_refused(tmp_path: Path, line: str) -> None:
@@ -170,13 +173,82 @@ def test_a_heading_refusal_names_its_line(tmp_path: Path) -> None:
     ], found
 
 
+def test_a_refusal_counts_blank_lines_before_the_entry(tmp_path: Path) -> None:
+    """Pre-QA r7 on #732: the number is the file's own line, leading blank lines included."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "\n\n- **x** (#731): y\n## h\n"})
+    )
+    assert len(found) == 1 and "line 4," in found[0], found
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "```",
+        "~~~",
+        "<pre>",
+        "<DIV>",
+        " <script>",
+        "> quoted",
+        "1. ordered",
+        "1) ordered",
+        "***",
+        "_ _ _",
+    ],
+)
+def test_a_block_opened_outside_the_entry_is_refused(tmp_path: Path, line: str) -> None:
+    """Pre-QA r7 on #732: at column 0 or 1 a line isn't inside the list item, so a fence or
+    <pre> turned every later entry and category into one code block on GitHub, and a quote, an
+    ordered item or a rule split the list."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
+    )
+    assert len(found) == 1 and "line 2," in found[0] and "starts a block" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "line", ["  ```", "  > quoted", "  1. ordered", "wrapped text", "#hashtag", "  <pre>x</pre>"]
+)
+def test_lines_inside_the_entry_may_open_blocks(tmp_path: Path, line: str) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
+    )
+    assert found == [], found
+
+
+def test_a_release_text_may_hold_a_closed_fence_only(tmp_path: Path) -> None:
+    closed = "**Upgrading:**\n\n```\nuv tool upgrade mcp-synology\n```\n"
+    assert script.fragment_problems(_dir(tmp_path, {"+upgrade.release.md": closed})) == []
+    found = script.fragment_problems(
+        _dir(
+            tmp_path / "unclosed",
+            {"+upgrade.release.md": "**Upgrading:**\n\n```\nuv tool upgrade x\n"},
+        )
+    )
+    assert len(found) == 1 and "doesn't close" in found[0], found
+
+
+def test_a_byte_order_mark_is_named(tmp_path: Path) -> None:
+    """Pre-QA r7 on #732: Notepad's BOM used to read as "an entry starts with `- `"."""
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": "\ufeff- **x** (#731): y\n"}))
+    assert len(found) == 1 and "byte-order mark" in found[0], found
+
+
 def test_a_heading_as_the_entry_itself_is_refused(tmp_path: Path) -> None:
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": "- ## x (#731): y\n"}))
     assert len(found) == 1 and "line 1" in found[0], found
 
 
 @pytest.mark.parametrize(
-    "line", ["####### Seven", "#hashtag", "      ## Six spaces is code", "\t  ## Tab and two"]
+    "line",
+    [
+        "####### Seven",
+        "#hashtag",
+        "      ## Six spaces is code",
+        "\t  ## Tab and two",
+        # Pre-QA r7 on #732: a YAML list item with a comment, inside indented code.
+        "      modules:\n        - # filestation",
+    ],
 )
 def test_what_commonmark_doesnt_read_as_a_heading_passes(tmp_path: Path, line: str) -> None:
     found = script.fragment_problems(

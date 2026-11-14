@@ -9,7 +9,10 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   free text (a `**Security release:** …` line, an Upgrading block) goes in
   `+<name>.release.md`, printed before the categories.
 - **Content:** the entry exactly as it would appear under its `### ` heading in `CHANGELOG.md`:
-  `- **Title** (#PR): what changed and why — closes #N`, on one line, with no heading. Its first
+  `- **Title** (#PR): what changed and why — closes #N`, usually on one line, with no heading.
+  Indent any later line 2 spaces or more: at column 0 or 1, a fence, `<pre>`, `>`, `1.` or `***`
+  would end the entry and split the notes or swallow the rest of them. Save it as UTF-8 without a
+  byte-order mark. Its first
   `(#N)` is the file's PR number. No line reads as a heading inside the entry, a list item whose content
   starts at column 2: up to 5 spaces, `#` to `######`, then a space, a tab or the line's end; a
   `===` or `---` underline; or a heading after a nested `-`, `1.` or `>`. That goes for a code

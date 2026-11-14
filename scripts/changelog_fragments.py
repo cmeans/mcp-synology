@@ -33,9 +33,21 @@ NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
 # tab or the line's end; or a setext underline (=== or ---) (pre-QA r6 and QA r2 on #732: each
 # renders as a heading on GitHub's release page). Tabs are expanded to 4 columns first.
 _HEADING = re.compile(r" {0,5}(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)")
-# A nested list item or block quote inside the entry: a heading after one renders at any depth.
-_NESTED = re.compile(r" *(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+|>[ \t]?)+")
+# A nested list item or block quote inside the entry, up to 5 spaces in (6 or more is indented
+# code, pre-QA r7 on #732): a heading after one renders at any depth.
+_NESTED = re.compile(r" {0,5}(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+|>[ \t]?)+")
 _NESTED_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
+# A line at column 0 or 1 isn't inside the entry, so one that opens a block ends the list: a
+# fence or `<pre>` (and the like) turns the rest of the notes, later categories too, into one
+# block; a quote, an ordered item or a thematic break splits the category's list (pre-QA r7 on
+# #732, rendered with GitHub's Markdown API). Indent an entry's continuation lines 2 or more.
+_BLOCK_START = re.compile(
+    r" ?(?:```|~~~|<(?:pre|script|style|textarea|div)\b|>|[0-9]{1,9}[.)](?:[ \t]|$)"
+    r"|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$)",
+    re.IGNORECASE,
+)
+_FENCE = re.compile(r" {0,3}(?:```|~~~)")
+_BOM = "\ufeff"
 
 
 def _heading_line(lines: list[str]) -> tuple[int, str] | None:
@@ -100,15 +112,20 @@ def fragment_problems(root: Path) -> list[str]:
 def _content_problem(text: str, pr: str | None) -> str | None:
     """Why ``text`` isn't a fragment's content, or None. ``pr`` is the entry's PR number from its
     name, or None for a release's own text."""
+    if text.startswith(_BOM):
+        # Windows Notepad's "UTF-8" adds one; without this, the entry check below says the
+        # file doesn't start with `- `, which it visibly does (pre-QA r7 on #732).
+        return "it starts with a byte-order mark (U+FEFF): save it as UTF-8 without a BOM."
     if not text.strip():
         return "it's empty."
     lines = text.strip("\n").splitlines()
+    lead = len(text) - len(text.lstrip("\n"))  # blank lines before the first, for line numbers
     # Line by line, code blocks too: every reader of CHANGELOG.md (publish.yml's awk, the release
     # gate) is line-based, so a heading inside a fence still ends the section (pre-QA r5 on #731).
     heading = _heading_line(lines)
     if heading:
         at, shown = heading
-        at += len(text) - len(text.lstrip("\n"))  # the file's own line number
+        at += lead  # the file's own line number
         return (
             f"line {at}, {shown[:60]!r}, reads as a heading; the notes add the category "
             f"headings ({_HOW})."
@@ -116,6 +133,13 @@ def _content_problem(text: str, pr: str | None) -> str | None:
     if _COMMENT in text:
         return "it has `<!--`, which would hide the rest of the notes (towncrier's marker too)."
     if pr is None:
+        # A release's own text may hold a fenced block (an Upgrading example) at column 0, but
+        # an unclosed one would swallow the rest of the notes.
+        if sum(1 for line in lines if _FENCE.match(line)) % 2:
+            return (
+                "it opens a code fence (``` or ~~~) it doesn't close, which would swallow the "
+                "rest of the notes."
+            )
         return None
     if SECURITY_MARKER in text:
         return (
@@ -126,6 +150,13 @@ def _content_problem(text: str, pr: str | None) -> str | None:
         return "an entry starts with `- `, as it would under its heading in CHANGELOG.md."
     if any(re.match(r"[-*+] ", line) for line in lines[1:]):
         return f"it holds more than one entry; give each its own file ({_HOW})."
+    for at, line in enumerate(lines[1:], start=2 + lead):
+        if _BLOCK_START.match(line.expandtabs(4)):
+            return (
+                f"line {at}, {line[:60]!r}, starts a block outside the entry, which would split "
+                f"or swallow the notes after it: indent the entry's later lines 2 spaces or more "
+                f"({_HOW})."
+            )
     number = re.search(r"\(#([0-9]+)", lines[0])
     if number is None or number.group(1) != pr:
         return f"its first (#N) isn't #{pr}, the PR number in its name."
