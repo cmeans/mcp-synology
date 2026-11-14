@@ -28,6 +28,7 @@ Usage:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -130,8 +131,9 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
     return None
 
 
-# Files in changelog.d that aren't fragments (as in scripts/changelog_fragments.py).
-_NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
+# Files in changelog.d that aren't fragments, as glob patterns (as in
+# scripts/changelog_fragments.py and towncrier's `ignore`, #734).
+_NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".*", "*~", "Thumbs.db", "desktop.ini"})
 
 
 def _named(names: list[str], limit: int = 10) -> str:
@@ -146,7 +148,11 @@ def fragments_problem(root: Path) -> str | None:
     directory = root / "changelog.d"
     if not directory.is_dir():
         return None
-    left = sorted(p.name for p in directory.iterdir() if p.name not in _NOT_FRAGMENTS)
+    left = sorted(
+        p.name
+        for p in directory.iterdir()
+        if not any(fnmatch.fnmatchcase(p.name, pattern) for pattern in _NOT_FRAGMENTS)
+    )
     if not left:
         return None
     return (

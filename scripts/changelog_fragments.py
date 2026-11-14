@@ -22,6 +22,7 @@ Usage (after `uv sync --extra dev`):
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import subprocess
 import sys
@@ -41,9 +42,18 @@ except ImportError:  # pre-QA r8 on #732: a plain `python` gave a traceback
     )
 
 DIRECTORY = "changelog.d"
-# Files in the directory that aren't fragments (also towncrier's `ignore`, in pyproject.toml).
-# macOS writes .DS_Store into a folder Finder opens; towncrier would refuse it (pre-QA r6 on #732).
-NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
+# Files in the directory that aren't fragments, as glob patterns (also towncrier's `ignore`, in
+# pyproject.toml, and check_release.py's copy): hidden files (macOS's .DS_Store and ._ files,
+# an editor's .swp, .gitkeep), editor backups (`~`) and Windows' folder files, which towncrier
+# would refuse and the check called misnamed fragments (pre-QA r6 on #732, #734).
+NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".*", "*~", "Thumbs.db", "desktop.ini"})
+
+
+def not_a_fragment(name: str) -> bool:
+    """Whether a file named ``name`` in `changelog.d/` is one of NOT_FRAGMENTS's patterns."""
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in NOT_FRAGMENTS)
+
+
 # The release tools read CHANGELOG.md line by line (publish.yml's awk, the release gate), so a
 # heading at a line's start ends a section there even inside a code block, where GitHub shows it
 # as code (pre-QA r5 on #731).
@@ -81,15 +91,26 @@ def _is_underline(text: str) -> bool:
     return _UNDER_PREFIX.fullmatch(body.rstrip(body[-1])) is not None
 
 
-# A link reference or footnote definition's label, anywhere in the text and across lines (a
-# candidate the parser then confirms, QA r4 on #732): `[label]:` or `[^label]:`.
-# A label holds no unescaped `[` (CommonMark), and `\` escapes any character, a line break
-# included (pre-QA r10 on #732). A definition starts a line, after any indent, list markers or
-# `>`, so a candidate is tried once a line: tried at every `[`, a run of `\[` was quadratic
-# (QA r5 on #732).
+# A link reference or footnote definition, `[label]:` or `[^label]:`, as a candidate the parser
+# then confirms (QA r4 on #732). A definition starts a line, after any indent, list markers or
+# `>`, so the pattern is anchored there and tried once a line: tried at every `[`, a run of `\[`
+# was quadratic (QA r5). Its label can run onto later lines, holds no unescaped `[`
+# (CommonMark), and `\` escapes any character, a line break included (pre-QA r10).
 _DEFINITION = re.compile(r"(?m)^[ \t>*+0-9.)-]*\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:")
-# Where raw HTML starts, outside code spans (only for naming its line in a refusal).
-_RAW_TAG = re.compile(r"<[A-Za-z/!?]")
+# Where raw HTML is, outside code (only for naming its line in a refusal): a tag closed on its
+# line, not an autolink (`<https://x>`, `<a@b.c>`) or an escaped `\<`, and not a `<` that never
+# closes (`a<b and`), which aren't raw HTML (#734).
+_RAW_TAG = re.compile(
+    r"(?<!\\)<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?![^\s<>@]+@[^\s<>]+>)"
+    r"[A-Za-z/!?][^<>\n]*>"
+)
+# The pinned towncrier, as CLAUDE.md's release step 4 and CI's draft run it (a test checks the
+# three agree): towncrier isn't a project dependency, so a bare `towncrier` is missing or
+# unpinned (#735).
+TOWNCRIER = (
+    "uvx --from towncrier==26.9.0 --with click==8.5.1 --with jinja2==3.1.6 "
+    "--with markupsafe==3.0.4 towncrier"
+)
 # A fragment's size limit: an entry is a line or a short paragraph, a release's text a few
 # (the largest entry so far is 5 KiB). Rendering one costs memory (QA r4 on #732).
 _MAX_BYTES = 16 * 1024
@@ -238,6 +259,32 @@ SECURITY_MARKER = "**Security release:**"
 _COMMENT = "<!--"
 
 
+def _read_text(path: Path, shown: str) -> tuple[str, str | None]:
+    """``path``'s text and None, or "" and why it can't be read. A file that isn't UTF-8 is
+    told how to save it (#734): Windows PowerShell 5.1's `echo ... >` and `Out-File` write
+    UTF-16 with a byte-order mark, and an "ANSI" editor or `Set-Content` writes cp1252."""
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return "", f"couldn't read {shown}: {type(error).__name__}"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "", (
+            f"{shown} is UTF-16 (Windows PowerShell's `>` and Out-File write it): save it as "
+            f"UTF-8 without a byte-order mark ({_HOW})."
+        )
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        line = data.count(b"\n", 0, error.start) + 1
+        return "", (
+            f"{shown} isn't UTF-8 (line {line} holds a byte "
+            f"that doesn't decode; an editor's \"ANSI\" or cp1252 save does that): save it as "
+            f"UTF-8 without a byte-order mark ({_HOW})."
+        )
+    # Universal newlines, as read_text() gave: \r\n and \r become \n.
+    return text.replace("\r\n", "\n").replace("\r", "\n"), None
+
+
 def fragment_problems(root: Path) -> list[str]:
     """Every reason a file in `changelog.d/` wouldn't assemble into the notes as written."""
     directory = root / DIRECTORY
@@ -247,7 +294,7 @@ def fragment_problems(root: Path) -> list[str]:
     contents: dict[str, list[str]] = {}
     for path in sorted(directory.iterdir()):
         name = path.name
-        if name in NOT_FRAGMENTS:
+        if not_a_fragment(name):
             continue
         shown = f"{DIRECTORY}/{name}"
         entry, release = _ENTRY.fullmatch(name), _RELEASE.fullmatch(name)
@@ -263,10 +310,9 @@ def fragment_problems(root: Path) -> list[str]:
                 f"text ({_HOW})."
             )
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            found.append(f"couldn't read {shown}: {type(error).__name__}")
+        text, unreadable = _read_text(path, shown)
+        if unreadable:
+            found.append(unreadable)
             continue
         problem = _content_problem(text, entry.group("pr") if entry else None)
         if problem:
@@ -350,6 +396,13 @@ def _invisible_problem(text: str) -> str | None:
         ):
             line = text.count("\n", 0, index) + 1
             name = unicodedata.name(character, "a control character")
+            if character == "\0" and text.count("\0") * 3 >= len(text):
+                # UTF-16 without a byte-order mark reads as UTF-8 with a NUL beside each
+                # ASCII character (#734).
+                return (
+                    f"it holds U+0000 throughout, as UTF-16 does: save it as UTF-8 without a "
+                    f"byte-order mark ({_HOW})."
+                )
             return (
                 f"line {line} holds U+{ord(character):04X} ({name}), which doesn't show in the "
                 f"notes or acts on a terminal: remove it ({_HOW})."
@@ -399,7 +452,10 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
             # CHANGELOG.md, after every older release (pre-QA r8 on #732). At column 0 a
             # definition also ends the list, but indenting it wouldn't help, so say what would.
             body = "\n".join(lines)
-            notes = [body.count("\n", 0, m.start()) for m in _DEFINITION.finditer(body) if m[1]]
+            code_free = _no_code(body)
+            marks = [m for m in _DEFINITION.finditer(body) if m[1]]
+            marks = [m for m in marks if code_free[m.start(1) - 1] == "["] or marks
+            notes = [body.count("\n", 0, m.start(1)) for m in marks]
             at = f"line {notes[0] + 1 + lead}, {lines[notes[0]][:60]!r}, " if notes else ""
             return (
                 f"{at}defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
@@ -458,20 +514,32 @@ def _no_code(text: str) -> str:
     def blank(found: re.Match[str]) -> str:
         return re.sub(r"[^\n]", " ", found[0])
 
-    fenced = re.sub(r"(?ms)^ *(`{3,}|~{3,}).*?(?:^ *\1[ \t]*$|\Z)", blank, text)
+    # A fence closes on a run of its own character at least as long as the one that opened it
+    # (#734: a longer close blanked everything after it).
+    fenced = re.sub(r"(?ms)^ *((`|~)\2{2,}).*?(?:^ *\1\2*[ \t]*$|\Z)", blank, text)
     return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", blank, fenced)
 
 
-def _probe_links(notes: list[str], references: list[str]) -> list[str]:
+def _probe_renders(notes: list[str], references: list[str]) -> list[str]:
     """How GitHub renders each of ``references`` after ``notes``, one paragraph each, in order.
     Each is a paragraph of its own: in one, a backtick or a `<` in one label paired with
-    another's into a code span or a tag, and neither became a link (QA r5 on #732)."""
+    another's into a code span or a tag, and neither became a link (QA r5 on #732). Only the
+    paragraphs from the references' own lines count, so a footnotes section, whose paragraphs
+    carry its definitions' earlier lines, needs no special case (#735)."""
     probe = "\n\n".join(["\n".join(notes), *references]) + "\n"
     rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
-    # The footnotes section, at the end, isn't one of the references.
-    rendered = rendered.split('<section class="footnotes"', 1)[0]
     found = re.findall(r'<p data-sourcepos="(\d+):[^"]*">(.*?)</p>', rendered, re.S)
     return [html for line, html in found if int(line) >= len(notes) + 2]
+
+
+def _labels(found: re.Match[str]) -> list[str]:
+    """The labels GitHub may match for a candidate whose label runs onto later lines: its
+    whitespace collapsed, and with each later line's quote markers taken off too, for a
+    definition in a quote (QA r5 on #732). Both are probed: a `>` on a line indented into a
+    paragraph is text in the label (#735), and which one a line holds isn't read here."""
+    collapsed = " ".join(found[2].split())
+    unquoted = " ".join(re.sub(r"\n[ \t>]*", " ", found[2]).split())
+    return list(dict.fromkeys([collapsed, unquoted]))
 
 
 def _definition_problem(
@@ -480,40 +548,43 @@ def _definition_problem(
     """Why the fragment defines a link reference or a footnote, or None. A definition applies to
     the whole document: `[label]` or `[^label]` in any other entry, or in an older release, would
     take its URL or its note, shown at the end of CHANGELOG.md (pre-QA r9 and QA r4 on #732).
-    Candidates come from the whole text (a label can span lines, a definition can follow a list
-    marker), and one render confirms them all: after the notes, a reference to each label
-    becomes a link only if the fragment defined it."""
+    Each candidate's references (one per label GitHub may match) are rendered after the notes
+    twice, with the fragment and without it: one that renders otherwise with it is a label the
+    fragment defined, whatever it links to (GitHub links an email by itself, pre-QA r10)."""
     body = "\n".join(lines)
     candidates = list(_DEFINITION.finditer(body))
     if not candidates:
         return None
-    references = []
+    references: list[str] = []
+    owners: list[int] = []
     for number, found in enumerate(candidates):
-        # A label across lines carries each later line's indent and `>` (QA r5 on #732): the
-        # label GitHub matches is the text without them, its whitespace collapsed.
-        label = " ".join(re.sub(r"\n[ \t>]*", " ", found[2]).split())
-        references.append(f"QZ{number}ZQ [{found[1]}{label}]")
-    # GitHub links some text by itself (an email, `www.`), defined or not (pre-QA r10 on #732):
-    # the fragment defines a label when its reference renders otherwise with the fragment than
-    # without it, whatever it links to (QA r5 and pre-QA r11).
-    with_it = _probe_links([*before, *lines, *after, ""], references)
-    without = _probe_links([*before, *after, ""], references)
-    defined = [n for n, html in enumerate(with_it) if n >= len(without) or html != without[n]]
-    for number in defined:
-        found = candidates[number]
-        index = body.count("\n", 0, found.start())
-        at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
-        if found[1]:
-            return (
-                f"{at} defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
-                f"after every older release, and give to any other entry's [^{found[2]}]: write "
-                f"the note in the entry's text ({_HOW})."
-            )
+        for label in _labels(found):
+            references.append(f"QZ{len(references)}ZQ [{found[1]}{label}]")
+            owners.append(number)
+    with_it = _probe_renders([*before, *lines, *after, ""], references)
+    without = _probe_renders([*before, *after, ""], references)
+    defined = sorted(
+        {owners[n] for n, html in enumerate(with_it) if n >= len(without) or html != without[n]}
+    )
+    if not defined:
+        return None
+    # Labels match regardless of case, so `[foo]: b` in a code block renders as defined when
+    # `[Foo]: url` is the definition: name one outside code (#735).
+    code_free = _no_code(body)
+    outside = [n for n in defined if code_free[candidates[n].start(1) - 1] == "["]
+    found = candidates[(outside or defined)[0]]
+    index = body.count("\n", 0, found.start(1))
+    at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
+    if found[1]:
         return (
-            f"{at} defines a link reference, which would apply to all of CHANGELOG.md, other "
-            f"entries and older releases too: write the link inline, [text](url) ({_HOW})."
+            f"{at} defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
+            f"after every older release, and give to any other entry's [^{found[2]}]: write "
+            f"the note in the entry's text ({_HOW})."
         )
-    return None
+    return (
+        f"{at} defines a link reference, which would apply to all of CHANGELOG.md, other "
+        f"entries and older releases too: write the link inline, [text](url) ({_HOW})."
+    )
 
 
 def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | None:
@@ -554,10 +625,10 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
     if release_texts and _release_version(root, base) is None and _bumped(root, base):
         # Written before the build, as release step 4 says: the build makes it a release PR.
         return (
-            f"this PR bumps the version and adds or changes a release's own text "
-            f"({_named(release_texts)}), but CHANGELOG.md has no section for the new version "
-            f"yet: run `towncrier build --version <version> --yes` (CLAUDE.md, release step 4), "
-            f"which assembles the text and every fragment into it."
+            f"this PR bumps the version to {_head_version(root)} and adds or changes a release's "
+            f"own text ({_named(release_texts)}), but CHANGELOG.md has no section for it yet: "
+            f"run `{TOWNCRIER} build --version {_head_version(root)} --yes` (CLAUDE.md, release "
+            f"step 4), which assembles the text and every fragment into it."
         )
     if release_texts and _release_version(root, base) is None:
         return (
@@ -572,15 +643,23 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
         # release's notes, the label or not (QA r5 on #732).
         # The section is there (that's what makes it a release PR), so towncrier refuses to
         # build again: the text goes in by hand, as _removal_problem says (pre-QA r11).
+        # Reverting the build to build again also reverted the version bump when the release
+        # was committed as one commit (release step 6), and the branch stopped being a release
+        # PR (#735): the hand move is the advice.
         version = _release_version(root, base)
         left = _fragments_left(root)
+        texts = [name for name in left if _RELEASE.fullmatch(name)]
+        others = [name for name in left if name not in texts]
+        also = (
+            f", and each other fragment's entry ({_named(others)}) into its category there"
+            if others
+            else ""
+        )
         return (
-            f"this release PR ({version}) adds or changes a release's own text "
-            f"({_named(release_texts)}) but leaves {_named(left)} in {DIRECTORY}/, the "
+            f"this release PR ({version}) leaves its own text unbuilt ({_named(texts)}), the "
             f"{SKIP_LABEL!r} label or not: towncrier won't build {version} again, so move the "
             f"text into the '## {version}' section by hand (a `**Security release:**` line "
-            f"first) and delete the file, or revert the build and build again with the text in "
-            f"place."
+            f"first){also}, and delete the files."
         )
     if SKIP_LABEL in labels:
         return None
@@ -589,7 +668,7 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
     for line in changed:
         status, _, path = line.partition("\t")
         name = Path(path).name
-        if name in NOT_FRAGMENTS:
+        if not_a_fragment(name):
             continue
         entry = _ENTRY.fullmatch(name)
         if status == "D":
@@ -651,7 +730,7 @@ def _fragments_left(root: Path) -> list[str]:
     directory = root / DIRECTORY
     if not directory.is_dir():
         return []
-    return sorted(p.name for p in directory.iterdir() if p.name not in NOT_FRAGMENTS)
+    return sorted(p.name for p in directory.iterdir() if not not_a_fragment(p.name))
 
 
 def _git_show(root: Path, revision: str, path: str) -> str | None:
@@ -675,6 +754,14 @@ def _version(pyproject: str | None) -> str | None:
     except (tomllib.TOMLDecodeError, KeyError, TypeError):
         return None
     return version if isinstance(version, str) else None
+
+
+def _head_version(root: Path) -> str:
+    """`pyproject.toml`'s version on this branch, or `<version>` when it can't be read."""
+    try:
+        return _version((root / "pyproject.toml").read_text(encoding="utf-8")) or "<version>"
+    except (OSError, UnicodeDecodeError):
+        return "<version>"
 
 
 def _bumped(root: Path, base: str) -> bool:
@@ -726,10 +813,9 @@ def changelog_problems(root: Path) -> list[str]:
     start = _start_string(root)
     if start is None:
         return ["pyproject.toml has no [tool.towncrier] start_string, which the build needs."]
-    try:
-        text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        return [f"couldn't read CHANGELOG.md: {type(error).__name__}"]
+    text, problem = _read_text(root / "CHANGELOG.md", "CHANGELOG.md")
+    if problem:
+        return [problem]
     marker = start.strip()
     found: list[str] = []
     headings = list(re.finditer(r"^## Unreleased[ \t]*$", text, re.MULTILINE))
@@ -826,10 +912,9 @@ def main(argv: list[str], root: Path = Path()) -> int:
     notes.add_argument("draft", type=Path, help="the file `towncrier build --draft` wrote")
     args = parser.parse_args(argv)
     if args.command == "notes":
-        try:
-            draft = args.draft.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            print(_annotation(f"couldn't read {args.draft}: {type(error).__name__}"))
+        draft, problem = _read_text(args.draft, str(args.draft))
+        if problem:
+            print(_annotation(problem))
             return 1
         found = notes_problems(root, draft)
         for message in found:
