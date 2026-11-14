@@ -648,8 +648,23 @@ def test_a_release_pr_may_not_leave_its_own_text_unbuilt(branch: Path, labels: l
     _commit(branch)
     problem = script.branch_problem(branch, "main", 731, labels)
     assert problem is not None and "only a release PR" not in problem, problem
-    assert "leaves 1 CHANGELOG fragment(s) unbuilt (+x.release.md)" in problem, problem
-    assert "towncrier build" in problem, problem
+    assert "this release PR (1.1.0)" in problem and "leaves +x.release.md" in problem, problem
+    # The section is there, so towncrier refuses to build again (pre-QA r11 on #732).
+    assert "towncrier won't build 1.1.0 again" in problem, problem
+    assert "into the '## 1.1.0' section by hand" in problem, problem
+
+
+@pytest.mark.parametrize("labels", [[], ["no changelog"]])
+def test_a_release_text_before_the_build_is_told_to_build(branch: Path, labels: list[str]) -> None:
+    """Pre-QA r11 on #732: release step 4 writes the text before the build, and was told it
+    isn't a release PR."""
+    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    _pyproject(branch, "1.1.0")
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, labels)
+    assert problem is not None and "only a release PR" not in problem, problem
+    assert "no section for the new version yet" in problem, problem
+    assert "towncrier build --version <version> --yes" in problem, problem
 
 
 def test_changing_a_releases_own_text_is_refused_too(branch: Path) -> None:
@@ -905,6 +920,9 @@ def test_the_same_text_in_two_categories_passes(tmp_path: Path) -> None:
         "  > [foo\n  > bar]: https://evil.example\n",
         "  [x`]: https://evil1.example\n\n  [y`]: https://evil2.example\n",
         "  [q<a title=']: https://e1.example\n\n  [r'>]: https://e2.example\n",
+        # Pre-QA r11 on #732: an email label defined to its own address links the same either
+        # way, but the definition still takes the brackets from every other entry's [a@b.co].
+        "  [a@b.co]: mailto:a@b.co\n",
     ],
 )
 def test_definitions_the_shared_probe_missed_are_refused(tmp_path: Path, text: str) -> None:
@@ -938,7 +956,9 @@ def test_a_console_that_cant_encode_a_refusal_gets_escapes(module: str, tmp_path
     """QA r5 on #732: on a cp1252 console the refusal quoting `修正` raised UnicodeEncodeError
     and never printed."""
     root = _dir(tmp_path, {"731.fixed.md": "# 修正 → done\n"})
-    command = ["check"] if module == "changelog_fragments" else ["v9.9.9"]
+    # A tag check_release.py quotes back (pre-QA r11 on #732: an ASCII-only run never reached
+    # the escape).
+    command = ["check"] if module == "changelog_fragments" else ["v9.9.9修"]
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / f"{module}.py"), *command],
         cwd=root,
@@ -948,8 +968,7 @@ def test_a_console_that_cant_encode_a_refusal_gets_escapes(module: str, tmp_path
     )
     assert b"Traceback" not in result.stderr, result.stderr
     assert result.returncode == 1, (result.returncode, result.stderr)
-    if module == "changelog_fragments":
-        assert b"\\u4fee\\u6b63" in result.stdout, result.stdout
+    assert b"\\u4fee" in result.stdout, result.stdout
 
 
 def test_an_entry_that_renders_empty_is_refused(tmp_path: Path) -> None:

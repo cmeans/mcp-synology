@@ -36,7 +36,8 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   (ask the maintainer for it; the check reads the labels when it runs, so rerun it after).
   Removing fragments needs the label too (a revert, a backport's carry-back), except in a release
   PR, which bumps the version, adds its section and assembles them all. A `+<name>.release.md`
-  never counts as a PR's own fragment, and outside a release PR it's refused, label or not.
+  never counts as a PR's own fragment, and outside a release PR it's refused, label or not; a
+  release PR builds it with the rest, and one left after the build is refused, label or not.
 - **Changing what hasn't shipped:** a PR that only changes something another PR added since the
   last release edits that PR's fragment, so its entry says what will ship, and adds none of its
   own: it takes the `no changelog` label. The notes describe what changed since the last

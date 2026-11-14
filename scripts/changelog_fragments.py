@@ -462,37 +462,16 @@ def _no_code(text: str) -> str:
     return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", blank, fenced)
 
 
-def _probe_links(notes: list[str], references: list[str]) -> set[tuple[int, str]]:
-    """Each of ``references`` that GitHub renders as a link after ``notes``, with where it goes.
+def _probe_links(notes: list[str], references: list[str]) -> list[str]:
+    """How GitHub renders each of ``references`` after ``notes``, one paragraph each, in order.
     Each is a paragraph of its own: in one, a backtick or a `<` in one label paired with
     another's into a code span or a tag, and neither became a link (QA r5 on #732)."""
     probe = "\n\n".join(["\n".join(notes), *references]) + "\n"
     rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
-    start = rendered.find(f'<p data-sourcepos="{len(notes) + 2}:')
-    tail = rendered[start:] if start >= 0 else ""
-    # The footnotes section's back-links would read as the last probe's links.
-    tail = tail.split('<section class="footnotes"', 1)[0]
-    reader = _Probe()
-    reader.feed(tail)
-    return reader.linked
-
-
-class _Probe(HTMLParser):
-    """Which markers in a rendered probe paragraph a link or a footnote reference follows."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.marker = -1
-        self.linked: set[tuple[int, str]] = set()
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "a" and self.marker >= 0:
-            self.linked.add((self.marker, dict(attrs).get("href") or ""))
-
-    def handle_data(self, data: str) -> None:
-        found = re.findall(r"QZ(\d+)ZQ", data)
-        if found:
-            self.marker = int(found[-1])
+    # The footnotes section, at the end, isn't one of the references.
+    rendered = rendered.split('<section class="footnotes"', 1)[0]
+    found = re.findall(r'<p data-sourcepos="(\d+):[^"]*">(.*?)</p>', rendered, re.S)
+    return [html for line, html in found if int(line) >= len(notes) + 2]
 
 
 def _definition_problem(
@@ -515,11 +494,12 @@ def _definition_problem(
         label = " ".join(re.sub(r"\n[ \t>]*", " ", found[2]).split())
         references.append(f"QZ{number}ZQ [{found[1]}{label}]")
     # GitHub links some text by itself (an email, `www.`), defined or not (pre-QA r10 on #732):
-    # the fragment's definition is a link that goes elsewhere with it than without it, so a
-    # definition whose label is an email still counts (QA r5).
-    linked = _probe_links([*before, *lines, *after, ""], references)
-    linked -= _probe_links([*before, *after, ""], references)
-    for number in sorted({marker for marker, _ in linked}):
+    # the fragment defines a label when its reference renders otherwise with the fragment than
+    # without it, whatever it links to (QA r5 and pre-QA r11).
+    with_it = _probe_links([*before, *lines, *after, ""], references)
+    without = _probe_links([*before, *after, ""], references)
+    defined = [n for n, html in enumerate(with_it) if n >= len(without) or html != without[n]]
+    for number in defined:
         found = candidates[number]
         index = body.count("\n", 0, found.start())
         at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
@@ -571,6 +551,14 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
         for status, _, path in (line.partition("\t") for line in changed)
         if status in ("A", "M") and _RELEASE.fullmatch(Path(path).name)
     )
+    if release_texts and _release_version(root, base) is None and _bumped(root, base):
+        # Written before the build, as release step 4 says: the build makes it a release PR.
+        return (
+            f"this PR bumps the version and adds or changes a release's own text "
+            f"({_named(release_texts)}), but CHANGELOG.md has no section for the new version "
+            f"yet: run `towncrier build --version <version> --yes` (CLAUDE.md, release step 4), "
+            f"which assembles the text and every fragment into it."
+        )
     if release_texts and _release_version(root, base) is None:
         return (
             f"this PR adds or changes a release's own text ({_named(release_texts)}), which only "
@@ -582,13 +570,17 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
     if release_texts and _fragments_left(root):
         # A release PR may add its text only to build it: left unbuilt, it opens the next
         # release's notes, the label or not (QA r5 on #732).
+        # The section is there (that's what makes it a release PR), so towncrier refuses to
+        # build again: the text goes in by hand, as _removal_problem says (pre-QA r11).
+        version = _release_version(root, base)
         left = _fragments_left(root)
         return (
-            f"this release PR adds or changes a release's own text ({_named(release_texts)}) but "
-            f"leaves {len(left)} CHANGELOG fragment(s) unbuilt ({_named(left)}): run "
-            f"`towncrier build --version <version> --yes` (CLAUDE.md, release step 4), which "
-            f"assembles them into the version's section and deletes them, the {SKIP_LABEL!r} "
-            f"label or not."
+            f"this release PR ({version}) adds or changes a release's own text "
+            f"({_named(release_texts)}) but leaves {_named(left)} in {DIRECTORY}/, the "
+            f"{SKIP_LABEL!r} label or not: towncrier won't build {version} again, so move the "
+            f"text into the '## {version}' section by hand (a `**Security release:**` line "
+            f"first) and delete the file, or revert the build and build again with the text in "
+            f"place."
         )
     if SKIP_LABEL in labels:
         return None
@@ -683,6 +675,15 @@ def _version(pyproject: str | None) -> str | None:
     except (tomllib.TOMLDecodeError, KeyError, TypeError):
         return None
     return version if isinstance(version, str) else None
+
+
+def _bumped(root: Path, base: str) -> bool:
+    """Whether `pyproject.toml`'s version differs from the base's."""
+    try:
+        head = _version((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    return head is not None and head != _version(_git_show(root, base, "pyproject.toml"))
 
 
 def _release_version(root: Path, base: str) -> str | None:
