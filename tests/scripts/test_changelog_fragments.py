@@ -1158,7 +1158,8 @@ def test_a_destination_that_isnt_one_stays_text(tmp_path: Path) -> None:
         "a" * 995,
         # QA r1 on #738: cmark-gfm counts UTF-8 bytes; 327 `漢` (981 bytes) passed by length.
         "漢" * 327,
-        "é" * 490,
+        # 982 bytes: with the token, past the limit (490 is exactly at it, still a definition).
+        "é" * 491,
         # Pre-QA r4: 1000 bytes is still a definition (999 was the spec's number, not cmark-gfm's).
         "a" * 1000,
         "é" * 500,
@@ -1169,7 +1170,7 @@ def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path, labe
     would read it as text: the check refuses it instead of passing it."""
     text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
-    assert len(found) == 1 and "link reference" in found[0], found
+    assert len(found) == 1 and "within reach of" in found[0], found
 
 
 @pytest.mark.parametrize(
@@ -1190,7 +1191,49 @@ def test_a_label_across_lines_near_the_limit_is_refused(
     label = f"\n{prefix}".join(lines)
     text = f"- **x** (#731): see\n\n{prefix}[{label}]: https://evil.example\n"
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
-    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
+    assert len(found) == 1 and "line 3," in found[0] and "within reach of" in found[0], found
+
+
+@pytest.mark.parametrize(("lines", "indent"), [(["b" * 60] * 10, 45), (["b" * 30] * 4, 300)])
+def test_a_short_label_at_a_deep_indent_isnt_near_the_limit(
+    tmp_path: Path, lines: list[str], indent: int
+) -> None:
+    """Pre-QA r5 on #738: the indent was counted at the high end, so a label cmark-gfm counts at
+    a few hundred bytes was refused as within reach of the limit (here it's a paragraph's
+    continuation, not a definition)."""
+    label = f"\n{' ' * indent}".join(lines)
+    text = f"- **x** (#731): x\n  [{label}]: not a definition here\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_definition_short_of_the_band_is_named_as_one(tmp_path: Path) -> None:
+    """Pre-QA r5 on #738: the near-limit tests matched either message; out of the band, a
+    definition gets the definition's."""
+    text = f"- **x** (#731): see\n\n  [{'a' * 950}]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "defines a link reference, which" in found[0], found
+
+
+def test_the_label_limit_is_cmarkgfms() -> None:
+    """Pre-QA r5 on #738: `_LABEL_MAX` is cmark-gfm's limit, not a spec's; a cmarkgfm that
+    changed it would fail here, not let definitions under a new limit pass."""
+    import cmarkgfm
+
+    def links(size: int) -> bool:
+        label = "a" * size
+        rendered = cmarkgfm.github_flavored_markdown_to_html(f"[{label}]\n\n[{label}]: /u\n")
+        return 'href="/u"' in rendered
+
+    assert links(script._LABEL_MAX) and not links(script._LABEL_MAX + 1)
+
+
+def test_a_long_footnote_label_is_refused_and_cut(tmp_path: Path) -> None:
+    """Pre-QA r5 on #738: a footnote's label has no length limit, so the render refuses it, and
+    the refusal quoted all of it."""
+    text = f"- **x** (#731): y\n\n  [^{'n' * 1500}]: a note\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "defines a footnote" in found[0], found
+    assert "n" * 61 not in found[0], found
 
 
 def test_a_label_just_short_of_the_band_isnt_refused(

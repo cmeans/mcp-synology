@@ -562,18 +562,21 @@ _LABEL_MAX = 1000
 
 
 def _pushed_past_the_limit(label: str, token: str, number: int) -> bool:
-    """Whether a label that can be a definition is one the token makes too long to be: the probe
-    would read it as text, so it's refused rather than passed (QA r1 on #738: the limit counts
-    bytes, and 327 `漢` passed by length). A label already past the limit is never a
-    definition, so it isn't refused (pre-QA r4: it was, as "defines a link reference"). A label
-    within reach of the limit is refused even where it wouldn't be one (a paragraph's
-    continuation line): the probe can't tell, and such a label is over 970 bytes."""
+    """Whether a link label that can be a definition is one the token makes too long to be: the
+    probe would read it as text, so it's refused rather than passed (QA r1 on #738: the limit
+    counts bytes, and 327 `漢` passed by length). A link label already past the limit is never a
+    definition, so it isn't refused (pre-QA r4: it was, as "defines a link reference"); a
+    footnote's label has no limit, and the render alone refuses it (pre-QA r5). A label within
+    reach of the limit is refused even where it wouldn't be one (a paragraph's continuation
+    line), since the probe can't tell: on one line, that's a label over 970 bytes; across lines
+    in a quote, the band is wider by the quote markers."""
     # A label across lines is captured with each later line's indent and quote markers, which
     # cmark-gfm drops before it counts (QA r2 on #738: one it counted at 995 bytes was captured at
-    # 1001, read as past the limit, and passed). So the low end leaves them out and the high end
-    # keeps them; dropping a `>` that is the label's own only widens the band.
+    # 1001, read as past the limit, and passed). Leading whitespace always goes (pre-QA r5: with
+    # it, a 123-byte label at a deep indent was refused); a `>` may be a marker or the label's
+    # own, so the low end drops it and the high end keeps it, which only widens the band.
     low = len(re.sub(r"\n[ \t>]*", "\n", label).encode("utf-8"))
-    high = len(label.encode("utf-8"))
+    high = len(re.sub(r"\n[ \t]*", "\n", label).encode("utf-8"))
     return low <= _LABEL_MAX < high + len(f"{token}{number}x")
 
 
@@ -630,7 +633,8 @@ def _definition_problem(
     if found[1]:
         return (
             f"{at} defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
-            f"after every older release, and give to any other entry's [^{found[2]}]: write "
+            # The label cut like the line (pre-QA r5: a footnote's label has no limit).
+            f"after every older release, and give to any other entry's [^{found[2][:60]}]: write "
             f"the note in the entry's text ({_HOW})."
         )
     return (
