@@ -210,51 +210,67 @@ def test_a_block_opened_outside_the_entry_is_refused(tmp_path: Path, line: str) 
 
 
 @pytest.mark.parametrize(
-    "line",
+    ("text", "line"),
     [
-        "<pre>",
-        "<DIV>",
-        " <script>",
-        # QA r3 on #732: any tag CommonMark starts an HTML block with, not five named ones.
-        "<details>\nmore\n</details>",
-        "<table><tr><td>a</td></tr></table>",
-        "<p>para</p>",
-        "<section>",
-        "</p>",
-        "<?php x ?>",
-        "<!DOCTYPE html>",
-        "<![CDATA[x]]>",
-        # Any other tag alone on a line starts one on GitHub, right after the entry's text too
-        # (cmark-gfm; markdown-it-py, a CommonMark parser, read these as the entry's text).
-        "<custom-tag>",
-        " <custom-tag>",
-        "<span>",
-        "</span>",
-        "<br>",
-        "<a href=x>",
-        "\n<custom-tag>",
+        # At a line's start an HTML block ends the entry (QA r3 on #732).
+        ("<pre>", 2),
+        ("<DIV>", 2),
+        (" <script>", 2),
+        ("<details>\nmore\n</details>", 2),
+        ("<table><tr><td>a</td></tr></table>", 2),
+        ("<p>para</p>", 2),
+        ("<section>", 2),
+        ("</p>", 2),
+        ("<?php x ?>", 2),
+        ("<!DOCTYPE html>", 2),
+        ("<![CDATA[x]]>", 2),
+        ("<custom-tag>", 2),
+        (" <custom-tag>", 2),
+        ("<span>", 2),
+        ("</span>", 2),
+        ("<br>", 2),
+        ("<a href=x>", 2),
+        ("\n<custom-tag>", 3),
+        # Inside the entry GitHub renders the tags: a heading, or a list closed early (QA r4).
+        ("  <h2>Block</h2>", 2),
+        ("  <pre>x</pre>", 2),
+        ("  <details>\n  more\n  </details>", 2),
+        ("<b>bold</b>", 2),
+        ("<custom-tag> trailing text", 2),
+        ("text <kbd>Ctrl</kbd>", 2),
     ],
 )
-def test_an_html_block_outside_the_entry_is_refused(tmp_path: Path, line: str) -> None:
+def test_raw_html_is_refused(tmp_path: Path, text: str, line: int) -> None:
     found = script.fragment_problems(
-        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{text}\n"})
     )
-    assert len(found) == 1 and "HTML block outside the entry" in found[0], found
-    assert f"line {3 if line.startswith(chr(10)) else 2}," in found[0], found
+    assert len(found) == 1 and f"line {line}," in found[0], found
+    assert "holds raw HTML" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "- **T** (#731): x <h2>Big</h2>",
+        "- **T** (#731): x </li></ul><h3>Fixed</h3><ul><li>",
+        "- **T** (#731): see the `<name>` field and <name>",
+    ],
+)
+def test_raw_html_on_the_entrys_own_line_is_refused(tmp_path: Path, first: str) -> None:
+    """QA r4 on #732: GitHub rendered an `<h2>` in the entry, or a second `### Fixed`."""
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": f"{first}\n"}))
+    assert len(found) == 1 and "line 1," in found[0] and "holds raw HTML" in found[0], found
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        "- **x** (#731): y <kbd>Ctrl</kbd>\n<span>z</span> w\n",
-        "- **x** (#731): y\n<b>bold</b>\n",
-        "- **x** (#731): y\n<custom-tag> trailing text\n",
-        # Indented into the entry, GitHub keeps an HTML block inside it.
-        "- **x** (#731): y\n  <pre>x</pre>\n",
-        "- **x** (#731): y\n  <details>\n  more\n  </details>\n",
+        "- **x** (#731): the `<name>` placeholder and `</li>` in code\n",
+        "- **x** (#731): a < b and c > d, <3\n",
+        "- **x** (#731): an autolink <https://example.com>\n",
     ],
 )
-def test_html_inside_the_entry_passes(tmp_path: Path, text: str) -> None:
+def test_what_isnt_raw_html_passes(tmp_path: Path, text: str) -> None:
     assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
 
 
@@ -353,10 +369,17 @@ def test_a_release_text_may_hold_blocks(tmp_path: Path, text: str) -> None:
     assert script.fragment_problems(_dir(tmp_path, {"+x.release.md": text})) == []
 
 
-@pytest.mark.parametrize("text", ["<details>\nx\n</details>\n", "Text.\n\n  ## Indented heading\n"])
-def test_a_release_text_may_not_hold_html_or_headings(tmp_path: Path, text: str) -> None:
+@pytest.mark.parametrize(
+    ("text", "says"),
+    [
+        ("<details>\nx\n</details>\n", "holds raw HTML"),
+        ("Text <b>x</b>.\n", "holds raw HTML"),
+        ("Text.\n\n  ## Indented heading\n", "heading"),
+    ],
+)
+def test_a_release_text_may_not_hold_html_or_headings(tmp_path: Path, text: str, says: str) -> None:
     found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
-    assert len(found) == 1 and ("HTML block" in found[0] or "heading" in found[0]), found
+    assert len(found) == 1 and says in found[0], found
 
 
 def test_a_byte_order_mark_is_named(tmp_path: Path) -> None:
@@ -599,6 +622,43 @@ def test_a_release_fragment_isnt_a_prs_own(branch: Path) -> None:
     assert script.branch_problem(branch, "main", 731, []) is not None
 
 
+@pytest.mark.parametrize("labels", [[], ["no changelog"]])
+def test_only_a_release_pr_adds_a_releases_own_text(branch: Path, labels: list[str]) -> None:
+    """QA r4 on #732: any PR could add `**Security release:**`, which every running server
+    announces once released; the label doesn't excuse it."""
+    (branch / "changelog.d" / "731.fixed.md").write_text("- **x** (#731): y\n", encoding="utf-8")
+    (branch / "changelog.d" / "+x.release.md").write_text(
+        "**Security release:** fake, upgrade now.\n", encoding="utf-8"
+    )
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, labels)
+    assert problem is not None and "+x.release.md" in problem, problem
+    assert "only a release PR" in problem, problem
+
+
+def test_a_release_pr_may_add_its_own_text(branch: Path) -> None:
+    """Built in the same PR, it's gone; added before the build, a release PR may hold it."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    _release(branch, "1.1.0")
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, [])
+    # Past the release-text rule; it's then told the text is left unbuilt, as any fragment is.
+    assert problem is not None and "only a release PR" not in problem, problem
+    assert "leaves 1 CHANGELOG fragment(s) (+x.release.md)" in problem, problem
+
+
+def test_changing_a_releases_own_text_is_refused_too(branch: Path) -> None:
+    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    _commit(branch)
+    _git(branch, "branch", "-f", "base")
+    (branch / "changelog.d" / "+x.release.md").write_text("Other text.\n", encoding="utf-8")
+    (branch / "changelog.d" / "731.fixed.md").write_text("- **x** (#731): y\n", encoding="utf-8")
+    _commit(branch)
+    problem = script.branch_problem(branch, "base", 731, [])
+    assert problem is not None and "only a release PR" in problem, problem
+
+
 def test_removing_some_fragments_isnt_a_release(branch: Path) -> None:
     """Without a version bump, removing fragments is refused and the advice is to restore them,
     not to run the build (which would write a bogus release)."""
@@ -740,6 +800,127 @@ def test_the_towncrier_pins_agree() -> None:
 
 
 @pytest.mark.parametrize(
+    ("text", "line", "says"),
+    [
+        # QA r4 on #732: after a nested list marker, across two lines, with an escaped bracket.
+        ("- **x** (#731): y\n\n  - [baz]: https://example.com\n", 3, "link reference"),
+        ("- **x** (#731): y\n\n  * [baz]: https://example.com\n", 3, "link reference"),
+        ("- **x** (#731): y\n\n  1. [baz]: https://example.com\n", 3, "link reference"),
+        ("- **x** (#731): y\n\n  1) [baz]: https://example.com\n", 3, "link reference"),
+        ("- **x** (#731): y\n\n  [foo\n  bar]: https://example.com\n", 3, "link reference"),
+        ("- **x** (#731): y\n\n  [a\\]b]: https://example.com\n", 3, "link reference"),
+        # A footnote the fragment doesn't reference itself, for another entry's [^1].
+        ("- **x** (#731): y\n\n  [^1]: note\n", 3, "footnote"),
+        ("- **x** (#731): y\n\n  - [^1]: note\n", 3, "footnote"),
+    ],
+)
+def test_every_kind_of_definition_is_refused(
+    tmp_path: Path, text: str, line: int, says: str
+) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and f"line {line}," in found[0], found
+    assert f"defines a {says}" in found[0], found
+
+
+def test_an_entry_that_renders_empty_is_refused(tmp_path: Path) -> None:
+    """QA r4 on #732: `(#731)` was the definition's title, so the number check passed, and
+    GitHub rendered an empty item."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "- [foo]: http://evil.example (#731)\n"})
+    )
+    assert found and "renders with no text" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("text", "line", "code"),
+    [
+        ("- **T** (#731): x\x0b\n  ---\n", 1, "000B"),
+        ("- **T** (#731): x\x0b## y\n", 1, "000B"),
+        ("- **T** (#731): x\x0c y\n", 1, "000C"),
+        ("- **T** (#731): x\x85 y\n", 1, "0085"),
+        ("- **T** (#731): x\u2028y\n", 1, "2028"),
+        ("- **T** (#731): x\u2029y\n", 1, "2029"),
+        ("- **T** (#731): x\n  y\u200bz\n", 2, "200B"),
+        ("- **T** (#731): x\u202ey\u202c\n", 1, "202E"),
+        ("- **T** (#731): x\x1b[2K\x1b[1A\n", 1, "001B"),
+        ("- **T** (#731): x\x00\n", 1, "0000"),
+        ("- **T** (#731): x\xad y\n", 1, "00AD"),
+    ],
+)
+def test_control_and_invisible_characters_are_named(
+    tmp_path: Path, text: str, line: int, code: str
+) -> None:
+    """QA r4 on #732: `splitlines()` broke lines where Markdown doesn't, and nothing refused
+    characters a reader can't see or a terminal acts on."""
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and f"line {line} holds U+{code}" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["- **T** (#731): x\r\n  more\r\n", "- **T** (#731): x\r  more\r", "- **T** (#731): a\tb\n"],
+)
+def test_line_breaks_and_tabs_pass(tmp_path: Path, text: str) -> None:
+    (tmp_path / "x").mkdir()
+    root = _dir(tmp_path / "x", {})
+    (root / "changelog.d" / "731.fixed.md").write_bytes(text.encode("utf-8"))
+    assert script.fragment_problems(root) == []
+
+
+def test_the_content_check_reads_cr_line_ends_as_line_breaks() -> None:
+    """A file read in text mode arrives with `\\n` only; text given another way is normalized
+    the same, never refused as holding a control character."""
+    assert script._content_problem("- **T** (#731): x\r\n  more\r\n", "731") is None
+    assert script._content_problem("- **T** (#731): x\r  more\r", "731") is None
+
+
+def test_a_fragment_over_the_size_limit_is_refused_before_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA r4 on #732: each render costs memory (cmarkgfm keeps some per call), so a big fragment
+    could fill a contributor's machine; it's refused before the parser sees it."""
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        script.cmarkgfm,
+        "github_flavored_markdown_to_html",
+        lambda text, options: rendered.append(text) or "",
+    )
+    text = "- **x** (#731): y\n  " + "a" * script._MAX_BYTES + "\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "over the 16 KiB" in found[0] and rendered == [], found
+
+
+def test_many_definition_candidates_render_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA r4 on #732: confirming each candidate line rendered the notes once per line."""
+    real = script.cmarkgfm.github_flavored_markdown_to_html
+    calls: list[int] = []
+
+    def counting(text: str, options: int) -> str:
+        calls.append(1)
+        return str(real(text, options=options))
+
+    monkeypatch.setattr(script.cmarkgfm, "github_flavored_markdown_to_html", counting)
+    text = "- **x** (#731): y\n  " + " ".join(f"[l{n}]: x" for n in range(200)) + "\n"
+    script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(calls) <= 2, len(calls)
+
+
+def test_fragments_with_the_same_text_are_named(tmp_path: Path) -> None:
+    """QA r4 on #732: towncrier prints identical entries once, and the draft check's count
+    mismatch didn't say why."""
+    entry = "- **x** (#716): y\n"
+    found = script.fragment_problems(
+        _dir(tmp_path, {"716.fixed.md": entry, "716.fixed.1.md": entry})
+    )
+    assert (
+        len(found) == 1
+        and "716.fixed.1.md, changelog.d/716.fixed.md hold the same text" in found[0]
+    ), found
+
+
+@pytest.mark.parametrize(
     ("name", "text", "line"),
     [
         ("731.fixed.md", "- **x** (#731): y\n\n  [tracking]: https://example.com/x\n", 3),
@@ -775,10 +956,12 @@ def test_a_long_run_of_dashes_is_read_in_linear_time(tmp_path: Path) -> None:
     took 2.7 s; a megabyte, about 2 h of CI)."""
     import time
 
-    text = "- **x** (#731): y\n  " + "-" * 200_000 + "x\n  ===\n"
     started = time.monotonic()
+    assert script._is_underline("-" * 1_000_000 + "x") is False
+    assert time.monotonic() - started < 1, "quadratic again?"
+    # As big as a fragment may be (QA r4 on #732's size limit), refused for the heading.
+    text = "- **x** (#731): y\n  " + "-" * 15_000 + "x\n  ===\n"
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
-    assert time.monotonic() - started < 2, "quadratic again?"
     assert len(found) == 1 and "line 3, '  ===', reads as a heading" in found[0], found
 
 

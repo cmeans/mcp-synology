@@ -26,6 +26,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import unicodedata
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -48,8 +49,8 @@ NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
 # as code (pre-QA r5 on #731).
 _LINE_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
 _BOM = "\ufeff"
-# A footnote definition, at any indent (only for naming its line in a refusal).
-_FOOTNOTE = re.compile(r"[ \t>]*\[\^[^\]]+\]:")
+# A footnote definition's start after any indent, list markers or `>` (only for naming its line).
+_FOOTNOTE = re.compile(r"[ \t>*+0-9.)-]*\[\^")
 # A bullet list item's start, as CommonMark reads one at column 0 to 3.
 _BULLET = re.compile(r" {0,3}[-*+](?:[ \t]|$)")
 # The categories' headings, in towncrier's order (pyproject.toml's types, the template).
@@ -80,8 +81,14 @@ def _is_underline(text: str) -> bool:
     return _UNDER_PREFIX.fullmatch(body.rstrip(body[-1])) is not None
 
 
-# A link reference definition's label, at any indent (a candidate the parser then confirms).
-_LINK_DEFINITION = re.compile(r"[ \t>]*\[([^\]\\]+)\]:")
+# A link reference or footnote definition's label, anywhere in the text and across lines (a
+# candidate the parser then confirms, QA r4 on #732): `[label]:` or `[^label]:`, `\]` allowed.
+_DEFINITION = re.compile(r"\[(\^?)((?:[^\]\\]|\\.)+)\]:")
+# Where raw HTML starts, outside code spans (only for naming its line in a refusal).
+_RAW_TAG = re.compile(r"<[A-Za-z/!?]")
+# A fragment's size limit: an entry is a line or a short paragraph, a release's text a few
+# (the largest entry so far is 5 KiB). Rendering one costs memory (QA r4 on #732).
+_MAX_BYTES = 16 * 1024
 _VOID = frozenset({"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"})
 
 
@@ -98,6 +105,7 @@ class _Block:
     gap: int
     text: str = ""
     items: list[int] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)
 
 
 class _Shape(HTMLParser):
@@ -110,6 +118,7 @@ class _Shape(HTMLParser):
         self.end = -1  # the last line of the last top-level block GitHub gave a position
         self.blocks: list[_Block] = []
         self.nested: list[int] = []
+        self.raw: list[int] = []  # where raw HTML is, as near as GitHub's output tells
 
     def at(self, line: int) -> str:
         return self.lines[line] if 0 <= line < len(self.lines) else ""
@@ -138,6 +147,7 @@ class _Shape(HTMLParser):
             self.nested.append(self._after() if line is None else line)
         if tag == "li" and self.depth == 1 and self.blocks and first is not None:
             self.blocks[-1].items.append(first)
+            self.blocks[-1].texts.append("")
         if tag not in _VOID:
             self.depth += 1
 
@@ -153,10 +163,16 @@ class _Shape(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.depth >= 1 and self.blocks and self.blocks[-1].kind in _HEADINGS:
             self.blocks[-1].text += data
+        if self.depth >= 2 and self.blocks and self.blocks[-1].texts:
+            self.blocks[-1].texts[-1] += data
 
     def handle_comment(self, data: str) -> None:
+        # cmark-gfm's safe mode writes raw HTML, anywhere, as this comment: GitHub renders the
+        # HTML itself, sanitized, so a `<h2>` or a `</li></ul>` inside an entry would pass a
+        # check of the comment's place alone (QA r4 on #732). Any raw HTML is refused.
+        gap = self._after()
+        self.raw.append(gap)
         if self.depth == 0:
-            gap = self._after()
             self.blocks.append(_Block("html", gap, gap))
 
 
@@ -167,27 +183,29 @@ class _Layout:
 
     categories: dict[str, list[int]]
     problem: tuple[str, _Block] | None
+    texts: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _layout(text: str) -> _Layout:
     """Read notes as GitHub renders them, with cmark-gfm, the parser GitHub's Markdown is built
     on (QA r3 on #732: four rounds of regex rules each missed a Markdown rule, and markdown-it-py,
     a CommonMark parser, missed GitHub's HTML blocks after a list item's text and its footnotes):
-    `## <version>`,
-    any free text, then each category's `### <name>` and one list. The first problem is a heading
-    inside a block, a heading that isn't the next category's (`heading`), an HTML block outside
-    every list (`html`), or a block between a category's heading and its list or after its list
-    (`split`)."""
-    shape = _Shape(text.splitlines())
+    `## <version>`, any free text, then each category's `### <name>` and one list. The first
+    problem is a heading inside a block, a heading that isn't the next category's (`heading`), raw
+    HTML anywhere (`html`), or a block between a category's heading and its list or after its
+    list (`split`)."""
+    shape = _Shape(text.split("\n"))
     shape.feed(cmarkgfm.github_flavored_markdown_to_html(text, options=_OPTIONS))
     shape.close()
     problems = [("heading", _Block("heading", line, line)) for line in shape.nested]
+    problems += [("html", _Block("html", line, line)) for line in shape.raw]
     categories: dict[str, list[int]] = {}
+    texts: dict[str, list[str]] = {}
     names = list(CATEGORIES.values())
     current: str | None = None
     for index, block in enumerate(shape.blocks):
         if block.kind == "html":
-            problems.append(("html", block))
+            pass  # in shape.raw
         elif index == 0:
             if block.kind != "h2":
                 problems.append(("heading" if block.kind in _HEADINGS else "split", block))
@@ -203,10 +221,11 @@ def _layout(text: str) -> _Layout:
             pass  # the release's own text, before the first category
         elif block.kind == "ul" and not categories[current]:
             categories[current] = block.items
+            texts[current] = block.texts
         else:
             problems.append(("split", block))
     first = min(problems, key=lambda p: p[1].line) if problems else None
-    return _Layout(categories, first)
+    return _Layout(categories, first, texts)
 
 
 SKIP_LABEL = "no changelog"
@@ -226,6 +245,7 @@ def fragment_problems(root: Path) -> list[str]:
     if not directory.is_dir():
         return [f"{DIRECTORY}/ is missing: {_HOW}."]
     found: list[str] = []
+    contents: dict[str, list[str]] = {}
     for path in sorted(directory.iterdir()):
         name = path.name
         if name in NOT_FRAGMENTS:
@@ -252,6 +272,14 @@ def fragment_problems(root: Path) -> list[str]:
         problem = _content_problem(text, entry.group("pr") if entry else None)
         if problem:
             found.append(f"{shown}: {problem}")
+        contents.setdefault(text.strip(), []).append(shown)
+    for names in contents.values():
+        if len(names) > 1:
+            # towncrier prints identical entries once, so the notes would lose one (QA r4).
+            found.append(
+                f"{_named(names)} hold the same text, which towncrier would print once: "
+                f"remove one or give each its own ({_HOW})."
+            )
     return found
 
 
@@ -264,7 +292,19 @@ def _content_problem(text: str, pr: str | None) -> str | None:
         return "it starts with a byte-order mark (U+FEFF): save it as UTF-8 without a BOM."
     if not text.strip():
         return "it's empty."
-    lines = text.strip("\n").splitlines()
+    size = len(text.encode("utf-8"))
+    if size > _MAX_BYTES:
+        return (
+            f"it's {size:,} bytes, over the {_MAX_BYTES // 1024} KiB a fragment may be: an entry "
+            f"is a line or a short paragraph, a release's own text a few ({_HOW})."
+        )
+    # Markdown, towncrier and publish.yml's awk break lines only at \n, \r and \r\n; str's
+    # splitlines() breaks at eight more, so the check read another document (QA r4 on #732).
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    invisible = _invisible_problem(text)
+    if invisible:
+        return invisible
+    lines = text.strip("\n").split("\n")
     lead = len(text) - len(text.lstrip("\n"))  # blank lines before the first, for line numbers
     for at, line in enumerate(lines, start=1 + lead):
         if _LINE_HEADING.match(line):
@@ -292,6 +332,23 @@ def _content_problem(text: str, pr: str | None) -> str | None:
     return None
 
 
+def _invisible_problem(text: str) -> str | None:
+    """Why ``text`` holds a character a reader of the notes can't see or that a terminal acts
+    on, or None: a control character but tab and line feed, a format character (zero-width and
+    direction marks among them), a line or paragraph separator (QA r4 on #732). Named, as the
+    byte-order mark is, since none of them shows in an editor."""
+    for index, character in enumerate(text):
+        category = unicodedata.category(character)
+        if (category == "Cc" and character not in "\t\n") or category in ("Cf", "Zl", "Zp"):
+            line = text.count("\n", 0, index) + 1
+            name = unicodedata.name(character, "a control character")
+            return (
+                f"line {line} holds U+{ord(character):04X} ({name}), which doesn't show in the "
+                f"notes or acts on a terminal: remove it ({_HOW})."
+            )
+    return None
+
+
 def _more_than_one(shown: str) -> str:
     return (
         f"it holds more than one entry ({shown} starts another); give each its own file ({_HOW})."
@@ -303,7 +360,7 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
     them or show what the notes don't hold (QA r3 on #732), or None. An entry must stay one item
     of its category's list, with the entries around it and the next category as they were; a
     release's own text, before the categories, must leave them as they were. Neither may hold a
-    heading, at any depth, or an HTML block outside the entry."""
+    heading or raw HTML, at any depth."""
     if release:
         before = [_TITLE, ""]
         after = ["", f"### {CATEGORIES['added']}", "", _NEXT]
@@ -346,12 +403,14 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
                 f"headings ({_HOW})."
             )
         if kind == "html":
-            # Indented into the entry, GitHub keeps one inside it; at a line's start, it ends the
-            # entry and turns the next PR's into raw text (QA r3 on #732).
+            # At a line's start an HTML block ends the entry and turns the next PR's into raw
+            # text (QA r3 on #732); inside it, GitHub renders the tags, so `<h2>` adds a heading
+            # and `</li></ul>` closes the list (QA r4). Only the line holding it is named.
+            raw = [n for n, text in enumerate(lines) if _RAW_TAG.search(_no_code(text))]
+            at = f"line {raw[0] + 1 + lead}, {lines[raw[0]][:60]!r}," if raw else "it"
             return (
-                f"{shown or 'a line'} starts an HTML block outside the entry, which would show "
-                f"the entries after it as raw text: indent it 2 spaces or more, or write it in "
-                f"Markdown ({_HOW})."
+                f"{at} holds raw HTML, which GitHub renders as HTML or drops: write it in "
+                f"Markdown, and a placeholder such as `<name>` in backticks ({_HOW})."
             )
         if shown and _BULLET.match(lines[line - len(before)].expandtabs(4)):
             # Another marker (`*`, `+`) starts a list of its own: to the author, a second entry.
@@ -365,6 +424,10 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
         extra = [line for line in items[1:-1] if line > len(before)]
         if len(items) > expected[CATEGORIES["added"]] and extra:
             return _more_than_one(where(extra[0]) or "a line")
+        texts = layout.texts.get(CATEGORIES["added"], [])
+        if len(texts) == expected[CATEGORIES["added"]] and not texts[1].strip():
+            # `- [x]: url (#N)` is a definition, so the item renders empty (QA r4 on #732).
+            return f"the entry renders with no text on GitHub ({_HOW})."
     if {name: len(items) for name, items in layout.categories.items()} != expected:
         # A block the fragment opens and never closes (a code fence, most likely) took in the
         # notes after it: the entries below it and the next category never render.
@@ -372,29 +435,69 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
             "it opens a block it doesn't close (a code fence, most likely), which would swallow "
             "the rest of the notes."
         )
-    return _link_definition_problem(lines, lead, before, after)
+    return _definition_problem(lines, lead, before, after)
 
 
-def _link_definition_problem(
+def _no_code(text: str) -> str:
+    """``text`` without its code spans, for naming a line (never for deciding)."""
+    return re.sub(r"(`+)[^`]*?\1", "", text)
+
+
+class _Probe(HTMLParser):
+    """Which markers in a rendered probe paragraph a link or a footnote reference follows."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.marker = -1
+        self.linked: set[int] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "a" and self.marker >= 0:
+            self.linked.add(self.marker)
+
+    def handle_data(self, data: str) -> None:
+        found = re.findall(r"QZ(\d+)ZQ", data)
+        if found:
+            self.marker = int(found[-1])
+
+
+def _definition_problem(
     lines: list[str], lead: int, before: list[str], after: list[str]
 ) -> str | None:
-    """Why the fragment defines a link reference, or None. A definition applies to the whole
-    document, like a footnote: `[label]` in any other entry, or in an older release, would link to
-    its URL (pre-QA r9 on #732). Each candidate line is confirmed by rendering: a `[label]` after
-    the notes turns into a link only if the fragment defined it."""
-    for index, text in enumerate(lines):
-        found = _LINK_DEFINITION.match(text)
-        if found is None:
-            continue
-        probe = "\n".join([*before, *lines, *after, "", f"[{found[1]}]"]) + "\n"
-        rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
-        last = rendered.rstrip().rsplit("\n", 1)[-1]
-        if "<a " in last:
+    """Why the fragment defines a link reference or a footnote, or None. A definition applies to
+    the whole document: `[label]` or `[^label]` in any other entry, or in an older release, would
+    take its URL or its note, shown at the end of CHANGELOG.md (pre-QA r9 and QA r4 on #732).
+    Candidates come from the whole text (a label can span lines, a definition can follow a list
+    marker), and one render confirms them all: after the notes, a reference to each label
+    becomes a link only if the fragment defined it."""
+    body = "\n".join(lines)
+    candidates = list(_DEFINITION.finditer(body))
+    if not candidates:
+        return None
+    references = []
+    for number, found in enumerate(candidates):
+        label = " ".join(found[2].split())
+        references.append(f"QZ{number}ZQ [{found[1]}{label}]")
+    notes = [*before, *lines, *after, ""]
+    probe = "\n".join([*notes, " ".join(references)]) + "\n"
+    rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
+    paragraph = re.search(rf'<p data-sourcepos="{len(notes) + 1}:[^"]*">(.*?)</p>', rendered, re.S)
+    reader = _Probe()
+    reader.feed(paragraph[1] if paragraph else "")
+    for number in sorted(reader.linked):
+        found = candidates[number]
+        index = body.count("\n", 0, found.start())
+        at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
+        if found[1]:
             return (
-                f"line {index + 1 + lead}, {text[:60]!r}, defines a link reference, which would "
-                f"apply to all of CHANGELOG.md, other entries and older releases too: write the "
-                f"link inline, [text](url) ({_HOW})."
+                f"{at} defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
+                f"after every older release, and give to any other entry's [^{found[2]}]: write "
+                f"the note in the entry's text ({_HOW})."
             )
+        return (
+            f"{at} defines a link reference, which would apply to all of CHANGELOG.md, other "
+            f"entries and older releases too: write the link inline, [text](url) ({_HOW})."
+        )
     return None
 
 
@@ -402,9 +505,10 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
     """Why this branch needs a fragment it doesn't have, or None: it adds or changes one named for
     PR ``pr`` (`<pr>.<type>[.N].md`) and removes none, is a release PR that assembled them all,
     or has the skip label. Another PR's fragment doesn't count: editing it would lose that entry,
-    and one named for an issue would cite the wrong number in the notes (pre-QA r1 on #731)."""
-    if SKIP_LABEL in labels:
-        return None
+    and one named for an issue would cite the wrong number in the notes (pre-QA r1 on #731).
+    A release's own text (`+<name>.release.md`) is added or changed only by a release PR, the
+    label or not: it holds `**Security release:**`, which the running servers announce to every
+    session (QA r4 on #732)."""
     try:
         # --no-renames: a fragment moved out of changelog.d is its removal and another file's
         # addition, not a change to a fragment.
@@ -427,6 +531,20 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
         ).stdout.splitlines()
     except (OSError, subprocess.CalledProcessError) as error:
         return f"couldn't list this branch's changes against {base}: {type(error).__name__}"
+    texts = sorted(
+        Path(path).name
+        for status, _, path in (line.partition("\t") for line in changed)
+        if status in ("A", "M") and _RELEASE.fullmatch(Path(path).name)
+    )
+    if texts and _release_version(root, base) is None:
+        return (
+            f"this PR adds or changes a release's own text ({_named(texts)}), which only a release "
+            f"PR does, the {SKIP_LABEL!r} label or not: it's printed first in the release's notes, "
+            f"and a `**Security release:**` line there is announced by every running server "
+            f"({_HOW}). Move it into the release PR."
+        )
+    if SKIP_LABEL in labels:
+        return None
     removed: list[str] = []
     own = False
     for line in changed:
@@ -597,7 +715,7 @@ def notes_problems(root: Path, draft: str) -> list[str]:
     """Why the next release's notes, as `towncrier build --draft` writes them, wouldn't show
     as the fragments say (QA r3 on #732): read as GitHub renders them, they hold the version's
     heading, then only the category headings, each with one list of as many items as that
-    category has fragments, and no other heading, nor an HTML block outside the lists. Each
+    category has fragments, and no other heading, nor raw HTML. Each
     fragment is checked on its own too; this checks what the template makes of them together."""
     found = re.search(r"^## ", draft, re.MULTILINE)
     if found is None:
@@ -608,7 +726,8 @@ def notes_problems(root: Path, draft: str) -> list[str]:
     if layout.problem:
         kind, block = layout.problem
         line = block.line
-        shown = notes.splitlines()[line][:60] if line < len(notes.splitlines()) else ""
+        rows = notes.split("\n")
+        shown = rows[line][:60] if line < len(rows) else ""
         what = {"heading": "a heading", "html": "an HTML block", "split": "a block"}[kind]
         problems.append(
             f"towncrier's draft of the notes has {what} where the layout doesn't take one, at "
