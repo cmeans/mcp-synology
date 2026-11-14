@@ -138,8 +138,8 @@ wrap = false
 all_bullets = false
 orphan_prefix = "+"
 # Not fragments. For most other names `towncrier build` fails; a few (a `.txt`, a leading zero)
-# it drops silently, which scripts/changelog_fragments.py refuses.
-ignore = ["README.md", "template.md"]
+# it drops silently, which scripts/changelog_fragments.py refuses. .DS_Store is macOS Finder's.
+ignore = ["README.md", "template.md", ".DS_Store"]
 
 # A release's free text (a `**Security release:** …` line, an Upgrading block), written before
 # the categories with no heading, as `+<name>.release.md`. Never required by `towncrier check`.

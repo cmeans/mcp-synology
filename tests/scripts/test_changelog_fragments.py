@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _PATH = Path(__file__).resolve().parents[2] / "scripts" / "changelog_fragments.py"
 _SPEC = importlib.util.spec_from_file_location("changelog_fragments", _PATH)
@@ -123,8 +124,56 @@ def test_bad_content_is_refused(tmp_path: Path, text: str, says: str) -> None:
 
 
 def test_indented_lines_are_neither_headings_nor_entries(tmp_path: Path) -> None:
-    text = "- **x** (#731): y\n\n  ```\n  # not a heading\n  - not an entry\n  ```\n"
+    text = (
+        "- **x** (#731): y\n\n    ```\n    # not a heading\n        ## nor this\n"
+        "  - not an entry\n    ```\n"
+    )
     assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["##\tTab heading", "##", "#", "   ## Three spaces", " # One space", "###### Six"],
+)
+def test_every_commonmark_heading_is_refused(tmp_path: Path, line: str) -> None:
+    """Pre-QA r6 on #732: GitHub renders these as headings inside the release notes."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
+    )
+    assert len(found) == 1 and "heading" in found[0], found
+
+
+@pytest.mark.parametrize("line", ["####### Seven", "#hashtag", "    ## Four spaces is code"])
+def test_what_commonmark_doesnt_read_as_a_heading_passes(tmp_path: Path, line: str) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
+    )
+    assert found == [], found
+
+
+def test_a_ds_store_is_not_a_fragment(tmp_path: Path) -> None:
+    """Pre-QA r6 on #732: macOS Finder writes one; towncrier refused it and so did the check."""
+    root = _dir(tmp_path, {})
+    (root / "changelog.d" / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1")
+    assert script.fragment_problems(root) == []
+    assert script._fragments_left(root) == []
+
+
+def test_git_output_is_read_as_utf8_whatever_the_locale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-QA r6 on #732: decoding by the locale crashed on CHANGELOG.md's non-ASCII bytes
+    under a C or cp1252 locale."""
+    seen: list[dict[str, object]] = []
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(script.subprocess, "run", fake_run)
+    script._git_show(Path("."), "HEAD", "CHANGELOG.md")
+    script.branch_problem(Path("."), "main", 731, [])
+    assert len(seen) == 2
+    for kwargs in seen:
+        assert kwargs.get("encoding") == "utf-8" and kwargs.get("errors") == "replace", kwargs
 
 
 @pytest.mark.parametrize(
@@ -513,9 +562,13 @@ def test_long_lists_are_cut_short() -> None:
 def test_only_ci_has_a_job_named_changelog() -> None:
     """QA r1 on #732: a required check is matched by name, and another workflow's `changelog`
     job, skipped on every PR it doesn't run for, would satisfy it."""
-    owners = [
-        path.name
-        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
-        if re.search(r"(?m)^  changelog:\s*$", path.read_text(encoding="utf-8"))
-    ]
-    assert owners == ["ci.yml"], owners
+    # A check run is named for the job's `name:` when it has one, else for its id (pre-QA r6 on
+    # #732: a `name: changelog` on another job brought the clash back unseen).
+    owners = []
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        jobs = yaml.safe_load(path.read_text(encoding="utf-8")).get("jobs") or {}
+        for job_id, job in jobs.items():
+            shown = job.get("name", job_id) if isinstance(job, dict) else job_id
+            if str(shown).strip().casefold() == "changelog":
+                owners.append(f"{path.name}:{job_id}")
+    assert owners == ["ci.yml:changelog"], owners

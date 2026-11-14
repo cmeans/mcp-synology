@@ -131,7 +131,7 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
 
 
 # Files in changelog.d that aren't fragments (as in scripts/changelog_fragments.py).
-_NOT_FRAGMENTS = frozenset({"README.md", "template.md"})
+_NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
 
 
 def _named(names: list[str], limit: int = 10) -> str:

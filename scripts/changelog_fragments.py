@@ -26,7 +26,11 @@ from pathlib import Path
 
 DIRECTORY = "changelog.d"
 # Files in the directory that aren't fragments (also towncrier's `ignore`, in pyproject.toml).
-NOT_FRAGMENTS = frozenset({"README.md", "template.md"})
+# macOS writes .DS_Store into a folder Finder opens; towncrier would refuse it (pre-QA r6 on #732).
+NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
+# A Markdown heading as CommonMark reads one: up to 3 spaces, 1-6 #, then a space, a tab or the
+# line's end (pre-QA r6 on #732: `##<TAB>x` and `   ## x` render as headings on GitHub too).
+_HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
 SKIP_LABEL = "no changelog"
 _ENTRY = re.compile(r"(?P<pr>[1-9][0-9]*)\.(?:added|changed|fixed)(?:\.[1-9][0-9]*)?\.md")
 _RELEASE = re.compile(r"\+[a-z0-9][a-z0-9-]*\.release\.md")
@@ -81,7 +85,7 @@ def _content_problem(text: str, pr: str | None) -> str | None:
     lines = text.strip("\n").splitlines()
     # Line by line, code blocks too: every reader of CHANGELOG.md (publish.yml's awk, the release
     # gate) is line-based, so a heading inside a fence still ends the section (pre-QA r5 on #731).
-    if any(re.match(r"#{1,6} ", line) for line in lines):
+    if any(_HEADING.match(line) for line in lines):
         return f"it has a heading; the notes add the category headings ({_HOW})."
     if _COMMENT in text:
         return "it has `<!--`, which would hide the rest of the notes (towncrier's marker too)."
@@ -125,7 +129,8 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
                 DIRECTORY,
             ],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         ).stdout.splitlines()
     except (OSError, subprocess.CalledProcessError) as error:
@@ -205,7 +210,10 @@ def _git_show(root: Path, revision: str, path: str) -> str | None:
         return subprocess.run(
             ["git", "-C", str(root), "show", f"{revision}:{path}"],
             capture_output=True,
-            text=True,
+            # CHANGELOG.md isn't ASCII: decoding by the locale crashed on a C or cp1252 locale,
+            # as check_release.py's _git explains (pre-QA r6 on #732).
+            encoding="utf-8",
+            errors="replace",
             check=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError):
