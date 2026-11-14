@@ -822,6 +822,75 @@ def test_every_kind_of_definition_is_refused(
     assert f"defines a {says}" in found[0], found
 
 
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        # Pre-QA r10 on #732: `\\` escaped the line break, so the label was never a candidate;
+        # GitHub links another entry's `[a\\ b]` to it.
+        ("731.fixed.md", "- **x** (#731): y\n\n  [a\\\n  b]: https://evil.example\n"),
+        ("+x.release.md", "Text.\n\n[a\\\nb]: https://evil.example\n"),
+    ],
+)
+def test_a_label_with_an_escaped_line_break_is_refused(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {name: text}))
+    assert len(found) == 1 and "line 3," in found[0] and "defines a link reference" in found[0]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # GitHub links an email or a `www.` address by itself: not the fragment's definition.
+        "- **X** (#731): mail [a@b.co]: here\n",
+        "- **X** (#731): see [www.example.com]: there\n",
+    ],
+)
+def test_text_github_links_by_itself_isnt_a_definition(tmp_path: Path, text: str) -> None:
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_run_of_brackets_is_read_in_linear_time(tmp_path: Path) -> None:
+    """Pre-QA r10 on #732: a label allowed `[`, so 16,000 of them took 4 s in the regex."""
+    import time
+
+    started = time.monotonic()
+    script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "- **x** (#731): y\n  " + "[" * 16_000 + "\n"})
+    )
+    assert time.monotonic() - started < 1, "quadratic again?"
+
+
+def test_a_footnote_refusal_names_its_definition(tmp_path: Path) -> None:
+    """Pre-QA r10 on #732: it named the line citing it."""
+    text = "- **X** (#731): a\n\n  [^1] cited here\n\n  [^1]: note\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 5, '  [^1]: note', defines a footnote" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "line"),
+    [
+        # Pre-QA r10 on #732: a code span or a fence across lines named the wrong line.
+        ("731.fixed.md", "- **X** (#731): `a\n  <b>` ok\n  <i>x</i>\n", 3),
+        ("+x.release.md", "Text.\n\n```\n<div>\n```\n\nand <span>x</span>\n", 7),
+        ("+x.release.md", "Text.\n\n~~~\n<div>\n~~~\n\nand <span>x</span>\n", 7),
+    ],
+)
+def test_a_raw_html_refusal_skips_code(tmp_path: Path, name: str, text: str, line: int) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {name: text}))
+    assert len(found) == 1 and f"line {line}," in found[0] and "raw HTML" in found[0], found
+
+
+def test_the_same_text_in_two_categories_passes(tmp_path: Path) -> None:
+    """Pre-QA r10 on #732: towncrier merges identical entries within a category only."""
+    entry = "- **Same** (#900): y\n"
+    assert (
+        script.fragment_problems(_dir(tmp_path, {"900.added.md": entry, "900.fixed.md": entry}))
+        == []
+    )
+
+
 def test_an_entry_that_renders_empty_is_refused(tmp_path: Path) -> None:
     """QA r4 on #732: `(#731)` was the definition's title, so the number check passed, and
     GitHub rendered an empty item."""
@@ -845,6 +914,9 @@ def test_an_entry_that_renders_empty_is_refused(tmp_path: Path) -> None:
         ("- **T** (#731): x\x1b[2K\x1b[1A\n", 1, "001B"),
         ("- **T** (#731): x\x00\n", 1, "0000"),
         ("- **T** (#731): x\xad y\n", 1, "00AD"),
+        # Pre-QA r10 on #732: a space other than U+0020, as the hidden-character test refuses.
+        ("- **T** (#731): x\xa0y\n", 1, "00A0"),
+        ("- **T** (#731): x\u3000y\n", 1, "3000"),
     ],
 )
 def test_control_and_invisible_characters_are_named(
@@ -904,7 +976,8 @@ def test_many_definition_candidates_render_once(
     monkeypatch.setattr(script.cmarkgfm, "github_flavored_markdown_to_html", counting)
     text = "- **x** (#731): y\n  " + " ".join(f"[l{n}]: x" for n in range(200)) + "\n"
     script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
-    assert len(calls) <= 2, len(calls)
+    # The layout, and the definitions with and without the fragment (pre-QA r10 on #732).
+    assert len(calls) <= 3, len(calls)
 
 
 def test_fragments_with_the_same_text_are_named(tmp_path: Path) -> None:
@@ -1057,7 +1130,7 @@ def test_the_draft_check_passes_notes_that_match(tmp_path: Path) -> None:
         ({"Fixed": ["- **b** (#731): b"]}, "renders {'Fixed': 1} where changelog.d/ holds"),
         (
             {"Fixed": ["- **b** (#731): b", "- **c** (#730): c", "<details>", "x", "</details>"]},
-            "an HTML block",
+            "holds raw HTML",
         ),
         (
             {"Fixed": ["- **b** (#731): b", "- **c** (#730): c", "", "### Fixed", "", "- d"]},

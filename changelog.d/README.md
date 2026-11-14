@@ -11,7 +11,7 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
 - **Content:** the entry exactly as it would appear under its `### ` heading in `CHANGELOG.md`:
   `- **Title** (#PR): what changed and why — closes #N`, usually on one line, with no heading.
   Its first `(#N)` is the file's PR number. Save it as UTF-8 without a byte-order mark. At most
-  16 KiB, and no two fragments with the same text (towncrier prints them once).
+  16 KiB, and no two fragments of one category with the same text (towncrier prints them once).
   - **How it renders is checked with cmark-gfm**, the parser GitHub's Markdown is built on: the
     fragment is placed between two other entries of its category, as a release assembles it, and
     must stay one item of that list with text in it, leaving the entries around it and the next
@@ -23,7 +23,8 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
     and `</li>` closes the list, or drops it: put a placeholder such as `<name>` in backticks);
     a footnote or a link reference definition (`[label]: url`, which would apply to every entry
     and older release: write links inline); a control character other than a tab, or a
-    character that doesn't show (zero-width, direction marks, line and paragraph separators).
+    character that doesn't show (zero-width, direction marks, line and paragraph separators, a
+    space other than U+0020; CI's `tests/test_hidden_characters.py` refuses a few more).
   - **A line starting with `#`** (`#` to `######`, then a space, a tab or the line's end) is
     refused even inside a code block: the release tools read `CHANGELOG.md` line by line. No
     `<!--`, and only a `+<name>.release.md` says `**Security release:**`. A fragment is a file
