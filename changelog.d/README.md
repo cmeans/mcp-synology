@@ -21,3 +21,7 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   Removing fragments needs the label too (a revert, a backport's carry-back), except in a release
   PR, which bumps the version, adds its section and assembles them all. A `+<name>.release.md`
   alone doesn't count as a PR's own fragment.
+- **Changing what hasn't shipped:** a PR that only changes something another PR added since the
+  last release edits that PR's fragment, so its entry says what will ship, and adds none of its
+  own: it takes the `no changelog` label. The notes describe what changed since the last
+  release, not each step on the way.
