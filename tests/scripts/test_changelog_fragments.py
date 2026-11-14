@@ -125,25 +125,59 @@ def test_bad_content_is_refused(tmp_path: Path, text: str, says: str) -> None:
 
 def test_indented_lines_are_neither_headings_nor_entries(tmp_path: Path) -> None:
     text = (
-        "- **x** (#731): y\n\n    ```\n    # not a heading\n        ## nor this\n"
-        "  - not an entry\n    ```\n"
+        "- **x** (#731): y\n\n      # not a heading: indented code inside the entry\n"
+        "        ## nor this\n  - not an entry\n"
     )
     assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
 
 
 @pytest.mark.parametrize(
     "line",
-    ["##\tTab heading", "##", "#", "   ## Three spaces", " # One space", "###### Six"],
+    [
+        "##\tTab heading",
+        "##",
+        "#",
+        "   ## Three spaces",
+        " # One space",
+        "###### Six",
+        # QA r2 on #732: inside the entry (content at column 2), GitHub renders these too.
+        "    ## Four spaces",
+        "     ## Five spaces",
+        "\t## Tab",
+        "\n    ## Four after a blank line",
+        "  more\n  ===",
+        "  more\n  ---",
+        "  - ## In a nested item",
+        "  > ## In a block quote",
+    ],
 )
 def test_every_commonmark_heading_is_refused(tmp_path: Path, line: str) -> None:
-    """Pre-QA r6 on #732: GitHub renders these as headings inside the release notes."""
+    """Pre-QA r6 and QA r2 on #732: GitHub renders these as headings inside the release notes."""
     found = script.fragment_problems(
         _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
     )
-    assert len(found) == 1 and "heading" in found[0], found
+    assert len(found) == 1 and "reads as a heading" in found[0], found
 
 
-@pytest.mark.parametrize("line", ["####### Seven", "#hashtag", "    ## Four spaces is code"])
+def test_a_heading_refusal_names_its_line(tmp_path: Path) -> None:
+    """QA r2 on #732: a tab or a bare # doesn't look like a heading in an editor."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "- **x** (#731): y\n  more\n##\tTab\n"})
+    )
+    assert found == [
+        "changelog.d/731.fixed.md: line 3, '##\\tTab', reads as a heading; the notes add the "
+        "category headings (see changelog.d/README.md)."
+    ], found
+
+
+def test_a_heading_as_the_entry_itself_is_refused(tmp_path: Path) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": "- ## x (#731): y\n"}))
+    assert len(found) == 1 and "line 1" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "line", ["####### Seven", "#hashtag", "      ## Six spaces is code", "\t  ## Tab and two"]
+)
 def test_what_commonmark_doesnt_read_as_a_heading_passes(tmp_path: Path, line: str) -> None:
     found = script.fragment_problems(
         _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})

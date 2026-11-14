@@ -28,9 +28,29 @@ DIRECTORY = "changelog.d"
 # Files in the directory that aren't fragments (also towncrier's `ignore`, in pyproject.toml).
 # macOS writes .DS_Store into a folder Finder opens; towncrier would refuse it (pre-QA r6 on #732).
 NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
-# A Markdown heading as CommonMark reads one: up to 3 spaces, 1-6 #, then a space, a tab or the
-# line's end (pre-QA r6 on #732: `##<TAB>x` and `   ## x` render as headings on GitHub too).
-_HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t]|$)")
+# A Markdown heading as CommonMark reads one inside the entry: a fragment is a list item whose
+# content starts at column 2, so up to 5 spaces of indent (2 + 3), then 1-6 #, then a space, a
+# tab or the line's end; or a setext underline (=== or ---) (pre-QA r6 and QA r2 on #732: each
+# renders as a heading on GitHub's release page). Tabs are expanded to 4 columns first.
+_HEADING = re.compile(r" {0,5}(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)")
+# A nested list item or block quote inside the entry: a heading after one renders at any depth.
+_NESTED = re.compile(r" *(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+|>[ \t]?)+")
+_NESTED_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
+
+
+def _heading_line(lines: list[str]) -> tuple[int, str] | None:
+    """The first line (1-based number, text) that would render as a heading, or None. Only lines
+    indented 6 or more columns (indented code inside the entry) are exempt."""
+    for number, line in enumerate(lines, start=1):
+        expanded = line.expandtabs(4)
+        if _HEADING.match(expanded):
+            return number, line
+        nested = _NESTED.match(expanded)
+        if nested and _NESTED_HEADING.match(expanded[nested.end() :]):
+            return number, line
+    return None
+
+
 SKIP_LABEL = "no changelog"
 _ENTRY = re.compile(r"(?P<pr>[1-9][0-9]*)\.(?:added|changed|fixed)(?:\.[1-9][0-9]*)?\.md")
 _RELEASE = re.compile(r"\+[a-z0-9][a-z0-9-]*\.release\.md")
@@ -85,8 +105,14 @@ def _content_problem(text: str, pr: str | None) -> str | None:
     lines = text.strip("\n").splitlines()
     # Line by line, code blocks too: every reader of CHANGELOG.md (publish.yml's awk, the release
     # gate) is line-based, so a heading inside a fence still ends the section (pre-QA r5 on #731).
-    if any(_HEADING.match(line) for line in lines):
-        return f"it has a heading; the notes add the category headings ({_HOW})."
+    heading = _heading_line(lines)
+    if heading:
+        at, shown = heading
+        at += len(text) - len(text.lstrip("\n"))  # the file's own line number
+        return (
+            f"line {at}, {shown[:60]!r}, reads as a heading; the notes add the category "
+            f"headings ({_HOW})."
+        )
     if _COMMENT in text:
         return "it has `<!--`, which would hide the rest of the notes (towncrier's marker too)."
     if pr is None:
