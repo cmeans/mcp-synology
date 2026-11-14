@@ -306,19 +306,25 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
 
 def problems(tag: str, root: Path) -> list[str]:
     """Return every reason not to release `tag` from the checkout at `root`."""
+    # As changelog_fragments.py tells a fragment (#734): a file that isn't UTF-8 is named, with
+    # the fix, not the exception (pre-QA r2 on #735: which of the two to re-save).
+    for name in ("pyproject.toml", "CHANGELOG.md"):
+        try:
+            (root / name).read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            return [
+                f"{name} isn't UTF-8 (a Windows editor's or PowerShell's save does that): save "
+                "it as UTF-8 without a byte-order mark."
+            ]
+        except OSError:
+            pass  # reported below, as before
     try:
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         version = pyproject["project"]["version"]
         if not isinstance(version, str):
             raise TypeError(f"[project].version is {version!r}, not a string")
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        # As changelog_fragments.py tells a fragment (#734): name the fix, not the exception.
-        return [
-            "pyproject.toml or CHANGELOG.md isn't UTF-8 (a Windows editor's or PowerShell's "
-            "save does that): save it as UTF-8 without a byte-order mark."
-        ]
-    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
         return [f"couldn't read the version and CHANGELOG: {type(error).__name__}: {error}"]
     found = (
         tag_problem(tag, version),

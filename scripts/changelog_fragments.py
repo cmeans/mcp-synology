@@ -99,10 +99,15 @@ def _is_underline(text: str) -> bool:
 # (CommonMark), and `\` escapes any character, a line break included (pre-QA r10).
 _DEFINITION = re.compile(r"(?m)^[ \t>*+0-9.)-]*\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:")
 # Where raw HTML is, outside code and backslash escapes (only for naming its line in a
-# refusal): a tag that closes, on its line or a later one, not an autolink (`<https://x>`,
-# `<a@b.c>`), and not a `<` that never closes (`a<b and`), which aren't raw HTML (#734).
+# refusal), by CommonMark's raw-HTML grammar: an open tag with its attributes, a closing tag,
+# a comment, a processing instruction, a declaration or CDATA. So an autolink (`<https://x>`,
+# `<a@b.c>`), `a<b ... ->` or `Map<str, int>` isn't taken for one (#734, pre-QA r2 on #735);
+# a tag may span lines.
+_ATTRIBUTE = r"""\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:[^\s"'=<>`]+|'[^']*'|"[^"]*"))?"""
 _RAW_TAG = re.compile(
-    r"<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?![^\s<>@]+@[^\s<>]+>)[A-Za-z/!?][^<>]*>"
+    rf"<[A-Za-z][A-Za-z0-9-]*(?:{_ATTRIBUTE})*\s*/?>"
+    r"|</[A-Za-z][A-Za-z0-9-]*\s*>"
+    r"|<!--|<\?[\s\S]*?\?>|<![A-Za-z][^>]*>|<!\[CDATA\[[\s\S]*?\]\]>"
 )
 # The pinned towncrier, as CLAUDE.md's release step 4 and CI's draft run it (a test checks the
 # three agree): towncrier isn't a project dependency, so a bare `towncrier` is missing or
@@ -523,31 +528,8 @@ def _no_code(text: str) -> str:
     return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", blank, fenced)
 
 
-def _probe_renders(notes: list[str], references: list[str]) -> list[str]:
-    """How GitHub renders each of ``references`` after ``notes``, one paragraph each, in order.
-    Each is a paragraph of its own: in one, a backtick or a `<` in one label paired with
-    another's into a code span or a tag, and neither became a link (QA r5 on #732). Only the
-    paragraphs from the references' own lines count, so a footnotes section, whose paragraphs
-    carry its definitions' earlier lines, needs no special case (#735)."""
-    probe = "\n\n".join(["\n".join(notes), *references]) + "\n"
-    rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
-    found = re.findall(r'<p data-sourcepos="(\d+):[^"]*">(.*?)</p>', rendered, re.S)
-    return [html for line, html in found if int(line) >= len(notes) + 2]
-
-
-def _labels(found: re.Match[str]) -> list[str]:
-    """The labels GitHub may match for a candidate whose label runs onto later lines: its
-    whitespace collapsed; with each later line's quote markers taken off (QA r5 on #732); and
-    with them taken off only up to the first line's quote depth. All are probed: a `>` on a
-    line indented into a paragraph, or past the quote's depth, is text in the label (#735), and
-    which one a line holds isn't read here."""
-    collapsed = " ".join(found[2].split())
-    unquoted = " ".join(re.sub(r"\n[ \t>]*", " ", found[2]).split())
-    # In a quote, a later line's own `>` past the quote's depth is text (pre-QA r1 on #735:
-    # `> [foo` / `>     >bar]` is GitHub's `foo >bar`, which neither form above gives).
-    depth = found[0][: found[0].index("[")].count(">")
-    in_quote = " ".join(re.sub(rf"\n(?:[ \t]*>[ ]?){{0,{depth}}}", " ", found[2]).split())
-    return list(dict.fromkeys([collapsed, unquoted, in_quote]))
+# A definition's destination (or a footnote's first word) after `]:`, on that line or the next.
+_DESTINATION = re.compile(r"[ \t]*\n?[ \t]*(<[^<>\n]*>|\S+)")
 
 
 def _definition_problem(
@@ -556,33 +538,39 @@ def _definition_problem(
     """Why the fragment defines a link reference or a footnote, or None. A definition applies to
     the whole document: `[label]` or `[^label]` in any other entry, or in an older release, would
     take its URL or its note, shown at the end of CHANGELOG.md (pre-QA r9 and QA r4 on #732).
-    Each candidate's references (one per label GitHub may match) are rendered after the notes
-    twice, with the fragment and without it: one that renders otherwise with it is a label the
-    fragment defined, whatever it links to (GitHub links an email by itself, pre-QA r10)."""
+    It's read from the render, not rebuilt: each candidate's destination (a footnote's first
+    word) is swapped for a token of its own, and the notes are rendered once. A definition
+    renders nothing, so its token is gone, or left only in an `href` (a link that uses it) or the
+    footnotes section of a fragment that cites it (refused before this); text, code or a
+    paragraph shows its token (pre-QA r2 on #735: every rebuilt label missed a nesting of quotes
+    or a lazy line)."""
     body = "\n".join(lines)
     candidates = list(_DEFINITION.finditer(body))
     if not candidates:
         return None
-    references: list[str] = []
-    owners: list[int] = []
+    pieces: list[str] = []
+    tokens: list[tuple[int, str]] = []
+    position = 0
     for number, found in enumerate(candidates):
-        for label in _labels(found):
-            references.append(f"QZ{len(references)}ZQ [{found[1]}{label}]")
-            owners.append(number)
-    with_it = _probe_renders([*before, *lines, *after, ""], references)
-    without = _probe_renders([*before, *after, ""], references)
-    defined = sorted(
-        {owners[n] for n, html in enumerate(with_it) if n >= len(without) or html != without[n]}
-    )
+        # A destination ends on its own line, so it never runs past the next candidate's `]:`
+        # (`[a]:` then `[b]: url` swaps `[b]:` and `url`; GitHub reads both as text).
+        destination = _DESTINATION.match(body, found.end())
+        if destination is None:
+            continue
+        token = f"qzdef{number}zq"
+        pieces += [body[position : destination.start(1)], token]
+        position = destination.end(1)
+        tokens.append((number, token))
+    pieces.append(body[position:])
+    probe = "\n".join([*before, *"".join(pieces).split("\n"), *after]) + "\n"
+    rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
+    # A footnote the fragment references itself was refused already, by its rendered section;
+    # one it doesn't reference renders nothing, so its token is gone like a link's.
+    shown = re.sub(r'href="[^"]*"', "", rendered)
+    defined = [number for number, token in tokens if token not in shown]
     if not defined:
         return None
-    # Labels match regardless of case, so `[foo]: b` in a code block renders as defined when
-    # `[Foo]: url` is the definition: name one outside code (#735).
-    code_free = _no_code(body)
-    outside = [n for n in defined if code_free[candidates[n].start(1) - 1] == "["]
-    # When every one that renders as defined is in code, the definition itself isn't a
-    # candidate (no prefix the pattern takes): the code line is the nearest to name.
-    found = candidates[(outside or defined)[0]]
+    found = candidates[defined[0]]
     index = body.count("\n", 0, found.start(1))
     at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
     if found[1]:
@@ -669,7 +657,7 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
             f"this release PR ({version}) leaves its own text unbuilt ({_named(texts)}), the "
             f"{SKIP_LABEL!r} label or not: towncrier won't build {version} again, so move the "
             f"text into the '## {version}' section by hand (a `**Security release:**` line "
-            f"first){also}, and delete the files."
+            f"first){also}, and delete {'the file' if len(left) == 1 else 'the files'}."
         )
     if SKIP_LABEL in labels:
         return None
@@ -822,6 +810,11 @@ def changelog_problems(root: Path) -> list[str]:
     merged."""
     start = _start_string(root)
     if start is None:
+        # A pyproject.toml that isn't UTF-8 has a start_string GitHub can't read either: say
+        # how to save it, not that the key is missing (pre-QA r2 on #735).
+        _, unreadable = _read_text(root / "pyproject.toml", "pyproject.toml")
+        if unreadable:
+            return [unreadable]
         return ["pyproject.toml has no [tool.towncrier] start_string, which the build needs."]
     text, problem = _read_text(root / "CHANGELOG.md", "CHANGELOG.md")
     if problem:

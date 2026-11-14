@@ -770,6 +770,7 @@ def test_a_release_pr_may_not_leave_its_own_text_unbuilt(branch: Path, labels: l
     # The section is there, so towncrier refuses to build again (pre-QA r11 on #732).
     assert "towncrier won't build 1.1.0 again" in problem, problem
     assert "into the '## 1.1.0' section by hand" in problem, problem
+    assert problem.endswith("and delete the file."), problem
 
 
 @pytest.mark.parametrize("labels", [[], ["no changelog"]])
@@ -1046,6 +1047,11 @@ def test_the_same_text_in_two_categories_passes(tmp_path: Path) -> None:
         "  [foo\n      >bar]: https://evil.example\n",
         # Pre-QA r1 on #735: in a quote, a `>` past the quote's depth (GitHub's `foo >bar`).
         "  > [foo\n  >     >bar]: https://evil.example\n",
+        # Pre-QA r2 on #735: nested quotes with a lazy line, mixed depths, and a lazy line in a
+        # quote: no rebuilt label covers them all, so the check reads the render.
+        "  > > [foo\n  >     >bar]: https://evil.example\n",
+        "  > > [foo\n  >     >bar\n  > >     >baz]: https://evil.example\n",
+        "  > [foo\n        >bar]: https://evil.example\n",
     ],
 )
 def test_definitions_the_shared_probe_missed_are_refused(tmp_path: Path, text: str) -> None:
@@ -1094,6 +1100,41 @@ def test_a_console_that_cant_encode_a_refusal_gets_escapes(module: str, tmp_path
     assert b"\\u4fee" in result.stdout, result.stdout
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> > [foo\n>     >bar]: https://evil.example\n",
+        "> > [foo\n>      > >bar]: https://evil.example\n",
+    ],
+)
+def test_a_definition_in_nested_quotes_is_refused_in_release_text(
+    tmp_path: Path, text: str
+) -> None:
+    """Pre-QA r2 on #735: GitHub links another entry's `[foo >bar]` to it."""
+    found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
+    assert len(found) == 1 and "line 1," in found[0] and "link reference" in found[0], found
+
+
+def test_a_definition_the_fragment_uses_itself_is_refused(tmp_path: Path) -> None:
+    """Its token is left in an `href`: still a definition every other entry would get."""
+    text = "- **x** (#731): y\n\n  see [foo]\n\n  [foo]: https://e.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 5," in found[0] and "link reference" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Only in a fence: shown as code, not a definition.
+        "- **x** (#731): y\n\n  ```\n  [foo]: b\n  ```\n",
+        # A line that continues a paragraph can't start a definition.
+        "- **X** (#731): use or\n  [b]: c\n",
+    ],
+)
+def test_what_renders_as_text_isnt_a_definition(tmp_path: Path, text: str) -> None:
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
 def test_a_definition_refusal_names_the_line_outside_code(tmp_path: Path) -> None:
     """#735: labels match regardless of case, so `[foo]: b` in a fence rendered as defined by
     `[Foo]: url`, and the fence's line was named."""
@@ -1121,6 +1162,9 @@ def test_a_footnote_refusal_names_the_definition_outside_code(tmp_path: Path) ->
         # lines.
         ("- **x** (#731): y \\\\<br> z\n", 1),
         ("- **x** (#731): y\n  more <img\n  src=x> z\n", 2),
+        # Pre-QA r2 on #735: CommonMark's raw-HTML grammar, not any `<` closed later.
+        ("- **x** (#731): a<b and\n  c -> d\n  and <em>e</em>\n", 3),
+        ("- **x** (#731): Map<str, int> type\n  then <span>x</span>\n", 2),
     ],
 )
 def test_a_raw_html_refusal_names_the_tag_not_what_looks_like_one(
@@ -1128,6 +1172,22 @@ def test_a_raw_html_refusal_names_the_tag_not_what_looks_like_one(
 ) -> None:
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
     assert len(found) == 1 and f"line {line}," in found[0] and "raw HTML" in found[0], found
+
+
+def test_a_fence_isnt_closed_by_a_shorter_run(tmp_path: Path) -> None:
+    """Pre-QA r2 on #735: a ```` fence with ``` inside stays open until its own close."""
+    text = "Text.\n\n````\n```\n<div>\n````\n\nand <span>x</span>\n"
+    found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
+    assert len(found) == 1 and "line 8," in found[0] and "raw HTML" in found[0], found
+
+
+def test_a_pyproject_toml_that_isnt_utf8_is_named(tmp_path: Path) -> None:
+    """Pre-QA r2 on #735: it was told it had no start_string, and an agent would add one."""
+    root = _dir(tmp_path, {})
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    (root / "pyproject.toml").write_bytes(text.encode("utf-16"))
+    found = script.changelog_problems(root)
+    assert found and "pyproject.toml is UTF-16" in found[0], found
 
 
 def test_a_fence_closed_by_a_longer_run_still_ends_there(tmp_path: Path) -> None:

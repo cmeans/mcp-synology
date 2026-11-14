@@ -456,7 +456,7 @@ def test_a_file_that_isnt_utf8_is_a_refusal_not_a_traceback(
 ) -> None:
     (repo / name).write_bytes(b"\xff\xfe")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "isn't UTF-8" in capsys.readouterr().out
+    assert f"{name} isn't UTF-8" in capsys.readouterr().out
 
 
 def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:
