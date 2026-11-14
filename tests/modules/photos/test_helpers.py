@@ -640,6 +640,9 @@ class TestQuotedNamesAndFolders:
             assert quoted_name(plain) == plain, plain
         assert quoted_name('Trip" (7)') == '"Trip\\" (7)"'
         assert quoted_name("a, b") == '"a, b"'
+        # Look-alikes at an end (QA r1 on #724): a double prime, a modifier apostrophe.
+        assert quoted_name("\u2033Trip\u2033") == '"\u2033Trip\u2033"'
+        assert quoted_name("\u02bcAnn\u02bc") == '"\u02bcAnn\u02bc"'
         assert quoted_name("a; b") == '"a; b"'  # delete_photo_albums' list ends with "; "
         assert quoted_name("a (b") == '"a (b"'
         assert quoted_name("a: b") == '"a: b"'
@@ -668,6 +671,10 @@ class TestQuotedNamesAndFolders:
         assert quoted_name("\u201cTrip\u201d") == '"\u201cTrip\u201d"'  # typographic quotes
         assert quoted_name("\u2018a") == '"\u2018a"' and quoted_name("a\u2019") == '"a\u2019"'
         assert quoted_name("`Jo`") == '"`Jo`"'
+        # #711: guillemets, low quotes, CJK corner brackets (Unicode's Quotation_Mark).
+        assert quoted_name("\u00abAnn\u00bb") == '"\u00abAnn\u00bb"'
+        assert quoted_name("\u201eAnn") == '"\u201eAnn"'
+        assert quoted_name("\u300cAnn\u300d") == '"\u300cAnn\u300d"'
         assert quoted_name("Jo\u037e Ann") == '"Jo\u037e Ann"'  # NFC makes it "; "
         assert quoted_name("a \u0387 b") == '"a \u0387 b"'  # NFC makes it " · "
 
