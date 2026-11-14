@@ -2407,7 +2407,10 @@ async def _recreate_missing_folders(
             )
         except (httpx.TransportError, SynologyError) as e:
             # The folders made before this one stay on the NAS, empty: say which (#725).
-            raise _recreate_failed(e, path, _made_with_parents(created, parents, gone)) from None
+            made = _made_with_parents(created, parents, gone)
+            # Its own missing parents: force_parent may have made them before the failure.
+            above = [p for p in parents if p in gone and path.startswith(p + "/") and p not in made]
+            raise _recreate_failed(e, path, above, made) from None
         created.append(path)
     return sorted(created), _made_with_parents(created, parents, gone)
 
@@ -2425,12 +2428,14 @@ def _made_with_parents(created: list[str], parents: list[str], gone: set[str]) -
 
 
 def _recreate_failed(
-    e: httpx.TransportError | SynologyError, path: str, made: list[str]
+    e: httpx.TransportError | SynologyError, path: str, above: list[str], made: list[str]
 ) -> ToolError:
     """The error for a restore whose re-creation of the original folder ``path`` failed (#725):
-    the cause, whether ``path`` may exist now (a request DSM didn't answer may have made it; one
-    that never connected sent nothing, #222), the folders re-created before it, which stay, and
-    that nothing was restored. A retry is safe: it re-creates only what's still missing."""
+    the cause, whether ``path`` and its missing parents ``above`` may exist now (a request DSM
+    didn't answer may have made them; one that never connected sent nothing, #222), the folders
+    re-created before it, which stay, and that nothing was restored. A retry is safe: it checks
+    the folders again and re-creates only what's still missing, so that's the advice, not a
+    check first (pre-QA r1 on #725)."""
     # Sent with no DSM answer: the folder may exist now. A connection never made sent nothing.
     lost = isinstance(e, (httpx.TransportError, DsmHttpError, DsmReplyError)) and not (
         isinstance(e, httpx.TransportError) and never_sent(e)
@@ -2451,7 +2456,7 @@ def _recreate_failed(
                 ),
                 retryable=True,
                 suggestion=(
-                    "Check with list_files before running it again."
+                    _RERUN_IS_SAFE
                     if connected
                     else "Check that the NAS is reachable, then try again."
                 ),
@@ -2462,15 +2467,25 @@ def _recreate_failed(
     details = body["error"]
     message = sentence(str(details["message"]))
     if lost:
-        message = then(message, f"{shown(path)} may have been re-created.")
+        maybe = sorted([*above, path])
+        message = then(
+            message,
+            f"{shown(path)} may have been re-created."
+            if len(maybe) == 1
+            else path_list("May have been re-created", [shown(p) for p in maybe]),
+        )
     elif not isinstance(e, httpx.TransportError):
-        # DSM's refusal names no folder.
-        message = then(message, f"Failed re-creating the original folder {shown(path)}.")
+        # DSM's refusal names no folder. The path isn't last in the sentence: a name ending in
+        # `.` would read as another path before its period (#736).
+        message = then(message, f"Re-creating {shown_beside(path, ' failed')} failed.")
     if made:
         message = then(
             message, path_list("Already re-created before this failure", [shown(p) for p in made])
         )
     details["message"] = then(message, "Nothing was restored.")
-    if lost and not CHECKS_WITH_LIST_FILES.search(str(details.get("suggestion") or "")):
-        _add_advice(details, "Check with list_files before running it again.")
+    if lost and _RERUN_IS_SAFE not in str(details.get("suggestion") or ""):
+        _add_advice(details, _RERUN_IS_SAFE)
     return rewrapped_error(body)
+
+
+_RERUN_IS_SAFE = "Running it again is safe: it re-creates only the original folders still missing."
