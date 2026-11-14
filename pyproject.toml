@@ -48,9 +48,10 @@ dev = [
     "types-PyYAML>=6.0",
     "types-regex>=2026.9.29",
     "respx>=0.22",
-    # scripts/changelog_fragments.py reads how a fragment renders with GitHub's own parser
-    # (cmark-gfm) (#732); CI's `changelog` job runs it with the same pins through `uv run --with`
-    # (tests/scripts checks they agree with uv.lock)
+    # scripts/changelog_fragments.py reads how a fragment renders with cmark-gfm, the parser
+    # GitHub's Markdown is built on (#732), for its tests; CI's `changelog` job runs the script
+    # from the `changelog` group below, at the same pin (tests/scripts checks they agree). No
+    # wheel for Python 3.15 yet: it builds from source there, as pyyaml did (#571).
     "cmarkgfm==2025.10.22",
     # tests/test_readme.py builds the wheel metadata with the build backend (#487)
     "hatchling>=1.27",
@@ -60,6 +61,12 @@ vdsm = [
     "testcontainers>=4.0",
     "playwright>=1.50",
 ]
+
+[dependency-groups]
+# CI's `changelog` job (`uv run --locked --only-group changelog`): the fragment check's parser
+# and its dependencies at uv.lock's versions, without the project, so a Dependabot bump of cffi
+# or pycparser updates what CI runs too (#732).
+changelog = ["cmarkgfm==2025.10.22"]
 
 [project.scripts]
 mcp-synology = "mcp_synology.cli:main"
@@ -133,8 +140,8 @@ addopts = "-m 'not integration and not vdsm' --cov=mcp_synology --cov-fail-under
 
 # CHANGELOG fragments (#731): each PR writes its entry as changelog.d/<PR>.<type>.md and the
 # release PR assembles them into the version's notes with
-# `uvx --from towncrier==26.9.0 towncrier build --version <version> --yes`. towncrier runs
-# through uvx, so it isn't a project dependency. scripts/changelog_fragments.py checks the names
+# `uvx --from towncrier==26.9.0 --with ... towncrier build --version <version> --yes` (CLAUDE.md
+# gives the dependencies' pins). towncrier runs through uvx, so it isn't a project dependency. scripts/changelog_fragments.py checks the names
 # and content (a misnamed file would otherwise be dropped from the notes) and that a PR adds one.
 [tool.towncrier]
 directory = "changelog.d"

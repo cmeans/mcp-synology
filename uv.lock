@@ -1035,6 +1035,11 @@ vdsm = [
     { name = "testcontainers" },
 ]
 
+[package.dev-dependencies]
+changelog = [
+    { name = "cmarkgfm" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.2.1" },
@@ -1061,6 +1066,9 @@ requires-dist = [
     { name = "types-regex", marker = "extra == 'dev'", specifier = ">=2026.9.29" },
 ]
 provides-extras = ["dev", "vdsm"]
+
+[package.metadata.requires-dev]
+changelog = [{ name = "cmarkgfm", specifier = "==2025.10.22" }]
 
 [[package]]
 name = "mcp-types"

@@ -258,12 +258,21 @@ def test_html_inside_the_entry_passes(tmp_path: Path, text: str) -> None:
     assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
 
 
-def test_a_footnote_definition_outside_the_entry_is_refused(tmp_path: Path) -> None:
-    """GitHub writes nothing for it where it stands, and it ends the category's list there."""
-    found = script.fragment_problems(
-        _dir(tmp_path, {"731.fixed.md": "- **x** (#731): y\n[^1]: a note\n"})
-    )
-    assert len(found) == 1 and "line 2, '[^1]: a note', starts a block" in found[0], found
+@pytest.mark.parametrize(
+    ("name", "text", "line"),
+    [
+        # At column 0 GitHub writes nothing for it where it stands, and it ends the list there.
+        ("731.fixed.md", "- **x** (#731): y\n[^1]: a note\n", "line 2, '[^1]: a note',"),
+        ("731.fixed.md", "- **x** (#731): y[^1]\n[^1]: a note\n", "line 2, '[^1]: a note',"),
+        # Indented, the lists stay whole, but GitHub moves the note to the end of CHANGELOG.md
+        # (pre-QA r8 on #732: told to indent what was already indented).
+        ("731.fixed.md", "- **x** (#731): y[^1]\n\n  [^1]: a note\n", "line 3, '  [^1]: a note',"),
+        ("+x.release.md", "Text[^1].\n\n[^1]: a note\n", "line 3, '[^1]: a note',"),
+    ],
+)
+def test_a_footnote_is_refused(tmp_path: Path, name: str, text: str, line: str) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {name: text}))
+    assert len(found) == 1 and f"{line} defines a footnote" in found[0], found
 
 
 @pytest.mark.parametrize(
@@ -730,24 +739,32 @@ def test_the_towncrier_pins_agree() -> None:
         assert "towncrier==" in path.read_text(encoding="utf-8"), path
 
 
-def test_the_parser_pins_agree_with_the_lock() -> None:
-    """CI runs the check with `uv run --no-project --with`, outside the lock: each of its pins is
-    the lock's version, and the dev extra pins cmarkgfm to the same one."""
+def test_the_parser_pins_agree() -> None:
+    """CI runs the check from the `changelog` dependency group, at uv.lock's versions (pre-QA r8
+    on #732: pins copied into the workflow broke on a Dependabot bump of cffi); the tests run it
+    from the dev extra, at the same cmarkgfm."""
     import tomllib
 
-    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
-    locked = {package["name"]: package["version"] for package in lock["package"]}
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    group = pyproject["dependency-groups"]["changelog"]
+    dev = [d for d in pyproject["project"]["optional-dependencies"]["dev"] if "cmarkgfm" in d]
+    assert len(group) == 1 and group == dev and group[0].startswith("cmarkgfm=="), (group, dev)
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    withs = re.findall(r"^\s*WITH: (.+)$", ci, re.MULTILINE)
-    assert len(withs) == 2 and len(set(withs)) == 1, withs
-    pins = dict(re.findall(r"--with ([a-z0-9-]+)==([0-9][0-9.]*)", withs[0]))
-    assert set(pins) == {"cmarkgfm", "cffi", "pycparser"}, pins
-    for name, version in pins.items():
-        assert locked[name] == version, (name, version, locked[name])
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert f'"cmarkgfm=={pins["cmarkgfm"]}"' in pyproject
-    # Both steps that run the script run it with them.
-    assert ci.count("uv run $WITH python scripts/changelog_fragments.py") == 3, ci
+    runs = re.findall(r"uv run (.*?)python scripts/changelog_fragments\.py", ci)
+    assert len(runs) == 3 and set(runs) == {"--locked --only-group changelog "}, runs
+
+
+def test_towncriers_dependencies_are_pinned_alike() -> None:
+    """Pre-QA r8 on #732: uvx took the newest Jinja2 on the day, so CI's draft and the release
+    build could differ. Both pin the same set."""
+    sets = []
+    for path in (ROOT / ".github" / "workflows" / "ci.yml", ROOT / "CLAUDE.md"):
+        text = path.read_text(encoding="utf-8")
+        found = re.findall(r"uvx --from towncrier==[0-9.]+((?: --with [a-z0-9-]+==[0-9.]+)+)", text)
+        assert len(found) == 1, (path, found)
+        sets.append(sorted(found[0].split(" --with ")[1:]))
+    assert sets[0] == sets[1], sets
+    assert {pin.split("==")[0] for pin in sets[0]} == {"click", "jinja2", "markupsafe"}, sets
 
 
 def _draft(entries: dict[str, list[str]], release: str = "") -> str:

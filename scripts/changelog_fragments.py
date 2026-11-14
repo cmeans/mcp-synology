@@ -9,13 +9,14 @@ adding or changing a fragment named for its own number and removing none, as a r
 assembled every fragment, or with the `no changelog` label).
 
 Each problem prints as a GitHub Actions error. How a fragment renders is read with `cmarkgfm`,
-the Python binding of cmark-gfm, GitHub's own Markdown parser (QA r3 on #732), pinned in the dev
-extra and in CI's `uv run --with`; everything else is standard library.
+the Python binding of cmark-gfm, the parser GitHub's Markdown is built on (QA r3 on #732; cmark-gfm
+0.29.0.gfm.13 in cmarkgfm 2025.10.22: what GitHub's own pipeline adds on top of it isn't seen).
+It's in the dev extra and in the `changelog` dependency group; everything else is standard library.
 
-Usage:
-    python scripts/changelog_fragments.py check
-    python scripts/changelog_fragments.py check --base <base commit> --pr <N> --labels "<a>,<b>"
-    python scripts/changelog_fragments.py notes <towncrier build --draft's output>
+Usage (after `uv sync --extra dev`):
+    uv run python scripts/changelog_fragments.py check
+    uv run python scripts/changelog_fragments.py check --base <base> --pr <N> --labels "<a>,<b>"
+    uv run python scripts/changelog_fragments.py notes <towncrier build --draft's output>
 """
 
 from __future__ import annotations
@@ -29,8 +30,14 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 
-import cmarkgfm
-from cmarkgfm.cmark import Options
+try:
+    import cmarkgfm
+    from cmarkgfm.cmark import Options
+except ImportError:  # pre-QA r8 on #732: a plain `python` gave a traceback
+    sys.exit(
+        "changelog_fragments.py needs cmarkgfm: run it with `uv run python ...` after "
+        "`uv sync --extra dev` (CI: `uv run --locked --only-group changelog python ...`)."
+    )
 
 DIRECTORY = "changelog.d"
 # Files in the directory that aren't fragments (also towncrier's `ignore`, in pyproject.toml).
@@ -41,6 +48,8 @@ NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
 # as code (pre-QA r5 on #731).
 _LINE_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
 _BOM = "\ufeff"
+# A footnote definition, at any indent (only for naming its line in a refusal).
+_FOOTNOTE = re.compile(r"[ \t>]*\[\^[^\]]+\]:")
 # A bullet list item's start, as CommonMark reads one at column 0 to 3.
 _BULLET = re.compile(r" {0,3}[-*+](?:[ \t]|$)")
 # The categories' headings, in towncrier's order (pyproject.toml's types, the template).
@@ -54,7 +63,7 @@ _BELOW = "- **Below** (#2): the entry below this one"
 _NEXT = "- **Next** (#3): the next category's entry"
 
 
-# GitHub's own options for its Markdown, as far as structure goes, plus each block's source lines.
+# GitHub's Markdown options, as far as structure goes, plus each block's source lines.
 _OPTIONS = Options.CMARK_OPT_SOURCEPOS | Options.CMARK_OPT_FOOTNOTES
 _HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 # A setext heading's underline, at any depth (after a list marker or a quote's `>`).
@@ -147,9 +156,10 @@ class _Layout:
 
 
 def _layout(text: str) -> _Layout:
-    """Read notes as GitHub renders them, with cmark-gfm, GitHub's own Markdown parser (QA r3 on
-    #732: four rounds of regex rules each missed a Markdown rule, and markdown-it-py, a CommonMark
-    parser, missed GitHub's HTML blocks after a list item's text and its footnotes): `## <version>`,
+    """Read notes as GitHub renders them, with cmark-gfm, the parser GitHub's Markdown is built
+    on (QA r3 on #732: four rounds of regex rules each missed a Markdown rule, and markdown-it-py,
+    a CommonMark parser, missed GitHub's HTML blocks after a list item's text and its footnotes):
+    `## <version>`,
     any free text, then each category's `### <name>` and one list. The first problem is a heading
     inside a block, a heading that isn't the next category's (`heading`), an HTML block outside
     every list (`html`), or a block between a category's heading and its list or after its list
@@ -303,6 +313,18 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
         # block's start: the line that did it is the first after the block before.
         line = block.line if where(block.line) or kind != "split" else block.gap
         shown = where(line)
+        index = line - len(before)
+        footnote = shown is not None and _FOOTNOTE.match(lines[index]) is not None
+        if block.kind == "section" or footnote:
+            # GitHub's footnotes section, which it puts at the end of the document: in
+            # CHANGELOG.md, after every older release (pre-QA r8 on #732). At column 0 a
+            # definition also ends the list, but indenting it wouldn't help, so say what would.
+            notes = [n for n, text in enumerate(lines) if _FOOTNOTE.match(text)]
+            at = f"line {notes[0] + 1 + lead}, {lines[notes[0]][:60]!r}, " if notes else ""
+            return (
+                f"{at}defines a footnote, which GitHub would show at the end of CHANGELOG.md, "
+                f"after every older release: write the note in the entry's text ({_HOW})."
+            )
         if kind == "heading":
             # Only a line of the fragment can be one; the neighbors' headings are the template's.
             return (

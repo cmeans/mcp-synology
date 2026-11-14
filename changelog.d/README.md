@@ -11,10 +11,10 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
 - **Content:** the entry exactly as it would appear under its `### ` heading in `CHANGELOG.md`:
   `- **Title** (#PR): what changed and why — closes #N`, usually on one line, with no heading.
   Its first `(#N)` is the file's PR number. Save it as UTF-8 without a byte-order mark.
-  - **How it renders is checked with GitHub's own parser** (cmark-gfm, through `cmarkgfm`): the
+  - **How it renders is checked with cmark-gfm**, the parser GitHub's Markdown is built on: the
     fragment is placed between two other entries of its category, as a release assembles it, and
     must stay one item of that list, leaving the entries around it and the next category as they
-    were, with no heading in it. So indent any later line 2 spaces or more: at column 0 or 1, a
+    were, with no heading or footnote in it. So indent any later line 2 spaces or more: at column 0 or 1, a
     fence, `>`, `1.`, `---`, a table after a blank line, a footnote definition, another `-`, `*`
     or `+`, or an HTML tag alone on a line (`<details>`, `<span>`) ends the entry and splits the
     notes or swallows the rest of them. HTML indented into the entry stays inside it. A
@@ -26,7 +26,7 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
     of its own, never a symbolic link.
 - **Order:** the notes list each category's entries highest PR number first; within one PR,
   `<PR>.<type>.1.md` prints before `<PR>.<type>.md`.
-- **Checked by** `python scripts/changelog_fragments.py check` (CI): names, content, and that a
+- **Checked by** `uv run python scripts/changelog_fragments.py check` (after `uv sync --extra dev`; CI runs it too): names, content, and that a
   PR adds or changes a fragment named for its own number, unless it has the `no changelog` label
   (ask the maintainer for it; the check reads the labels when it runs, so rerun it after).
   Removing fragments needs the label too (a revert, a backport's carry-back), except in a release

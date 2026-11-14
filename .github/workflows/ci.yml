@@ -63,10 +63,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Check the fragments
+        # `--only-group changelog`: cmark-gfm's binding, which the check reads fragments with, at
+        # uv.lock's versions, without installing the project (pyproject.toml's dependency group).
         env:
-          # GitHub's Markdown parser (cmark-gfm's binding), which the check reads fragments with,
-          # at uv.lock's versions, without installing the project.
-          WITH: --no-project --with cmarkgfm==2025.10.22 --with cffi==2.1.1 --with pycparser==3.0
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           PR: ${{ github.event.pull_request.number }}
@@ -77,16 +76,16 @@ jobs:
             # The PR's labels as they are now, not the event's: a rerun after the label is added
             # replays the old payload (as qa-gate.yml reads them).
             LABELS=$(gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name] | join(",")')
-            uv run $WITH python scripts/changelog_fragments.py check --base "$BASE" --pr "$PR" --labels "$LABELS"
+            uv run --locked --only-group changelog python scripts/changelog_fragments.py check --base "$BASE" --pr "$PR" --labels "$LABELS"
           else
-            uv run $WITH python scripts/changelog_fragments.py check
+            uv run --locked --only-group changelog python scripts/changelog_fragments.py check
           fi
       - name: Build the next release's notes (draft) and check how they render
-        env:
-          WITH: --no-project --with cmarkgfm==2025.10.22 --with cffi==2.1.1 --with pycparser==3.0
+        # towncrier and its dependencies pinned, the same as the release step (CLAUDE.md): a new
+        # Jinja2 on the day would otherwise change the draft and the release build apart.
         run: |
-          uvx --from towncrier==26.9.0 towncrier build --draft --version 0.0.0 --date 2000-01-01 > "$RUNNER_TEMP/notes.md"
-          uv run $WITH python scripts/changelog_fragments.py notes "$RUNNER_TEMP/notes.md"
+          uvx --from towncrier==26.9.0 --with click==8.5.1 --with jinja2==3.1.6 --with markupsafe==3.0.4 towncrier build --draft --version 0.0.0 --date 2000-01-01 > "$RUNNER_TEMP/notes.md"
+          uv run --locked --only-group changelog python scripts/changelog_fragments.py notes "$RUNNER_TEMP/notes.md"
 
   validate-server-json:
     runs-on: ubuntu-latest
