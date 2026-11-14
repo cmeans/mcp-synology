@@ -311,7 +311,7 @@ def problems(tag: str, root: Path) -> list[str]:
     for name in ("pyproject.toml", "CHANGELOG.md"):
         try:
             text = (root / name).read_bytes().decode("utf-8")
-            if name == "pyproject.toml" and text.startswith("﻿"):
+            if name == "pyproject.toml" and text.startswith("\ufeff"):
                 # tomllib refuses the whole file (QA r1 on #738), as changelog_fragments.py says.
                 return [
                     'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" '

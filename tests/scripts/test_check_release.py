@@ -464,7 +464,7 @@ def test_a_pyproject_toml_with_a_byte_order_mark_is_named(
 ) -> None:
     """QA r1 on #738: tomllib refused it, and the gate printed `TOMLDecodeError`."""
     path = repo / "pyproject.toml"
-    path.write_text("﻿" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    path.write_text("\ufeff" + path.read_text(encoding="utf-8"), encoding="utf-8")
     assert script.main(["v1.2.3"], repo) == 1
     assert "pyproject.toml starts with a byte-order mark" in capsys.readouterr().out
 

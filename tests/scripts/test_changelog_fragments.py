@@ -1266,7 +1266,7 @@ def test_a_pyproject_toml_with_a_byte_order_mark_is_named(tmp_path: Path) -> Non
     the start_string was missing."""
     root = _dir(tmp_path, {})
     text = (root / "pyproject.toml").read_text(encoding="utf-8")
-    (root / "pyproject.toml").write_text("﻿" + text, encoding="utf-8")
+    (root / "pyproject.toml").write_text("\ufeff" + text, encoding="utf-8")
     assert script.changelog_problems(root) == [script._PYPROJECT_BOM]
 
 
