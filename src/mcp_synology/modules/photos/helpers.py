@@ -70,14 +70,20 @@ _NAME_MARKS = (", ", "; ", " (", ": ", " · ", " → ")
 
 
 def quoted_name(
-    name: object, unnamed: str = "(unnamed)", *also: str, beside_id: bool = False
+    name: object,
+    unnamed: str = "(unnamed)",
+    *also: str,
+    beside_id: bool = False,
+    marks: tuple[str, ...] = _NAME_MARKS,
 ) -> str:
-    """An album's, person's, tag's, place's or request's name in a line of a reply: as is,
+    """An album's, person's, tag's, place's or request's name in a line of a reply (or another
+    value a line writes beside its own separators, such as get_photo's EXIF and address parts,
+    #710, with ``marks``): as is,
     or JSON-quoted (`json_quoted`, #695) only when it's needed (maintainer, 2026-11-12, on
     #709), as `shown_folder` does for a folder. Needed when the name:
 
-    - holds what its line puts around a name (`_NAME_MARKS`, or ``also``), checked in NFC
-      too, where U+037E and U+0387 become ``;`` and ``·``;
+    - holds what its line puts around a name (``marks``, `_NAME_MARKS` by default, or
+      ``also``), checked in NFC too, where U+037E and U+0387 become ``;`` and ``·``;
     - holds a character JSON escapes (a quote, a backslash, one that draws nothing);
     - has whitespace at an end, starts or ends with any quote mark `shown` counts
       (`edge_quote`: Unicode's Quotation_Mark characters and a few look-alikes, #711, and a
@@ -102,7 +108,7 @@ def quoted_name(
         or edge_quote(text)  # any quote mark `shown` counts, typographic too (QA r7)
         or text.startswith("(")
         or text.endswith(":")
-        or any(m in text or m in nfc for m in (*_NAME_MARKS, *also))
+        or any(m in text or m in nfc for m in (*marks, *also))
         # Any digit, not only ASCII: `9 ５ Trip` reads as IDs too (QA r7).
         or (beside_id and text[:1].isdigit())
     )
