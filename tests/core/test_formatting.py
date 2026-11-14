@@ -451,3 +451,17 @@ def test_nested_json_keeps_a_line_break_inside_a_string() -> None:
     raw = '{\n "note": ' + json.dumps("a\nb") + ', "test_style": "quick"}'
     assert nested_json(escape_controls(raw)) == {"note": "a\\nb", "test_style": "quick"}
     assert nested_json(escape_controls('{"a\\n": 1, "a\\\\n": 2}')) == {}
+
+
+def test_path_list_quotes_path_ending_with_period() -> None:
+    """A single path ending in '.' must be quoted so the sentence period does not double it (#736)."""
+    from mcp_synology.core.formatting import path_list
+
+    assert path_list("Not started", ["/video/d."]) == "Not started: '/video/d.'."
+    assert path_list("Not started", ["/video/d"]) == "Not started: /video/d."
+    # Multi-item form does not append a period to items
+    assert path_list("Already created", ["/video/v1.", "/video/x"]) == (
+        "Already created:
+  /video/v1.
+  /video/x"
+    )

@@ -728,7 +728,10 @@ def _with_progress(
     # ``escaped_repr`` writes it.
     names_it = names_path(message, failed) or escaped_repr(failed) in message
     if not names_it:
-        message = then(sentence(message), f"Failed on: {shown(failed)}.")
+failed_shown = shown(failed)
+        if failed_shown.endswith("."):
+            failed_shown = f"'{failed_shown}'" if "'" not in failed_shown else f'"{failed_shown}"'
+        message = then(sentence(message), f"Failed on: {failed_shown}.")
     details["param"] = "paths"
     details["value"] = failed
     if done:

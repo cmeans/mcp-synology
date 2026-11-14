@@ -572,10 +572,20 @@ def path_list(heading: str, items: list[str], indent: str = "  ") -> str:
     (#693, the maintainer's choice): one inline, ``Heading: /a.``; two or more one a line,
     indented, ``Heading:`` then ``  /a`` and ``  /b``, so no separator inside a name can read as
     another item (a name can't hold a newline, #604). What follows a list starts on its own
-    line (`then`), never after an item. ``indent``: deeper for a list under an indented line."""
+    line (`then`), never after an item. ``indent``: deeper for a list under an indented line.
+
+    A single path that ends in ``.`` is quoted so the sentence period does not double it
+    (#736).
+    """
     if len(items) == 1:
-        return f"{heading}: {items[0]}."
-    return f"{heading}:" + "".join(f"\n{indent}{item}" for item in items)
+        item = items[0]
+        if item.endswith("."):
+            # Quote so the trailing period of the sentence is distinct from the path's own.
+            # Prefer single quotes; fall back to double if the path contains a single quote.
+            item = f"'{item}'" if "'" not in item else f'"{item}"'
+        return f"{heading}: {item}."
+    return f"{heading}:" + "".join(f"
+{indent}{item}" for item in items)
 
 
 def then(text: str, more: str) -> str:
