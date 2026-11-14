@@ -9,7 +9,8 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   free text (a `**Security release:** …` line, an Upgrading block) goes in
   `+<name>.release.md`, printed before the categories; only a release PR adds or changes one.
   Hidden files (`.DS_Store`, an editor's `.swp`, `.gitkeep`), `*~` backups, `Thumbs.db` and
-  `desktop.ini` are ignored, as towncrier's `ignore` list says; any other name is refused.
+  `desktop.ini` are ignored, case ignored, as towncrier's `ignore` list says, and so are this
+  README and `template.md`; any other file is checked as a fragment.
 - **Content:** the entry exactly as it would appear under its `### ` heading in `CHANGELOG.md`:
   `- **Title** (#PR): what changed and why — closes #N`, usually on one line, with no heading.
   Its first `(#N)` is the file's PR number. Save it as UTF-8 without a byte-order mark. At most
@@ -34,8 +35,8 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
 - **Order:** the notes list each category's entries highest PR number first; within one PR,
   `<PR>.<type>.1.md` prints before `<PR>.<type>.md`.
 - **Checked by** `uv run python scripts/changelog_fragments.py check` (after
-  `uv sync --extra dev`, which builds cmarkgfm from source, with a C compiler, on Python 3.15,
-  Intel macOS and Windows ARM64; CI runs it too): names, content, and that a PR adds or changes a fragment named for its own number, unless it has the `no changelog` label
+  `uv sync --extra dev`, which builds cmarkgfm from source, with a C compiler, wherever it has no
+  wheel, for example on Python 3.15, Intel macOS and Windows ARM64; CI runs it too): names, content, and that a PR adds or changes a fragment named for its own number, unless it has the `no changelog` label
   (ask the maintainer for it; the check reads the labels when it runs, so rerun it after).
   Removing fragments needs the label too (a revert, a backport's carry-back), except in a release
   PR, which bumps the version, adds its section and assembles them all. A `+<name>.release.md`

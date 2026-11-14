@@ -417,6 +417,9 @@ def test_what_commonmark_doesnt_read_as_a_heading_passes(tmp_path: Path, line: s
         # #734: Windows PowerShell 5.1's `echo ... >` and Out-File write UTF-16 with a BOM.
         ("- **x** (#731): y\n".encode("utf-16"), "is UTF-16"),
         ("- **x** (#731): y\n".encode("utf-16-be"), "U+0000 throughout, as UTF-16 does"),
+        # Pre-QA r1 on #735: a big-endian BOM, and UTF-32, which starts like UTF-16's.
+        (b"\xfe\xff" + "- **x** (#731): y\n".encode("utf-16-be"), "is UTF-16"),
+        ("- **x** (#731): y\n".encode("utf-32"), "is UTF-32"),
         # An "ANSI" save of the README's template, whose em dash is byte 0x97 in cp1252.
         (
             "- **x** (#731): y\n  more \u2014 closes #1\n".encode("cp1252"),
@@ -433,11 +436,13 @@ def test_a_file_that_isnt_utf8_is_told_how_to_save_it(
     assert len(found) == 1 and says in found[0] and "save it as UTF-8" in found[0], found
 
 
-def test_a_crlf_changelog_md_is_read_as_lines(tmp_path: Path) -> None:
-    """A Windows checkout (`core.autocrlf`) writes CRLF: read as text, its layout still holds."""
+@pytest.mark.parametrize("ending", ["\r\n", "\r"])
+def test_a_crlf_or_cr_changelog_md_is_read_as_lines(tmp_path: Path, ending: str) -> None:
+    """A Windows checkout (`core.autocrlf`) writes CRLF, an old Mac editor a lone CR: read as
+    text, its layout still holds."""
     root = _dir(tmp_path, {})
     text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    (root / "CHANGELOG.md").write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+    (root / "CHANGELOG.md").write_bytes(text.replace("\n", ending).encode("utf-8"))
     assert script.changelog_problems(root) == []
 
 
@@ -475,9 +480,19 @@ def test_editor_and_os_files_are_not_fragments(tmp_path: Path, name: str) -> Non
     assert gate.fragments_problem(root) is None
 
 
-@pytest.mark.parametrize("name", ["thumbs.db", "Desktop.ini", "716.fixed.md.bak", "x.md"])
+@pytest.mark.parametrize("name", ["thumbs.db", "Desktop.ini", "README.MD"])
+def test_ignored_names_match_regardless_of_case(tmp_path: Path, name: str) -> None:
+    """Pre-QA r1 on #735: towncrier 26.9.0 lowercases its `ignore` patterns and each name, so
+    the check does too."""
+    root = _dir(tmp_path, {})
+    (root / "changelog.d" / name).write_text("x\n", encoding="utf-8")
+    assert script.fragment_problems(root) == []
+    assert _gate().fragments_problem(root) is None
+
+
+@pytest.mark.parametrize("name", ["716.fixed.md.bak", "x.md", "Thumbs.db.txt"])
 def test_names_like_editor_files_are_still_checked(tmp_path: Path, name: str) -> None:
-    """The patterns match exactly, case included, as towncrier's `ignore` does."""
+    """Only the patterns themselves are ignored."""
     root = _dir(tmp_path, {})
     (root / "changelog.d" / name).write_text("- **x** (#1): y\n", encoding="utf-8")
     found = script.fragment_problems(root)
@@ -709,6 +724,20 @@ def test_only_a_release_pr_adds_a_releases_own_text(branch: Path, labels: list[s
     problem = script.branch_problem(branch, "main", 731, labels)
     assert problem is not None and "+x.release.md" in problem, problem
     assert "only a release PR" in problem, problem
+
+
+def test_a_release_text_already_moved_isnt_named_as_left(branch: Path) -> None:
+    """Pre-QA r1 on #735: with the text moved by hand (not yet committed) and a late fragment
+    left, the refusal said 'leaves its own text unbuilt ()'."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    _release(branch, "1.1.0")
+    (branch / "changelog.d" / "702.fixed.md").write_text("- **late** (#702): y\n", encoding="utf-8")
+    _commit(branch)
+    (branch / "changelog.d" / "+x.release.md").unlink()
+    problem = script.branch_problem(branch, "main", 731, [])
+    assert problem is not None and "unbuilt ()" not in problem, problem
+    assert "702.fixed.md" in problem, problem
 
 
 def test_a_left_release_text_names_the_other_fragments_left_too(branch: Path) -> None:
@@ -1015,6 +1044,8 @@ def test_the_same_text_in_two_categories_passes(tmp_path: Path) -> None:
         "  [a@b.co]: mailto:a@b.co\n",
         # #735: a `>` on a line indented into the paragraph is text in the label, not a quote.
         "  [foo\n      >bar]: https://evil.example\n",
+        # Pre-QA r1 on #735: in a quote, a `>` past the quote's depth (GitHub's `foo >bar`).
+        "  > [foo\n  >     >bar]: https://evil.example\n",
     ],
 )
 def test_definitions_the_shared_probe_missed_are_refused(tmp_path: Path, text: str) -> None:
@@ -1086,6 +1117,10 @@ def test_a_footnote_refusal_names_the_definition_outside_code(tmp_path: Path) ->
         ("- **x** (#731): mail <a@b.co>\n  more <b>y</b>\n", 2),
         ("- **x** (#731): an escaped \\<b> here\n  more <b>y</b>\n", 2),
         ("- **x** (#731): a<b and c\n  more <b>y</b>\n", 2),
+        # Pre-QA r1 on #735: an escaped backslash before a tag is raw HTML, and a tag can span
+        # lines.
+        ("- **x** (#731): y \\\\<br> z\n", 1),
+        ("- **x** (#731): y\n  more <img\n  src=x> z\n", 2),
     ],
 )
 def test_a_raw_html_refusal_names_the_tag_not_what_looks_like_one(

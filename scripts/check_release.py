@@ -151,7 +151,7 @@ def fragments_problem(root: Path) -> str | None:
     left = sorted(
         p.name
         for p in directory.iterdir()
-        if not any(fnmatch.fnmatchcase(p.name, pattern) for pattern in _NOT_FRAGMENTS)
+        if not any(fnmatch.fnmatchcase(p.name.lower(), x.lower()) for x in _NOT_FRAGMENTS)
     )
     if not left:
         return None
@@ -312,7 +312,13 @@ def problems(tag: str, root: Path) -> list[str]:
         if not isinstance(version, str):
             raise TypeError(f"[project].version is {version!r}, not a string")
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
+    except UnicodeDecodeError:
+        # As changelog_fragments.py tells a fragment (#734): name the fix, not the exception.
+        return [
+            "pyproject.toml or CHANGELOG.md isn't UTF-8 (a Windows editor's or PowerShell's "
+            "save does that): save it as UTF-8 without a byte-order mark."
+        ]
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError) as error:
         return [f"couldn't read the version and CHANGELOG: {type(error).__name__}: {error}"]
     found = (
         tag_problem(tag, version),

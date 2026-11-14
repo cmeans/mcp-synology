@@ -51,7 +51,7 @@ dev = [
     # scripts/changelog_fragments.py reads how a fragment renders with cmark-gfm, the parser
     # GitHub's Markdown is built on (#732), for its tests; CI's `changelog` job runs the script
     # from the `changelog` group below, at the same pin (tests/scripts checks they agree).
-    # 2025.10.22 has no wheel for Python 3.15, Intel macOS or Windows ARM64: there it builds
+    # 2025.10.22 has no wheel for, for example, Python 3.15, Intel macOS or Windows ARM64: it builds
     # from source and needs a C compiler, as pyyaml and cryptography already do (#571, #734).
     "cmarkgfm==2025.10.22",
     # tests/test_readme.py builds the wheel metadata with the build backend (#487)

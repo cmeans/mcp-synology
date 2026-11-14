@@ -50,8 +50,9 @@ NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".*", "*~", "Thumbs.db", 
 
 
 def not_a_fragment(name: str) -> bool:
-    """Whether a file named ``name`` in `changelog.d/` is one of NOT_FRAGMENTS's patterns."""
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in NOT_FRAGMENTS)
+    """Whether a file named ``name`` in `changelog.d/` is one of NOT_FRAGMENTS's patterns,
+    case ignored, as towncrier 26.9.0 matches its `ignore` (it lowercases both)."""
+    return any(fnmatch.fnmatchcase(name.lower(), pattern.lower()) for pattern in NOT_FRAGMENTS)
 
 
 # The release tools read CHANGELOG.md line by line (publish.yml's awk, the release gate), so a
@@ -97,12 +98,11 @@ def _is_underline(text: str) -> bool:
 # was quadratic (QA r5). Its label can run onto later lines, holds no unescaped `[`
 # (CommonMark), and `\` escapes any character, a line break included (pre-QA r10).
 _DEFINITION = re.compile(r"(?m)^[ \t>*+0-9.)-]*\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:")
-# Where raw HTML is, outside code (only for naming its line in a refusal): a tag closed on its
-# line, not an autolink (`<https://x>`, `<a@b.c>`) or an escaped `\<`, and not a `<` that never
-# closes (`a<b and`), which aren't raw HTML (#734).
+# Where raw HTML is, outside code and backslash escapes (only for naming its line in a
+# refusal): a tag that closes, on its line or a later one, not an autolink (`<https://x>`,
+# `<a@b.c>`), and not a `<` that never closes (`a<b and`), which aren't raw HTML (#734).
 _RAW_TAG = re.compile(
-    r"(?<!\\)<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?![^\s<>@]+@[^\s<>]+>)"
-    r"[A-Za-z/!?][^<>\n]*>"
+    r"<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?![^\s<>@]+@[^\s<>]+>)[A-Za-z/!?][^<>]*>"
 )
 # The pinned towncrier, as CLAUDE.md's release step 4 and CI's draft run it (a test checks the
 # three agree): towncrier isn't a project dependency, so a bare `towncrier` is missing or
@@ -267,6 +267,8 @@ def _read_text(path: Path, shown: str) -> tuple[str, str | None]:
         data = path.read_bytes()
     except OSError as error:
         return "", f"couldn't read {shown}: {type(error).__name__}"
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return "", f"{shown} is UTF-32: save it as UTF-8 without a byte-order mark ({_HOW})."
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return "", (
             f"{shown} is UTF-16 (Windows PowerShell's `>` and Out-File write it): save it as "
@@ -472,7 +474,8 @@ def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None
             # text (QA r3 on #732); inside it, GitHub renders the tags, so `<h2>` adds a heading
             # and `</li></ul>` closes the list (QA r4). Only the line holding it is named.
             body = "\n".join(lines)
-            found = _RAW_TAG.search(_no_code(body))
+            # An escape (`\<`, `\\`) is blanked first, so `\<b>` isn't a tag and `\\<br>` is.
+            found = _RAW_TAG.search(re.sub(r"\\[^\n]", "  ", _no_code(body)))
             at = "it"
             if found:
                 raw = body.count("\n", 0, found.start())
@@ -534,12 +537,17 @@ def _probe_renders(notes: list[str], references: list[str]) -> list[str]:
 
 def _labels(found: re.Match[str]) -> list[str]:
     """The labels GitHub may match for a candidate whose label runs onto later lines: its
-    whitespace collapsed, and with each later line's quote markers taken off too, for a
-    definition in a quote (QA r5 on #732). Both are probed: a `>` on a line indented into a
-    paragraph is text in the label (#735), and which one a line holds isn't read here."""
+    whitespace collapsed; with each later line's quote markers taken off (QA r5 on #732); and
+    with them taken off only up to the first line's quote depth. All are probed: a `>` on a
+    line indented into a paragraph, or past the quote's depth, is text in the label (#735), and
+    which one a line holds isn't read here."""
     collapsed = " ".join(found[2].split())
     unquoted = " ".join(re.sub(r"\n[ \t>]*", " ", found[2]).split())
-    return list(dict.fromkeys([collapsed, unquoted]))
+    # In a quote, a later line's own `>` past the quote's depth is text (pre-QA r1 on #735:
+    # `> [foo` / `>     >bar]` is GitHub's `foo >bar`, which neither form above gives).
+    depth = found[0][: found[0].index("[")].count(">")
+    in_quote = " ".join(re.sub(rf"\n(?:[ \t]*>[ ]?){{0,{depth}}}", " ", found[2]).split())
+    return list(dict.fromkeys([collapsed, unquoted, in_quote]))
 
 
 def _definition_problem(
@@ -572,6 +580,8 @@ def _definition_problem(
     # `[Foo]: url` is the definition: name one outside code (#735).
     code_free = _no_code(body)
     outside = [n for n in defined if code_free[candidates[n].start(1) - 1] == "["]
+    # When every one that renders as defined is in code, the definition itself isn't a
+    # candidate (no prefix the pattern takes): the code line is the nearest to name.
     found = candidates[(outside or defined)[0]]
     index = body.count("\n", 0, found.start(1))
     at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
@@ -638,7 +648,7 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
             f"running server "
             f"({_HOW}). Move it into the release PR."
         )
-    if release_texts and _fragments_left(root):
+    if release_texts and any(_RELEASE.fullmatch(name) for name in _fragments_left(root)):
         # A release PR may add its text only to build it: left unbuilt, it opens the next
         # release's notes, the label or not (QA r5 on #732).
         # The section is there (that's what makes it a release PR), so towncrier refuses to
