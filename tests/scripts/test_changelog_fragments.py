@@ -1159,14 +1159,33 @@ def test_a_destination_that_isnt_one_stays_text(tmp_path: Path) -> None:
         # QA r1 on #738: cmark-gfm counts UTF-8 bytes; 327 `漢` (981 bytes) passed by length.
         "漢" * 327,
         "é" * 490,
+        # Pre-QA r4: 1000 bytes is still a definition (999 was the spec's number, not cmark-gfm's).
+        "a" * 1000,
+        "é" * 500,
     ],
 )
 def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path, label: str) -> None:
-    """The token would push a label near cmark-gfm's 999 bytes past the limit, so the probe
+    """The token would push a label near cmark-gfm's 1000 bytes past the limit, so the probe
     would read it as text: the check refuses it instead of passing it."""
     text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
     assert len(found) == 1 and "link reference" in found[0], found
+
+
+@pytest.mark.parametrize("label", ["a" * 1001, "é" * 501, "漢" * 334])
+def test_a_label_past_the_limit_isnt_a_definition(tmp_path: Path, label: str) -> None:
+    """Pre-QA r4 on #738: a label longer than cmark-gfm takes is text, and it was refused as a
+    definition."""
+    text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_label_of_a_literal_quote_marker_is_refused(tmp_path: Path) -> None:
+    """Pre-QA r4 on #738 suggested dropping a later line's `>` before testing a label for blank;
+    indented past a marker, that `>` is the label, and another entry's `[>]` links to it."""
+    text = "- **x** (#731): y\n\n  [\n      >]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
 
 
 @pytest.mark.parametrize("text", ["- [ ]: foo (#731)\n", "- [  ]: foo (#731)\n"])
@@ -1177,11 +1196,11 @@ def test_a_blank_label_isnt_a_definition(tmp_path: Path, text: str) -> None:
     assert not any("link reference" in problem for problem in found), found
 
 
-@pytest.mark.parametrize("box", ["[ ]", "[x]", "[X]"])
+@pytest.mark.parametrize("box", ["[ ] ", "[x] ", "[X] ", "[ ]\t"])
 def test_a_definition_after_a_task_box_is_refused(tmp_path: Path, box: str) -> None:
     """QA r1 on #738: the tasklist extension reads `- [ ] [docs]: url` as a definition, and the
-    candidate pattern couldn't see past the box."""
-    text = f"- **x** (#731): y\n\n  - {box} [docs]: https://evil.example\n"
+    candidate pattern couldn't see past the box (a tab after it too, pre-QA r4)."""
+    text = f"- **x** (#731): y\n\n  - {box}[docs]: https://evil.example\n"
     found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
     assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
 
@@ -1277,10 +1296,13 @@ def test_a_processing_instruction_or_cdata_without_a_closer_is_linear(
     """QA r1 on #738: a lazy regex scanned to the end from every `<?` (4x per doubling)."""
     import time
 
-    text = "- **x** (#731): y\n\n  <div\n  " + opener * (15_000 // len(opener)) + "\n"
+    # Past the fragment cap, so the old regex's time shows (pre-QA r4: 6.9 s at 60,000, while
+    # 15,000 took 0.4 s and passed); the finder alone, since a fragment can't be this long.
     started = time.monotonic()
-    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert script._raw_tag_at(opener * (60_000 // len(opener))) is None
     assert time.monotonic() - started < 0.5, "quadratic again?"
+    text = "- **x** (#731): y\n\n  <div\n  " + opener * (15_000 // len(opener)) + "\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
     assert len(found) == 1 and "holds raw HTML" in found[0], found
 
 
@@ -1291,6 +1313,9 @@ def test_a_processing_instruction_or_cdata_without_a_closer_is_linear(
         ("  a <? b <? c ?>\n  <span>", 3),
         ("  <![CDATA[ x\n  ]]> <span>", 3),
         ("  <span> <?x?>", 3),
+        # An opener with no closer is text, not where the HTML starts (pre-QA r4).
+        ("  a <? b\n  <span>", 4),
+        ("  a <![CDATA[ b\n  <span>", 4),
     ],
 )
 def test_a_raw_html_refusal_names_the_first_run(tmp_path: Path, text: str, line: int) -> None:

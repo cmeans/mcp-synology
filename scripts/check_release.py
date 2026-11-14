@@ -304,6 +304,13 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
     )
 
 
+# changelog_fragments.py's `_PYPROJECT_BOM`, word for word (a test checks).
+PYPROJECT_BOM = (
+    'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" save writes one): '
+    "save it as UTF-8 without a BOM."
+)
+
+
 def problems(tag: str, root: Path) -> list[str]:
     """Return every reason not to release `tag` from the checkout at `root`."""
     # As changelog_fragments.py tells a fragment (#734): a file that isn't UTF-8 is named, with
@@ -312,11 +319,8 @@ def problems(tag: str, root: Path) -> list[str]:
         try:
             text = (root / name).read_bytes().decode("utf-8")
             if name == "pyproject.toml" and text.startswith("\ufeff"):
-                # tomllib refuses the whole file (QA r1 on #738), as changelog_fragments.py says.
-                return [
-                    'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" '
-                    "save writes one): save it as UTF-8 without a BOM."
-                ]
+                # tomllib refuses the whole file (QA r1 on #738).
+                return [PYPROJECT_BOM]
         except UnicodeDecodeError:
             return [
                 f"{name} isn't UTF-8 (a Windows editor's or PowerShell's save does that): save "

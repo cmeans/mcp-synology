@@ -284,7 +284,8 @@ SECURITY_MARKER = "**Security release:**"
 # towncrier's start marker (pyproject.toml), or a comment that would hide the rest of the notes.
 _COMMENT = "<!--"
 # A pyproject.toml that starts with a byte-order mark: tomllib refuses the whole file, so towncrier
-# can't read its settings either (QA r1 on #738). check_release.py says the same.
+# can't read its settings either (QA r1 on #738). check_release.py's `PYPROJECT_BOM` is the same
+# text (a test checks).
 _PYPROJECT_BOM = (
     'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" save writes one): '
     "save it as UTF-8 without a BOM."
@@ -555,8 +556,20 @@ def _no_code(text: str) -> str:
     return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", blank, fenced)
 
 
-# CommonMark's longest link label: one past it isn't a definition.
-_LABEL_MAX = 999
+# cmark-gfm's longest link label, in UTF-8 bytes: one past it isn't a definition (CommonMark's
+# spec says 999 characters; pre-QA r4 on #738 found 1000 bytes is still one, 1001 isn't).
+_LABEL_MAX = 1000
+
+
+def _pushed_past_the_limit(label: str, token: str, number: int) -> bool:
+    """Whether a label that can be a definition is one the token makes too long to be: the probe
+    would read it as text, so it's refused rather than passed (QA r1 on #738: the limit counts
+    bytes, and 327 `漢` passed by length). A label already past the limit is never a
+    definition, so it isn't refused (pre-QA r4: it was, as "defines a link reference"). A label
+    within reach of the limit is refused even where it wouldn't be one (a paragraph's
+    continuation line): the probe can't tell, and such a label is over 970 bytes."""
+    size = len(label.encode("utf-8"))
+    return size <= _LABEL_MAX < size + len(f"{token}{number}x")
 
 
 def _definition_problem(
@@ -575,6 +588,9 @@ def _definition_problem(
     body = "\n".join(lines)
     # A blank label (`[ ]:`) isn't one (CommonMark), but the token would make it one (QA r1 on
     # #738: a task item `- [ ]: x` was refused).
+    # A blank label running across quote lines (`> [` then `> ]:`) keeps its `>` here and is
+    # refused, though it's text: a `>` on a later line can also be the label itself (indented
+    # past a quote marker, QA r6 on #732), and that one must not pass (pre-QA r4 on #738).
     candidates = [c for c in _DEFINITION.finditer(body) if c[2].strip(" \t\n")]
     if not candidates:
         return None
@@ -592,10 +608,7 @@ def _definition_problem(
     defined = [
         number
         for number, found in enumerate(candidates)
-        # A label made too long by the token stops being one: refuse it rather than pass it.
-        # cmark-gfm counts the label's UTF-8 bytes (QA r1 on #738: 327 `漢` passed by length).
-        if f"{token}{number}x" not in rendered
-        or len(found[2].encode("utf-8")) + len(token) + 8 > _LABEL_MAX
+        if f"{token}{number}x" not in rendered or _pushed_past_the_limit(found[2], token, number)
     ]
     if not defined:
         return None
