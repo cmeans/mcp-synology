@@ -456,7 +456,33 @@ def test_a_file_that_isnt_utf8_is_a_refusal_not_a_traceback(
 ) -> None:
     (repo / name).write_bytes(b"\xff\xfe")
     assert script.main(["v1.2.3"], repo) == 1
-    assert "couldn't read the version and CHANGELOG: UnicodeDecodeError" in capsys.readouterr().out
+    assert f"{name} isn't UTF-8" in capsys.readouterr().out
+
+
+def test_a_pyproject_toml_with_a_byte_order_mark_is_named(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """QA r1 on #738: tomllib refused it, and the gate printed `TOMLDecodeError`."""
+    path = repo / "pyproject.toml"
+    path.write_text("\ufeff" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    assert script.main(["v1.2.3"], repo) == 1
+    assert script.PYPROJECT_BOM in capsys.readouterr().out
+
+
+def test_the_gate_names_a_byte_order_mark_as_the_fragment_check_does() -> None:
+    """Pre-QA r4 on #738: two copies of one message, tied only by a comment."""
+    spec = importlib.util.spec_from_file_location(
+        "changelog_fragments_for_gate", _SCRIPT_PATH.with_name("changelog_fragments.py")
+    )
+    assert spec is not None and spec.loader is not None
+    fragments = importlib.util.module_from_spec(spec)
+    # Its dataclasses look their module up while it loads.
+    sys.modules[spec.name] = fragments
+    try:
+        spec.loader.exec_module(fragments)
+    finally:
+        del sys.modules[spec.name]
+    assert script.PYPROJECT_BOM == fragments._PYPROJECT_BOM
 
 
 def test_a_refusal_reaches_the_process_exit_code(repo: Path) -> None:

@@ -50,8 +50,9 @@ dev = [
     "respx>=0.22",
     # scripts/changelog_fragments.py reads how a fragment renders with cmark-gfm, the parser
     # GitHub's Markdown is built on (#732), for its tests; CI's `changelog` job runs the script
-    # from the `changelog` group below, at the same pin (tests/scripts checks they agree). No
-    # wheel for Python 3.15 yet: it builds from source there, as pyyaml did (#571).
+    # from the `changelog` group below, at the same pin (tests/scripts checks they agree).
+    # 2025.10.22 has no wheel for, for example, Python 3.15, Intel macOS or Windows ARM64: it builds
+    # from source and needs a C compiler, as pyyaml and cryptography already do (#571, #734).
     "cmarkgfm==2025.10.22",
     # tests/test_readme.py builds the wheel metadata with the build backend (#487)
     "hatchling>=1.27",
@@ -153,9 +154,11 @@ issue_format = ""
 wrap = false
 all_bullets = false
 orphan_prefix = "+"
-# Not fragments. For most other names `towncrier build` fails; a few (a `.txt`, a leading zero)
-# it drops silently, which scripts/changelog_fragments.py refuses. .DS_Store is macOS Finder's.
-ignore = ["README.md", "template.md", ".DS_Store"]
+# Not fragments, as glob patterns (hidden files such as macOS's .DS_Store and ._ files or an
+# editor's .swp, editor backups, Windows' folder files; #734). For most other names `towncrier
+# build` fails; a few (a `.txt`, a leading zero) it drops silently, which
+# scripts/changelog_fragments.py refuses.
+ignore = ["README.md", "template.md", ".*", "*~", "Thumbs.db", "desktop.ini"]
 
 # A release's free text (a `**Security release:** …` line, an Upgrading block), written before
 # the categories with no heading, as `+<name>.release.md`. Never required by `towncrier check`.

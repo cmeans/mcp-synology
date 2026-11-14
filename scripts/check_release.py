@@ -28,6 +28,7 @@ Usage:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -130,8 +131,9 @@ def unreleased_problem(changelog: str, version: str, *, tag_matches: bool = True
     return None
 
 
-# Files in changelog.d that aren't fragments (as in scripts/changelog_fragments.py).
-_NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
+# Files in changelog.d that aren't fragments, as glob patterns (as in
+# scripts/changelog_fragments.py and towncrier's `ignore`, #734).
+_NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".*", "*~", "Thumbs.db", "desktop.ini"})
 
 
 def _named(names: list[str], limit: int = 10) -> str:
@@ -146,7 +148,11 @@ def fragments_problem(root: Path) -> str | None:
     directory = root / "changelog.d"
     if not directory.is_dir():
         return None
-    left = sorted(p.name for p in directory.iterdir() if p.name not in _NOT_FRAGMENTS)
+    left = sorted(
+        p.name
+        for p in directory.iterdir()
+        if not any(fnmatch.fnmatchcase(p.name.lower(), x.lower()) for x in _NOT_FRAGMENTS)
+    )
     if not left:
         return None
     return (
@@ -298,8 +304,30 @@ def branch_problem(root: Path, version: str, *, tag_matches: bool = True) -> str
     )
 
 
+# changelog_fragments.py's `_PYPROJECT_BOM`, word for word (a test checks).
+PYPROJECT_BOM = (
+    'pyproject.toml starts with a byte-order mark (U+FEFF; Notepad\'s "UTF-8" save writes one): '
+    "save it as UTF-8 without a BOM."
+)
+
+
 def problems(tag: str, root: Path) -> list[str]:
     """Return every reason not to release `tag` from the checkout at `root`."""
+    # As changelog_fragments.py tells a fragment (#734): a file that isn't UTF-8 is named, with
+    # the fix, not the exception (pre-QA r2 on #735: which of the two to re-save).
+    for name in ("pyproject.toml", "CHANGELOG.md"):
+        try:
+            text = (root / name).read_bytes().decode("utf-8")
+            if name == "pyproject.toml" and text.startswith("\ufeff"):
+                # tomllib refuses the whole file (QA r1 on #738).
+                return [PYPROJECT_BOM]
+        except UnicodeDecodeError:
+            return [
+                f"{name} isn't UTF-8 (a Windows editor's or PowerShell's save does that): save "
+                "it as UTF-8 without a byte-order mark."
+            ]
+        except OSError:
+            pass  # reported below, as before
     try:
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         version = pyproject["project"]["version"]

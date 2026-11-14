@@ -411,12 +411,102 @@ def test_what_commonmark_doesnt_read_as_a_heading_passes(tmp_path: Path, line: s
     assert found == [], found
 
 
-def test_a_ds_store_is_not_a_fragment(tmp_path: Path) -> None:
-    """Pre-QA r6 on #732: macOS Finder writes one; towncrier refused it and so did the check."""
+@pytest.mark.parametrize(
+    ("data", "says"),
+    [
+        # #734: Windows PowerShell 5.1's `echo ... >` and Out-File write UTF-16 with a BOM.
+        ("- **x** (#731): y\n".encode("utf-16"), "is UTF-16"),
+        ("- **x** (#731): y\n".encode("utf-16-be"), "U+0000 throughout, as UTF-16 does"),
+        # Pre-QA r1 on #735: a big-endian BOM, and UTF-32, which starts like UTF-16's.
+        (b"\xfe\xff" + "- **x** (#731): y\n".encode("utf-16-be"), "is UTF-16"),
+        ("- **x** (#731): y\n".encode("utf-32"), "is UTF-32"),
+        # An "ANSI" save of the README's template, whose em dash is byte 0x97 in cp1252.
+        (
+            "- **x** (#731): y\n  more \u2014 closes #1\n".encode("cp1252"),
+            "isn't UTF-8 (line 2 holds a byte",
+        ),
+    ],
+)
+def test_a_file_that_isnt_utf8_is_told_how_to_save_it(
+    tmp_path: Path, data: bytes, says: str
+) -> None:
     root = _dir(tmp_path, {})
-    (root / "changelog.d" / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1")
+    (root / "changelog.d" / "731.fixed.md").write_bytes(data)
+    found = script.fragment_problems(root)
+    assert len(found) == 1 and says in found[0] and "save it as UTF-8" in found[0], found
+
+
+@pytest.mark.parametrize("ending", ["\r\n", "\r"])
+def test_a_crlf_or_cr_changelog_md_is_read_as_lines(tmp_path: Path, ending: str) -> None:
+    """A Windows checkout (`core.autocrlf`) writes CRLF, an old Mac editor a lone CR: read as
+    text, its layout still holds."""
+    root = _dir(tmp_path, {})
+    text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    (root / "CHANGELOG.md").write_bytes(text.replace("\n", ending).encode("utf-8"))
+    assert script.changelog_problems(root) == []
+
+
+def test_changelog_md_that_isnt_utf8_is_told_too(tmp_path: Path) -> None:
+    root = _dir(tmp_path, {})
+    (root / "CHANGELOG.md").write_bytes("# Changelog\n".encode("utf-16"))
+    found = script.changelog_problems(root)
+    assert found == [
+        "CHANGELOG.md is UTF-16 (Windows PowerShell's `>` and Out-File write it): save it as "
+        "UTF-8 without a byte-order mark (see changelog.d/README.md)."
+    ], found
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Pre-QA r6 on #732: macOS Finder writes one; towncrier refused it and so did the check.
+        ".DS_Store",
+        # #734: an editor's swap file and backup, macOS's ._ files on SMB or exFAT, Windows'
+        # folder files, a placeholder that keeps the folder in git.
+        ".716.fixed.md.swp",
+        "716.fixed.md~",
+        "._716.fixed.md",
+        "Thumbs.db",
+        "desktop.ini",
+        ".gitkeep",
+    ],
+)
+def test_editor_and_os_files_are_not_fragments(tmp_path: Path, name: str) -> None:
+    root = _dir(tmp_path, {})
+    (root / "changelog.d" / name).write_bytes(b"\x00\x00\x00\x01Bud1")
     assert script.fragment_problems(root) == []
     assert script._fragments_left(root) == []
+    gate = _gate()
+    assert gate.fragments_problem(root) is None
+
+
+@pytest.mark.parametrize("name", ["thumbs.db", "Desktop.ini", "README.MD"])
+def test_ignored_names_match_regardless_of_case(tmp_path: Path, name: str) -> None:
+    """Pre-QA r1 on #735: towncrier 26.9.0 lowercases its `ignore` patterns and each name, so
+    the check does too."""
+    root = _dir(tmp_path, {})
+    (root / "changelog.d" / name).write_text("x\n", encoding="utf-8")
+    assert script.fragment_problems(root) == []
+    assert _gate().fragments_problem(root) is None
+
+
+@pytest.mark.parametrize("name", ["716.fixed.md.bak", "x.md", "Thumbs.db.txt"])
+def test_names_like_editor_files_are_still_checked(tmp_path: Path, name: str) -> None:
+    """Only the patterns themselves are ignored."""
+    root = _dir(tmp_path, {})
+    (root / "changelog.d" / name).write_text("- **x** (#1): y\n", encoding="utf-8")
+    found = script.fragment_problems(root)
+    assert len(found) == 1 and "isn't a fragment name" in found[0], found
+
+
+def _gate():  # type: ignore[no-untyped-def]
+    spec = importlib.util.spec_from_file_location(
+        "check_release_for_ignores", ROOT / "scripts" / "check_release.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_git_output_is_read_as_utf8_whatever_the_locale(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -636,6 +726,32 @@ def test_only_a_release_pr_adds_a_releases_own_text(branch: Path, labels: list[s
     assert "only a release PR" in problem, problem
 
 
+def test_a_release_text_already_moved_isnt_named_as_left(branch: Path) -> None:
+    """Pre-QA r1 on #735: with the text moved by hand (not yet committed) and a late fragment
+    left, the refusal said 'leaves its own text unbuilt ()'."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    _release(branch, "1.1.0")
+    (branch / "changelog.d" / "702.fixed.md").write_text("- **late** (#702): y\n", encoding="utf-8")
+    _commit(branch)
+    (branch / "changelog.d" / "+x.release.md").unlink()
+    problem = script.branch_problem(branch, "main", 731, [])
+    assert problem is not None and "unbuilt ()" not in problem, problem
+    assert "702.fixed.md" in problem, problem
+
+
+def test_a_left_release_text_names_the_other_fragments_left_too(branch: Path) -> None:
+    """#735: it listed every file left but advised only on the release text."""
+    (branch / "changelog.d" / "700.fixed.md").unlink()
+    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    _release(branch, "1.1.0")
+    (branch / "changelog.d" / "702.fixed.md").write_text("- **late** (#702): y\n", encoding="utf-8")
+    _commit(branch)
+    problem = script.branch_problem(branch, "main", 731, [])
+    assert problem is not None and "unbuilt (+x.release.md)" in problem, problem
+    assert "each other fragment's entry (702.fixed.md) into its category" in problem, problem
+
+
 @pytest.mark.parametrize("labels", [[], ["no changelog"]])
 def test_a_release_pr_may_not_leave_its_own_text_unbuilt(branch: Path, labels: list[str]) -> None:
     """QA r5 on #732: with the label, a release PR's unbuilt `+x.release.md` passed, and its
@@ -648,10 +764,13 @@ def test_a_release_pr_may_not_leave_its_own_text_unbuilt(branch: Path, labels: l
     _commit(branch)
     problem = script.branch_problem(branch, "main", 731, labels)
     assert problem is not None and "only a release PR" not in problem, problem
-    assert "this release PR (1.1.0)" in problem and "leaves +x.release.md" in problem, problem
+    assert "this release PR (1.1.0) leaves its own text unbuilt (+x.release.md)" in problem
+    # Reverting the build undid the bump of a release committed as one commit (#735).
+    assert "revert" not in problem, problem
     # The section is there, so towncrier refuses to build again (pre-QA r11 on #732).
     assert "towncrier won't build 1.1.0 again" in problem, problem
     assert "into the '## 1.1.0' section by hand" in problem, problem
+    assert problem.endswith("and delete the file."), problem
 
 
 @pytest.mark.parametrize("labels", [[], ["no changelog"]])
@@ -663,8 +782,9 @@ def test_a_release_text_before_the_build_is_told_to_build(branch: Path, labels: 
     _commit(branch)
     problem = script.branch_problem(branch, "main", 731, labels)
     assert problem is not None and "only a release PR" not in problem, problem
-    assert "no section for the new version yet" in problem, problem
-    assert "towncrier build --version <version> --yes" in problem, problem
+    assert "bumps the version to 1.1.0" in problem and "no section for it yet" in problem
+    # The pinned command with the real version, not a bare towncrier and a placeholder (#735).
+    assert f"`{script.TOWNCRIER} build --version 1.1.0 --yes`" in problem, problem
 
 
 def test_changing_a_releases_own_text_is_refused_too(branch: Path) -> None:
@@ -923,6 +1043,15 @@ def test_the_same_text_in_two_categories_passes(tmp_path: Path) -> None:
         # Pre-QA r11 on #732: an email label defined to its own address links the same either
         # way, but the definition still takes the brackets from every other entry's [a@b.co].
         "  [a@b.co]: mailto:a@b.co\n",
+        # #735: a `>` on a line indented into the paragraph is text in the label, not a quote.
+        "  [foo\n      >bar]: https://evil.example\n",
+        # Pre-QA r1 on #735: in a quote, a `>` past the quote's depth (GitHub's `foo >bar`).
+        "  > [foo\n  >     >bar]: https://evil.example\n",
+        # Pre-QA r2 on #735: nested quotes with a lazy line, mixed depths, and a lazy line in a
+        # quote: no rebuilt label covers them all, so the check reads the render.
+        "  > > [foo\n  >     >bar]: https://evil.example\n",
+        "  > > [foo\n  >     >bar\n  > >     >baz]: https://evil.example\n",
+        "  > [foo\n        >bar]: https://evil.example\n",
     ],
 )
 def test_definitions_the_shared_probe_missed_are_refused(tmp_path: Path, text: str) -> None:
@@ -969,6 +1098,325 @@ def test_a_console_that_cant_encode_a_refusal_gets_escapes(module: str, tmp_path
     assert b"Traceback" not in result.stderr, result.stderr
     assert result.returncode == 1, (result.returncode, result.stderr)
     assert b"\\u4fee" in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> > [foo\n>     >bar]: https://evil.example\n",
+        "> > [foo\n>      > >bar]: https://evil.example\n",
+    ],
+)
+def test_a_definition_in_nested_quotes_is_refused_in_release_text(
+    tmp_path: Path, text: str
+) -> None:
+    """Pre-QA r2 on #735: GitHub links another entry's `[foo >bar]` to it."""
+    found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
+    assert len(found) == 1 and "line 1," in found[0] and "link reference" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Pre-QA r3 on #735: a fixed token was guessable; written in the text or a link's title,
+        # it looked like text and the definition passed.
+        "- **x** (#731): see qzdef0zq\n\n  [bar]: https://evil.example\n",
+        '- **x** (#731): see [x](https://ok.example "qzdef0zq")\n\n  [bar]: https://evil.example\n',
+        # A destination on the next line, in a quote, nested, plain; one in angle brackets.
+        "- **x** (#731): see\n\n  > [bar]:\n  > https://evil.example\n",
+        "- **x** (#731): see\n\n  > > [bar]:\n  > > https://evil.example\n",
+        "- **x** (#731): see\n\n  [bar]:\n  https://evil.example\n",
+        "- **x** (#731): see\n\n  [bar]: <https://evil/a b>\n",
+    ],
+)
+def test_a_definition_the_probe_cant_be_fooled_about_is_refused(tmp_path: Path, text: str) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
+
+
+def test_the_token_is_drawn_again_when_the_text_holds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-QA r3 on #735: a token the fragment can write looks like text. The first one drawn
+    here is in the text, so the check must draw another."""
+    draws = iter(["ab12", "cd34"])
+    monkeypatch.setattr(script.secrets, "token_hex", lambda _n: next(draws))
+    text = "- **x** (#731): see qzab120x\n\n  [bar]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "link reference" in found[0], found
+
+
+def test_a_destination_that_isnt_one_stays_text(tmp_path: Path) -> None:
+    """Pre-QA r3 on #735: `[1]: <64>KiB` is text on GitHub, and was refused."""
+    text = "- **x** (#731): sizes\n\n  [1]: <64>KiB\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "a" * 995,
+        # QA r1 on #738: cmark-gfm counts UTF-8 bytes; 327 `漢` (981 bytes) passed by length.
+        "漢" * 327,
+        # 982 bytes: with the token, past the limit (490 is exactly at it, still a definition).
+        "é" * 491,
+        # Pre-QA r4: 1000 bytes is still a definition (999 was the spec's number, not cmark-gfm's).
+        "a" * 1000,
+        "é" * 500,
+    ],
+)
+def test_a_label_at_commonmarks_limit_is_refused_not_passed(tmp_path: Path, label: str) -> None:
+    """The token would push a label near cmark-gfm's 1000 bytes past the limit, so the probe
+    would read it as text: the check refuses it instead of passing it."""
+    text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "within reach of" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("lines", "prefix"),
+    [
+        # QA r2 on #738: captured with each later line's indent or quote markers, these measured
+        # past the limit and passed; cmark-gfm counts them at 994-995 bytes, and GitHub links
+        # another entry's [label] to them.
+        (["a" * 248] * 4, "  "),
+        (["a" * 198] * 5, "  "),
+        (["a" * 165] * 6, "  "),
+        (["a" * 248] * 4, "  > "),
+    ],
+)
+def test_a_label_across_lines_near_the_limit_is_refused(
+    tmp_path: Path, lines: list[str], prefix: str
+) -> None:
+    label = f"\n{prefix}".join(lines)
+    text = f"- **x** (#731): see\n\n{prefix}[{label}]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "within reach of" in found[0], found
+
+
+@pytest.mark.parametrize(("lines", "indent"), [(["b" * 60] * 10, 45), (["b" * 30] * 4, 300)])
+def test_a_short_label_at_a_deep_indent_isnt_near_the_limit(
+    tmp_path: Path, lines: list[str], indent: int
+) -> None:
+    """Pre-QA r5 on #738: the indent was counted at the high end, so a label cmark-gfm counts at
+    a few hundred bytes was refused as within reach of the limit (here it's a paragraph's
+    continuation, not a definition)."""
+    label = f"\n{' ' * indent}".join(lines)
+    text = f"- **x** (#731): x\n  [{label}]: not a definition here\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_definition_short_of_the_band_is_named_as_one(tmp_path: Path) -> None:
+    """Pre-QA r5 on #738: the near-limit tests matched either message; out of the band, a
+    definition gets the definition's."""
+    text = f"- **x** (#731): see\n\n  [{'a' * 950}]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "defines a link reference, which" in found[0], found
+
+
+def test_the_label_limit_is_cmarkgfms() -> None:
+    """Pre-QA r5 on #738: `_LABEL_MAX` is cmark-gfm's limit, not a spec's; a cmarkgfm that
+    changed it would fail here, not let definitions under a new limit pass."""
+    import cmarkgfm
+
+    def links(size: int) -> bool:
+        label = "a" * size
+        rendered = cmarkgfm.github_flavored_markdown_to_html(f"[{label}]\n\n[{label}]: /u\n")
+        return 'href="/u"' in rendered
+
+    assert links(script._LABEL_MAX) and not links(script._LABEL_MAX + 1)
+
+
+def test_a_long_footnote_label_is_refused_and_cut(tmp_path: Path) -> None:
+    """Pre-QA r5 on #738: a footnote's label has no length limit, so the render refuses it, and
+    the refusal quoted all of it."""
+    text = f"- **x** (#731): y\n\n  [^{'n' * 1500}]: a note\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "defines a footnote" in found[0], found
+    assert "n" * 61 not in found[0], found
+
+
+def test_a_label_just_short_of_the_band_isnt_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA r2 on #738: the band's upper bound was unpinned. A label that, with the token, is
+    exactly the limit is measured by the render alone; here it isn't a definition (a
+    paragraph's continuation line), so it passes."""
+    monkeypatch.setattr(script.secrets, "token_hex", lambda _n: "ab" * 8)
+    token = "qz" + "ab" * 8 + "0x"
+    label = "a" * (script._LABEL_MAX - len(token))
+    text = f"- **x** (#731): x\n  [{label}]: not a definition here\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_label_refused_only_for_its_length_says_so(tmp_path: Path) -> None:
+    """QA r2 on #738: a near-limit label that can't be a definition (a paragraph's continuation)
+    was told it "defines a link reference"."""
+    text = f"- **x** (#731): x\n  [{'a' * 985}]: not a definition here\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 2," in found[0], found
+    assert "within reach of cmark-gfm's 1000-byte limit" in found[0], found
+    assert "defines a link reference, which" not in found[0], found
+
+
+@pytest.mark.parametrize("label", ["a" * 1001, "é" * 501, "漢" * 334])
+def test_a_label_past_the_limit_isnt_a_definition(tmp_path: Path, label: str) -> None:
+    """Pre-QA r4 on #738: a label longer than cmark-gfm takes is text, and it was refused as a
+    definition."""
+    text = f"- **x** (#731): see\n\n  [{label}]: https://evil.example\n"
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_label_of_a_literal_quote_marker_is_refused(tmp_path: Path) -> None:
+    """Pre-QA r4 on #738 suggested dropping a later line's `>` before testing a label for blank;
+    indented past a marker, that `>` is the label, and another entry's `[>]` links to it."""
+    text = "- **x** (#731): y\n\n  [\n      >]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
+
+
+@pytest.mark.parametrize("text", ["- [ ]: foo (#731)\n", "- [  ]: foo (#731)\n"])
+def test_a_blank_label_isnt_a_definition(tmp_path: Path, text: str) -> None:
+    """QA r1 on #738: `[ ]:` isn't a definition (CommonMark needs a non-blank label), but the
+    token made it one, and it was refused."""
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert not any("link reference" in problem for problem in found), found
+
+
+@pytest.mark.parametrize("box", ["[ ] ", "[x] ", "[X] ", "[ ]\t"])
+def test_a_definition_after_a_task_box_is_refused(tmp_path: Path, box: str) -> None:
+    """QA r1 on #738: the tasklist extension reads `- [ ] [docs]: url` as a definition, and the
+    candidate pattern couldn't see past the box (a tab after it too, pre-QA r4)."""
+    text = f"- **x** (#731): y\n\n  - {box}[docs]: https://evil.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 3," in found[0] and "link reference" in found[0], found
+
+
+def test_a_definition_the_fragment_uses_itself_is_refused(tmp_path: Path) -> None:
+    """Its token is left in an `href`: still a definition every other entry would get."""
+    text = "- **x** (#731): y\n\n  see [foo]\n\n  [foo]: https://e.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 5," in found[0] and "link reference" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Only in a fence: shown as code, not a definition.
+        "- **x** (#731): y\n\n  ```\n  [foo]: b\n  ```\n",
+        # A line that continues a paragraph can't start a definition.
+        "- **X** (#731): use or\n  [b]: c\n",
+    ],
+)
+def test_what_renders_as_text_isnt_a_definition(tmp_path: Path, text: str) -> None:
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_definition_refusal_names_the_line_outside_code(tmp_path: Path) -> None:
+    """#735: labels match regardless of case, so `[foo]: b` in a fence rendered as defined by
+    `[Foo]: url`, and the fence's line was named."""
+    text = "- **x** (#731): y\n\n  ```\n  [foo]: b\n  ```\n\n  [Foo]: https://e.example\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 7, '  [Foo]: https://e.example'" in found[0], found
+
+
+def test_a_footnote_refusal_names_the_definition_outside_code(tmp_path: Path) -> None:
+    """#734: the footnote branch named a `[^a]:` inside a code span or fence."""
+    text = "- **x** (#731): y[^1] uses\n\n  ```\n  [^1]: in code\n  ```\n\n  [^1]: a note\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "line 7, '  [^1]: a note', defines a footnote" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        # #734: an autolink, an escaped `\<` or a `<` that never closes came before the tag.
+        ("- **x** (#731): see <https://x.com>\n  more <b>y</b>\n", 2),
+        ("- **x** (#731): mail <a@b.co>\n  more <b>y</b>\n", 2),
+        ("- **x** (#731): an escaped \\<b> here\n  more <b>y</b>\n", 2),
+        ("- **x** (#731): a<b and c\n  more <b>y</b>\n", 2),
+        # Pre-QA r1 on #735: an escaped backslash before a tag is raw HTML, and a tag can span
+        # lines.
+        ("- **x** (#731): y \\\\<br> z\n", 1),
+        ("- **x** (#731): y\n  more <img\n  src=x> z\n", 2),
+        # Pre-QA r2 on #735: CommonMark's raw-HTML grammar, not any `<` closed later.
+        ("- **x** (#731): a<b and\n  c -> d\n  and <em>e</em>\n", 3),
+        ("- **x** (#731): Map<str, int> type\n  then <span>x</span>\n", 2),
+    ],
+)
+def test_a_raw_html_refusal_names_the_tag_not_what_looks_like_one(
+    tmp_path: Path, text: str, line: int
+) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and f"line {line}," in found[0] and "raw HTML" in found[0], found
+
+
+def test_a_fence_isnt_closed_by_a_shorter_run(tmp_path: Path) -> None:
+    """Pre-QA r2 on #735: a ```` fence with ``` inside stays open until its own close."""
+    text = "Text.\n\n````\n```\n<div>\n````\n\nand <span>x</span>\n"
+    found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
+    assert len(found) == 1 and "line 8," in found[0] and "raw HTML" in found[0], found
+
+
+def test_a_pyproject_toml_that_isnt_utf8_is_named(tmp_path: Path) -> None:
+    """Pre-QA r2 on #735: it was told it had no start_string, and an agent would add one."""
+    root = _dir(tmp_path, {})
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    (root / "pyproject.toml").write_bytes(text.encode("utf-16"))
+    found = script.changelog_problems(root)
+    assert found and "pyproject.toml is UTF-16" in found[0], found
+
+
+def test_a_pyproject_toml_with_a_byte_order_mark_is_named(tmp_path: Path) -> None:
+    """QA r1 on #738: Notepad's "UTF-8" BOM made tomllib refuse the file, and the check said
+    the start_string was missing."""
+    root = _dir(tmp_path, {})
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    (root / "pyproject.toml").write_text("\ufeff" + text, encoding="utf-8")
+    assert script.changelog_problems(root) == [script._PYPROJECT_BOM]
+
+
+@pytest.mark.parametrize("opener", ["<?", "<![CDATA["])
+def test_a_processing_instruction_or_cdata_without_a_closer_is_linear(
+    tmp_path: Path, opener: str
+) -> None:
+    """QA r1 on #738: a lazy regex scanned to the end from every `<?` (4x per doubling)."""
+    import time
+
+    # Past the fragment cap, so the old regex's time shows (pre-QA r4: 6.9 s at 60,000, while
+    # 15,000 took 0.4 s and passed); the finder alone, since a fragment can't be this long.
+    started = time.monotonic()
+    assert script._raw_tag_at(opener * (60_000 // len(opener))) is None
+    assert time.monotonic() - started < 0.5, "quadratic again?"
+    text = "- **x** (#731): y\n\n  <div\n  " + opener * (15_000 // len(opener)) + "\n"
+    found = script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text}))
+    assert len(found) == 1 and "holds raw HTML" in found[0], found
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        # The first opener with a closer after it, before any tag.
+        ("  a <? b <? c ?>\n  <span>", 3),
+        ("  <![CDATA[ x\n  ]]> <span>", 3),
+        ("  <span> <?x?>", 3),
+        # An opener with no closer is text, not where the HTML starts (pre-QA r4).
+        ("  a <? b\n  <span>", 4),
+        ("  a <![CDATA[ b\n  <span>", 4),
+    ],
+)
+def test_a_raw_html_refusal_names_the_first_run(tmp_path: Path, text: str, line: int) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n\n{text}\n"})
+    )
+    assert len(found) == 1 and f"line {line}," in found[0] and "raw HTML" in found[0], found
+
+
+def test_a_fence_closed_by_a_longer_run_still_ends_there(tmp_path: Path) -> None:
+    """#734: a longer close blanked everything after it, so the refusal named no line."""
+    text = "Text.\n\n```\n<div>\n````\n\nand <span>x</span>\n"
+    found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
+    assert len(found) == 1 and "line 7," in found[0] and "raw HTML" in found[0], found
 
 
 def test_an_entry_that_renders_empty_is_refused(tmp_path: Path) -> None:
@@ -1160,15 +1608,16 @@ def test_the_parser_pins_agree() -> None:
 
 def test_towncriers_dependencies_are_pinned_alike() -> None:
     """Pre-QA r8 on #732: uvx took the newest Jinja2 on the day, so CI's draft and the release
-    build could differ. Both pin the same set."""
-    sets = []
+    build could differ. CI, the release step and the script's advice (#735) run the same one."""
+    pattern = r"uvx --from towncrier==[0-9.]+(?: --with [a-z0-9-]+==[0-9.]+)+ towncrier"
+    commands = {script.TOWNCRIER}
     for path in (ROOT / ".github" / "workflows" / "ci.yml", ROOT / "CLAUDE.md"):
-        text = path.read_text(encoding="utf-8")
-        found = re.findall(r"uvx --from towncrier==[0-9.]+((?: --with [a-z0-9-]+==[0-9.]+)+)", text)
+        found = re.findall(pattern, path.read_text(encoding="utf-8"))
         assert len(found) == 1, (path, found)
-        sets.append(sorted(found[0].split(" --with ")[1:]))
-    assert sets[0] == sets[1], sets
-    assert {pin.split("==")[0] for pin in sets[0]} == {"click", "jinja2", "markupsafe"}, sets
+        commands.add(found[0])
+    assert len(commands) == 1 and re.fullmatch(pattern, script.TOWNCRIER), commands
+    pins = re.findall(r"--with ([a-z0-9-]+)==", script.TOWNCRIER)
+    assert set(pins) == {"click", "jinja2", "markupsafe"}, pins
 
 
 def _draft(entries: dict[str, list[str]], release: str = "") -> str:
