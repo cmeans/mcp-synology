@@ -2405,12 +2405,72 @@ async def _recreate_missing_folders(
                     "force_parent": "true",
                 },
             )
-        except SynologyError as e:
-            synology_error_response("Restore files", e)
+        except (httpx.TransportError, SynologyError) as e:
+            # The folders made before this one stay on the NAS, empty: say which (#725).
+            raise _recreate_failed(e, path, _made_with_parents(created, parents, gone)) from None
         created.append(path)
-    made = set(created) | {
-        parent
-        for parent in parents
-        if parent in gone and any(path.startswith(parent + "/") for path in created)
-    }
-    return sorted(created), sorted(made)
+    return sorted(created), _made_with_parents(created, parents, gone)
+
+
+def _made_with_parents(created: list[str], parents: list[str], gone: set[str]) -> list[str]:
+    """The folders re-created, with the missing parents ``force_parent`` made along the way."""
+    return sorted(
+        set(created)
+        | {
+            parent
+            for parent in parents
+            if parent in gone and any(path.startswith(parent + "/") for path in created)
+        }
+    )
+
+
+def _recreate_failed(
+    e: httpx.TransportError | SynologyError, path: str, made: list[str]
+) -> ToolError:
+    """The error for a restore whose re-creation of the original folder ``path`` failed (#725):
+    the cause, whether ``path`` may exist now (a request DSM didn't answer may have made it; one
+    that never connected sent nothing, #222), the folders re-created before it, which stay, and
+    that nothing was restored. A retry is safe: it re-creates only what's still missing."""
+    # Sent with no DSM answer: the folder may exist now. A connection never made sent nothing.
+    lost = isinstance(e, (httpx.TransportError, DsmHttpError, DsmReplyError)) and not (
+        isinstance(e, httpx.TransportError) and never_sent(e)
+    )
+    try:
+        if isinstance(e, httpx.TransportError):
+            connected = lost
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                (
+                    f"Restore files failed: DSM didn't answer while re-creating the original "
+                    f"folder {shown_beside(path, ' (')} ({describe_transport_error(e)})"
+                    if connected
+                    else f"Restore files failed: couldn't connect to DSM to re-create the "
+                    f"original folder {shown_beside(path, ' (')} ({describe_transport_error(e)})"
+                ),
+                retryable=True,
+                suggestion=(
+                    "Check with list_files before running it again."
+                    if connected
+                    else "Check that the NAS is reachable, then try again."
+                ),
+            )
+        synology_error_response("Restore files", e)
+    except ToolError as error:
+        body = json.loads(str(error))
+    details = body["error"]
+    message = sentence(str(details["message"]))
+    if lost:
+        message = then(message, f"{shown(path)} may have been re-created.")
+    elif not isinstance(e, httpx.TransportError):
+        # DSM's refusal names no folder.
+        message = then(message, f"Failed re-creating the original folder {shown(path)}.")
+    if made:
+        message = then(
+            message, path_list("Already re-created before this failure", [shown(p) for p in made])
+        )
+    details["message"] = then(message, "Nothing was restored.")
+    if lost and not CHECKS_WITH_LIST_FILES.search(str(details.get("suggestion") or "")):
+        _add_advice(details, "Check with list_files before running it again.")
+    return rewrapped_error(body)

@@ -3688,6 +3688,105 @@ class TestRestoreRecreatesMissingFolders:
         ]
         assert "Re-created /home/t/sub/deeper (no longer there)" in out
 
+    @staticmethod
+    def _failing(missing: set[str], fail_on: str, failure: Any, started: list[str]) -> object:
+        """`_responder`, but the CreateFolder of ``fail_on`` meets ``failure`` (an exception to
+        raise, or a DSM error code), and every task start is recorded (#725)."""
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("api") == "SYNO.FileStation.CreateFolder":
+                folder = f"{params['folder_path']}/{json.loads(params['name'])}"
+                if folder == fail_on:
+                    if isinstance(failure, Exception):
+                        raise failure
+                    if failure == 502:
+                        return httpx.Response(502, text="Bad Gateway")
+                    return httpx.Response(200, json={"success": False, "error": {"code": failure}})
+            if params.get("method") == "start":
+                started.append(params.get("api", ""))
+            responder = TestRestoreRecreatesMissingFolders._responder(missing, [])
+            return responder(request)  # type: ignore[operator, no-any-return]
+
+        return respond
+
+    @pytest.mark.parametrize(
+        ("failure", "says", "retryable"),
+        [
+            # A DSM refusal: the folder wasn't made.
+            (418, "Failed re-creating the original folder /home/t/b.", False),
+            # No answer: it may have been.
+            (
+                httpx.ReadTimeout("timed out"),
+                "DSM didn't answer while re-creating the original folder /home/t/b (",
+                True,
+            ),
+            (502, "/home/t/b may have been re-created.", True),
+        ],
+    )
+    @respx.mock
+    async def test_a_later_folder_failing_names_the_ones_already_made(
+        self, mock_client: DsmClient, failure: Any, says: str, retryable: bool
+    ) -> None:
+        """#725: a later CreateFolder's failure named no folder already re-created, and a
+        request with no answer escaped with no context."""
+        started: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing({"/home/t/a", "/home/t/b"}, "/home/t/b", failure, started)
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                mock_client, share="home", paths=["t/a/x.txt", "t/b/y.txt"]
+            )
+        error = json.loads(str(exc.value))["error"]
+        message = error["message"]
+        assert says in message, message
+        assert "Already re-created before this failure: /home/t/a" in message, message
+        assert message.endswith("Nothing was restored."), message
+        assert error["retryable"] is retryable, error
+        if says != "Failed re-creating the original folder /home/t/b.":
+            assert "Check with list_files before running it again." in error["suggestion"], error
+        assert started == [], started  # nothing moved
+
+    @respx.mock
+    async def test_a_folder_never_sent_says_so(self, mock_client: DsmClient) -> None:
+        """#725: a connection never made sent nothing (#222), so that folder wasn't made."""
+        started: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing(
+                {"/home/t/a"}, "/home/t/a", httpx.ConnectError("refused"), started
+            )
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(mock_client, share="home", paths=["t/a/x.txt"])
+        error = json.loads(str(exc.value))["error"]
+        message = error["message"]
+        assert message.startswith(
+            "Restore files failed: couldn't connect to DSM to re-create the original folder "
+            "/home/t/a ("
+        ), message
+        assert "may have been" not in message and "Already" not in message, message
+        assert message.endswith("Nothing was restored."), message
+        assert (error["code"], error["retryable"]) == ("unavailable", True), error
+        assert error["suggestion"] == "Check that the NAS is reachable, then try again.", error
+        assert started == [], started
+
+    @respx.mock
+    async def test_the_first_folder_failing_names_none(self, mock_client: DsmClient) -> None:
+        """#725: with nothing made before it, the error lists nothing, and still says nothing
+        was restored."""
+        started: list[str] = []
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing({"/home/t/a"}, "/home/t/a", 418, started)
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(mock_client, share="home", paths=["t/a/x.txt"])
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert "Already" not in message, message
+        assert "Failed re-creating the original folder /home/t/a." in message, message
+        assert message.endswith("Nothing was restored."), message
+        assert started == [], started
+
     @respx.mock
     async def test_existing_destination_is_left_alone(self, mock_client: DsmClient) -> None:
         created: list[dict[str, str]] = []
