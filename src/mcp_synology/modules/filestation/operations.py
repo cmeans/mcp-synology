@@ -16,6 +16,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_synology.core.display import escaped_repr, shown, shown_beside
 from mcp_synology.core.errors import (
     FILESTATION_ERROR_CODES,
+    DsmHttpError,
+    DsmReplyError,
     ErrorCode,
     SynologyError,
     error_from_code,
@@ -33,10 +35,12 @@ from mcp_synology.core.formatting import (
     then,
 )
 from mcp_synology.modules.filestation.batch import (
+    CHECKS_WITH_LIST_FILES,
     BatchOutcome,
     Budget,
     Item,
     ItemOutcome,
+    _add_advice,
     batch_reply,
     bounded_summary,
     no_scope,
@@ -56,6 +60,7 @@ from mcp_synology.modules.filestation.helpers import (
     missing_paths_suggestion,
     missing_text,
     name_key,
+    never_sent,
     no_answer,
     normalize_path,
     path_exists,
@@ -124,36 +129,25 @@ async def create_folder(
     """
     normalized = [normalize_path(p) for p in paths]
     folders: list[dict[str, Any]] = []
-    for p, given in zip(normalized, paths, strict=True):
-        parent = "/".join(p.split("/")[:-1]) or "/"
-        name = p.split("/")[-1]
+    for i, (p, given) in enumerate(zip(normalized, paths, strict=True)):
+        rest = normalized[i + 1 :]
         try:
-            data = await client.request(
-                "SYNO.FileStation.CreateFolder",
-                "create",
-                params={
-                    "folder_path": parent,
-                    "name": dsm_str(name),
-                    "force_parent": str(force_parent).lower(),
-                },
-            )
-        except SynologyError as e:
-            # DSM's 1100 "Insufficient filesystem permissions" for a folder under a file (vdsm
-            # 7.1, #702), which points at permissions.
-            if e.code == 1100:
-                blocker = await diagnose_under_file(client, p)
-                if blocker:
-                    error_response(
-                        ErrorCode.NOT_FOUND,
-                        f"Create folder failed: {shown(p)} can't be created: "
-                        f"{shown_beside(blocker, ': ')} is a file.",
-                        retryable=False,
-                        param="paths",
-                        value=given,  # the caller's own text (QA r1 on #714)
-                        suggestion=UNDER_FILE_ADVICE,
-                    )
-            synology_error_response("Create folder", e)
-        folders.extend(data.get("folders", []))
+            data = await _create_one(client, p, given, force_parent)
+        except ToolError as error:
+            # A later path's failure leaves the earlier folders on the NAS: say which, and
+            # what wasn't started (#713), as the batch tools do (#482).
+            raise _create_partial(error, p, given, folders, rest, force_parent) from None
+        except (httpx.TransportError, DsmHttpError, DsmReplyError) as e:
+            # No answer, a proxy's error status or a reply that isn't DSM's (#282): this folder
+            # may have been created. With nothing else to name, the error is as it was.
+            if not (folders or rest):
+                if isinstance(e, httpx.TransportError):
+                    raise
+                synology_error_response("Create folder", e)
+            raise _create_partial(
+                _no_answer_error(e, p, given, force_parent), p, given, folders, rest, force_parent
+            ) from None
+        folders.extend(_created_entries(data, p))
 
     lines = [format_status(f"Created {len(folders):,} folder(s):")]
     for f in folders:
@@ -162,6 +156,150 @@ async def create_folder(
         lines.append(f"  \U0001f4c1 {shown(path)}")
 
     return "\n".join(lines)
+
+
+def _created_entries(data: Any, p: str) -> list[dict[str, Any]]:
+    """The folders DSM's CreateFolder reply lists, each with the path asked for when the reply
+    doesn't name it as text, or the path asked for alone when it lists none (pre-QA r2 and r3
+    on #713: the error's list of what was created must not drop one, and an odd shape mustn't
+    raise after the folder was made)."""
+    listed = data.get("folders") if isinstance(data, dict) else None
+    entries = [f for f in listed if isinstance(f, dict)] if isinstance(listed, list) else []
+    if not entries:
+        return [{"path": p}]
+    return [
+        {**f, "path": f["path"] if isinstance(f.get("path"), str) and f["path"] else p}
+        for f in entries
+    ]
+
+
+def _no_answer_error(
+    e: httpx.TransportError | DsmHttpError | DsmReplyError,
+    p: str,
+    given: ResolvedPath,
+    force_parent: bool,
+) -> ToolError:
+    """The error for a CreateFolder request of ``p`` that got no DSM answer (#713): it may have
+    been created, so it's retryable only with ``force_parent``, where an existing folder isn't
+    an error, and only when the error itself is (a proxy's 403 isn't). A connection never made
+    sent nothing (writes never reuse one, #222): that folder wasn't created."""
+    try:
+        if isinstance(e, httpx.TransportError) and never_sent(e):
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"Create folder failed: couldn't connect to DSM for {shown_beside(p, ' (')} "
+                f"({describe_transport_error(e)}); it wasn't created.",
+                retryable=True,
+                param="paths",
+                value=given,
+                suggestion="Check that the NAS is reachable, then try again.",
+            )
+        if isinstance(e, httpx.TransportError):
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                f"Create folder failed: DSM didn't answer for {shown_beside(p, ' (')} "
+                f"({describe_transport_error(e)}); it may have been created.",
+                retryable=force_parent,
+                param="paths",
+                value=given,
+                suggestion="Check with list_files before running it again.",
+            )
+        synology_error_response("Create folder", e)
+    except ToolError as error:
+        if isinstance(e, httpx.TransportError):
+            return error
+        body = json.loads(str(error))
+        details = body["error"]
+        details["message"] = then(
+            sentence(str(details["message"])), f"{shown(p)} may have been created."
+        )
+        details["param"], details["value"] = "paths", given
+        details["retryable"] = bool(details.get("retryable")) and force_parent
+        # It may exist now: check before asking for it again, as the transport branch says
+        # (pre-QA r3 on #713; the batch tools' `_not_retryable`).
+        if not CHECKS_WITH_LIST_FILES.search(str(details.get("suggestion") or "")):
+            _add_advice(details, "Check with list_files before running it again.")
+        return rewrapped_error(body)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _create_partial(
+    error: ToolError,
+    failed: str,
+    given: ResolvedPath,
+    folders: list[dict[str, Any]],
+    not_started: list[str],
+    force_parent: bool,
+) -> ToolError:
+    """``error`` with the path that failed, the folders the call made before it and the paths
+    it didn't start (#713); unchanged when there are none. Once something was created, only
+    ``force_parent`` keeps the error's own retryable flag: then an existing folder isn't an
+    error, so the same list again is safe; without it, the same list may meet them as existing
+    (not captured), so it isn't retryable."""
+    created = [str(f.get("path", "")) for f in folders]
+    if not (created or not_started):
+        return error
+    try:
+        body = json.loads(str(error))
+        details = body["error"]
+        message = str(details["message"])
+    except (ValueError, KeyError, TypeError):
+        return error
+    if details.get("param") != "paths":
+        # DSM's error names no path (as the batch tools' Failed on:, #480).
+        message = then(sentence(message), f"Failed on: {shown(failed)}.")
+        details["param"], details["value"] = "paths", given
+    added = ""
+    if created:
+        added = path_list("Already created before this failure", [shown(c) for c in created])
+        if not force_parent:
+            details["retryable"] = False
+            _add_advice(details, "When retrying, leave out the folders already created.")
+    if not_started:
+        added = then(added, path_list("Not started", [shown(p) for p in not_started]))
+    details["message"] = then(sentence(message), added)
+    return rewrapped_error(body)
+
+
+async def _create_one(
+    client: DsmClient, p: str, given: ResolvedPath, force_parent: bool
+) -> dict[str, Any]:
+    """One CreateFolder request for ``p`` (DSM's reply); a refusal raises ToolError."""
+    parent = "/".join(p.split("/")[:-1]) or "/"
+    name = p.split("/")[-1]
+    try:
+        data = await client.request(
+            "SYNO.FileStation.CreateFolder",
+            "create",
+            params={
+                "folder_path": parent,
+                "name": dsm_str(name),
+                "force_parent": str(force_parent).lower(),
+            },
+        )
+    except (DsmHttpError, DsmReplyError):
+        raise  # create_folder says this folder may have been created (#713)
+    except SynologyError as e:
+        # DSM's 1100 "Insufficient filesystem permissions" for a folder under a file (vdsm
+        # 7.1, #702), which points at permissions.
+        if e.code == 1100:
+            blocker = await diagnose_under_file(client, p)
+            if blocker:
+                error_response(
+                    ErrorCode.NOT_FOUND,
+                    f"Create folder failed: {shown(p)} can't be created: "
+                    f"{shown_beside(blocker, ': ')} is a file.",
+                    retryable=False,
+                    param="paths",
+                    value=given,  # the caller's own text (QA r1 on #714)
+                    suggestion=UNDER_FILE_ADVICE,
+                )
+        synology_error_response("Create folder", e)
+    return data
 
 
 async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_name: str) -> None:
