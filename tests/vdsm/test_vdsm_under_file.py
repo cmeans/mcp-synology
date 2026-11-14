@@ -204,26 +204,32 @@ class TestVdsmPathUnderAFile:
         )
 
 
-async def _bin_state(client: Any, top: str) -> str:
-    """What `/home/#recycle/<top>` holds, read twice a second apart (#741): whether a bin item
-    was missing, somewhere else, or only read as missing."""
+async def _bin_state(client: Any, top: str, deleted_at: float) -> str:
+    """What `/home/#recycle/<top>` holds, read twice a second apart, each read timed from when
+    `delete_files` returned (#741): whether a bin item was missing, late, somewhere else, or
+    only read as missing."""
     import asyncio
+    import time
 
     from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin
     from mcp_synology.modules.filestation.metadata import get_file_info
 
     async def read(label: str, call: Awaitable[str]) -> str:
+        # Any failure is shown, not raised: one escaping here would replace the refusal this
+        # reports (pre-QA r1 on the #741 PR: a resent read's second drop, httpx.ReadError).
         try:
             return f"{label}:\n{await call}"
-        except ToolError as e:
-            return f"{label}: {e}"
+        except Exception as e:
+            return f"{label}: {type(e).__name__}: {e}"
 
     items = [f"/home/#recycle/{top}/ok/a.txt", f"/home/#recycle/{top}/d/x/a.txt"]
     found: list[str] = []
     for attempt in ("at once", "after 1 s"):
         if attempt != "at once":
             await asyncio.sleep(1)
-        found.append(f"--- {attempt}")
+        found.append(
+            f"--- {attempt} ({time.monotonic() - deleted_at:.2f} s after the delete returned)"
+        )
         found.append(await read("getinfo", get_file_info(client, paths=items)))
         for folder in ("", "/ok", "/d", "/d/x"):
             path = f"/home/#recycle/{top}{folder}"
@@ -241,6 +247,7 @@ async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_pat
     is refused before anything moves; it restored the earlier ones first. In the test user's
     home, which has a recycle bin (the bake's shares don't)."""
     import contextlib
+    import time
     import uuid
 
     from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin
@@ -264,9 +271,10 @@ async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_pat
                 dest_folder=f"/home/{top}/{folder}",
                 allowed_roots=[tmp_path],
             )
-        await delete_files(
+        deleted = await delete_files(
             client, paths=[f"/home/{top}/d", f"/home/{top}/ok/a.txt"], recycle_bin_status={}
         )
+        deleted_at = time.monotonic()
         # A file named d where the folder d was.
         named_d = tmp_path / "d"
         named_d.write_text("a file now")
@@ -285,8 +293,12 @@ async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_pat
         if error["message"] != expected:
             # #741: failed once on DSM 7.2.2 (a 408 for the bin item right after the delete) and
             # didn't reproduce in about 175 runs; say what the bin held then.
+            refused = time.monotonic() - deleted_at
+            state = await _bin_state(client, top, deleted_at)
             pytest.fail(
-                f"unexpected refusal: {error}\n{await _bin_state(client, top)}", pytrace=False
+                f"unexpected refusal ({refused:.2f} s after the delete returned): {error}\n"
+                f"delete_files replied:\n{deleted}\n{state}",
+                pytrace=False,
             )
         assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert "a.txt" not in await list_files(client, path=f"/home/{top}/ok")
