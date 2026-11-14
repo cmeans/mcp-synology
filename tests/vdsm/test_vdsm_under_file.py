@@ -204,6 +204,38 @@ class TestVdsmPathUnderAFile:
         )
 
 
+async def _bin_state(client: Any, top: str) -> str:
+    """What `/home/#recycle/<top>` holds, read twice a second apart (#741): whether a bin item
+    was missing, somewhere else, or only read as missing."""
+    import asyncio
+
+    from mcp_synology.modules.filestation.listing import list_files, list_recycle_bin
+    from mcp_synology.modules.filestation.metadata import get_file_info
+
+    async def read(label: str, call: Awaitable[str]) -> str:
+        try:
+            return f"{label}:\n{await call}"
+        except ToolError as e:
+            return f"{label}: {e}"
+
+    items = [f"/home/#recycle/{top}/ok/a.txt", f"/home/#recycle/{top}/d/x/a.txt"]
+    found: list[str] = []
+    for attempt in ("at once", "after 1 s"):
+        if attempt != "at once":
+            await asyncio.sleep(1)
+        found.append(f"--- {attempt}")
+        found.append(await read("getinfo", get_file_info(client, paths=items)))
+        for folder in ("", "/ok", "/d", "/d/x"):
+            path = f"/home/#recycle/{top}{folder}"
+            found.append(await read(f"list {path}", list_files(client, path=path)))
+        found.append(
+            await read(
+                "list_recycle_bin a.txt", list_recycle_bin(client, share="home", pattern="a.txt")
+            )
+        )
+    return "\n".join(found)
+
+
 async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_path: Path) -> None:
     """QA r1 on #714: a restore of several items whose original folder is now under a file
     is refused before anything moves; it restored the earlier ones first. In the test user's
@@ -246,11 +278,17 @@ async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_pat
                 client, share="home", paths=[f"{top}/ok/a.txt", f"{top}/d/x/a.txt"]
             )
         )
-        assert (error["code"], error["retryable"]) == ("not_found", False), error
-        assert error["message"] == (
+        expected = (
             f"Restore files refused: the original folder /home/{top}/d/x doesn't exist on the "
             f"NAS: /home/{top}/d is a file. Nothing was restored."
-        ), error
+        )
+        if error["message"] != expected:
+            # #741: failed once on DSM 7.2.2 (a 408 for the bin item right after the delete) and
+            # didn't reproduce in about 175 runs; say what the bin held then.
+            pytest.fail(
+                f"unexpected refusal: {error}\n{await _bin_state(client, top)}", pytrace=False
+            )
+        assert (error["code"], error["retryable"]) == ("not_found", False), error
         assert "a.txt" not in await list_files(client, path=f"/home/{top}/ok")
         left = await list_recycle_bin(client, share="home", pattern="a.txt")
         assert f"{top}/ok/a.txt" in left and f"{top}/d/x/a.txt" in left, left
