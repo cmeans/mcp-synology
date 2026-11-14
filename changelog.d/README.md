@@ -10,14 +10,20 @@ The release PR assembles them into the version's notes and deletes them (CLAUDE.
   `+<name>.release.md`, printed before the categories.
 - **Content:** the entry exactly as it would appear under its `### ` heading in `CHANGELOG.md`:
   `- **Title** (#PR): what changed and why — closes #N`, usually on one line, with no heading.
-  Indent any later line 2 spaces or more: at column 0 or 1, a fence, `<pre>`, `>`, `1.` or `***`
-  would end the entry and split the notes or swallow the rest of them. Save it as UTF-8 without a
-  byte-order mark. Its first
-  `(#N)` is the file's PR number. No line reads as a heading inside the entry, a list item whose content
-  starts at column 2: up to 5 spaces, `#` to `######`, then a space, a tab or the line's end; a
-  `===` or `---` underline; or a heading after a nested `-`, `1.` or `>`. That goes for a code
-  block too, so indent its lines 6 spaces or more. No `<!--`, and only a `+<name>.release.md` says `**Security release:**`. A fragment is a file
-  of its own, never a symbolic link.
+  Its first `(#N)` is the file's PR number. Save it as UTF-8 without a byte-order mark.
+  - **How it renders is checked with GitHub's own parser** (cmark-gfm, through `cmarkgfm`): the
+    fragment is placed between two other entries of its category, as a release assembles it, and
+    must stay one item of that list, leaving the entries around it and the next category as they
+    were, with no heading in it. So indent any later line 2 spaces or more: at column 0 or 1, a
+    fence, `>`, `1.`, `---`, a table after a blank line, a footnote definition, another `-`, `*`
+    or `+`, or an HTML tag alone on a line (`<details>`, `<span>`) ends the entry and splits the
+    notes or swallows the rest of them. HTML indented into the entry stays inside it. A
+    `+<name>.release.md` is checked the same way, before the categories: a fence it opens must
+    close, and it holds no heading and no HTML block.
+  - **A line starting with `#`** (`#` to `######`, then a space, a tab or the line's end) is
+    refused even inside a code block: the release tools read `CHANGELOG.md` line by line. No
+    `<!--`, and only a `+<name>.release.md` says `**Security release:**`. A fragment is a file
+    of its own, never a symbolic link.
 - **Order:** the notes list each category's entries highest PR number first; within one PR,
   `<PR>.<type>.1.md` prints before `<PR>.<type>.md`.
 - **Checked by** `python scripts/changelog_fragments.py check` (CI): names, content, and that a

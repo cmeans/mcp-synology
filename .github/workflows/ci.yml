@@ -64,6 +64,9 @@ jobs:
           python-version: "3.12"
       - name: Check the fragments
         env:
+          # GitHub's Markdown parser (cmark-gfm's binding), which the check reads fragments with,
+          # at uv.lock's versions, without installing the project.
+          WITH: --no-project --with cmarkgfm==2025.10.22 --with cffi==2.1.1 --with pycparser==3.0
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           PR: ${{ github.event.pull_request.number }}
@@ -74,12 +77,16 @@ jobs:
             # The PR's labels as they are now, not the event's: a rerun after the label is added
             # replays the old payload (as qa-gate.yml reads them).
             LABELS=$(gh api "repos/$REPO/pulls/$PR" --jq '[.labels[].name] | join(",")')
-            python scripts/changelog_fragments.py check --base "$BASE" --pr "$PR" --labels "$LABELS"
+            uv run $WITH python scripts/changelog_fragments.py check --base "$BASE" --pr "$PR" --labels "$LABELS"
           else
-            python scripts/changelog_fragments.py check
+            uv run $WITH python scripts/changelog_fragments.py check
           fi
-      - name: Build the next release's notes (draft)
-        run: uvx --from towncrier==26.9.0 towncrier build --draft --version 0.0.0 --date 2000-01-01 > /dev/null
+      - name: Build the next release's notes (draft) and check how they render
+        env:
+          WITH: --no-project --with cmarkgfm==2025.10.22 --with cffi==2.1.1 --with pycparser==3.0
+        run: |
+          uvx --from towncrier==26.9.0 towncrier build --draft --version 0.0.0 --date 2000-01-01 > "$RUNNER_TEMP/notes.md"
+          uv run $WITH python scripts/changelog_fragments.py notes "$RUNNER_TEMP/notes.md"
 
   validate-server-json:
     runs-on: ubuntu-latest

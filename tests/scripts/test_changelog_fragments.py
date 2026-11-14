@@ -186,28 +186,101 @@ def test_a_refusal_counts_blank_lines_before_the_entry(tmp_path: Path) -> None:
     [
         "```",
         "~~~",
-        "<pre>",
-        "<DIV>",
-        " <script>",
         "> quoted",
         "1. ordered",
         "1) ordered",
         "***",
         "_ _ _",
+        # QA r3 on #732: a rule at column 0, not a heading (it splits the category's list).
+        "---",
+        " ---",
+        # A table after a blank line is a block of its own (GitHub's Markdown API agrees).
+        "\n| a | b |\n|---|---|",
     ],
 )
 def test_a_block_opened_outside_the_entry_is_refused(tmp_path: Path, line: str) -> None:
-    """Pre-QA r7 on #732: at column 0 or 1 a line isn't inside the list item, so a fence or
-    <pre> turned every later entry and category into one code block on GitHub, and a quote, an
-    ordered item or a rule split the list."""
+    """Pre-QA r7 on #732: at column 0 or 1 a line isn't inside the list item, so a fence turned
+    every later entry and category into one code block on GitHub, and a quote, an ordered item or
+    a rule split the list."""
     found = script.fragment_problems(
         _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
     )
-    assert len(found) == 1 and "line 2," in found[0] and "starts a block" in found[0], found
+    assert len(found) == 1 and "starts a block outside the entry" in found[0], found
+    assert "heading" not in found[0], found
 
 
 @pytest.mark.parametrize(
-    "line", ["  ```", "  > quoted", "  1. ordered", "wrapped text", "#hashtag", "  <pre>x</pre>"]
+    "line",
+    [
+        "<pre>",
+        "<DIV>",
+        " <script>",
+        # QA r3 on #732: any tag CommonMark starts an HTML block with, not five named ones.
+        "<details>\nmore\n</details>",
+        "<table><tr><td>a</td></tr></table>",
+        "<p>para</p>",
+        "<section>",
+        "</p>",
+        "<?php x ?>",
+        "<!DOCTYPE html>",
+        "<![CDATA[x]]>",
+        # Any other tag alone on a line starts one on GitHub, right after the entry's text too
+        # (cmark-gfm; markdown-it-py, a CommonMark parser, read these as the entry's text).
+        "<custom-tag>",
+        " <custom-tag>",
+        "<span>",
+        "</span>",
+        "<br>",
+        "<a href=x>",
+        "\n<custom-tag>",
+    ],
+)
+def test_an_html_block_outside_the_entry_is_refused(tmp_path: Path, line: str) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
+    )
+    assert len(found) == 1 and "HTML block outside the entry" in found[0], found
+    assert f"line {3 if line.startswith(chr(10)) else 2}," in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "- **x** (#731): y <kbd>Ctrl</kbd>\n<span>z</span> w\n",
+        "- **x** (#731): y\n<b>bold</b>\n",
+        "- **x** (#731): y\n<custom-tag> trailing text\n",
+        # Indented into the entry, GitHub keeps an HTML block inside it.
+        "- **x** (#731): y\n  <pre>x</pre>\n",
+        "- **x** (#731): y\n  <details>\n  more\n  </details>\n",
+    ],
+)
+def test_html_inside_the_entry_passes(tmp_path: Path, text: str) -> None:
+    assert script.fragment_problems(_dir(tmp_path, {"731.fixed.md": text})) == []
+
+
+def test_a_footnote_definition_outside_the_entry_is_refused(tmp_path: Path) -> None:
+    """GitHub writes nothing for it where it stands, and it ends the category's list there."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "- **x** (#731): y\n[^1]: a note\n"})
+    )
+    assert len(found) == 1 and "line 2, '[^1]: a note', starts a block" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "  ```",
+        "  > quoted",
+        "  1. ordered",
+        "wrapped text",
+        "#hashtag",
+        "  - nested\n  - items",
+        # GFM tables, inside the entry: a lazy one and an indented one render inside it.
+        "| a | b |\n|---|---|",
+        "\n  | a | b |\n  |---|---|",
+        # A fence inside the entry closes with the entry, never past it.
+        "  ```\n  never closed",
+    ],
 )
 def test_lines_inside_the_entry_may_open_blocks(tmp_path: Path, line: str) -> None:
     found = script.fragment_problems(
@@ -216,16 +289,65 @@ def test_lines_inside_the_entry_may_open_blocks(tmp_path: Path, line: str) -> No
     assert found == [], found
 
 
-def test_a_release_text_may_hold_a_closed_fence_only(tmp_path: Path) -> None:
-    closed = "**Upgrading:**\n\n```\nuv tool upgrade mcp-synology\n```\n"
-    assert script.fragment_problems(_dir(tmp_path, {"+upgrade.release.md": closed})) == []
+@pytest.mark.parametrize(
+    ("body", "closed"),
+    [
+        ("```\nuv tool upgrade mcp-synology\n```", True),
+        ("```\nuv tool upgrade x", False),
+        # QA r3 on #732: a fence closes only on its own character, at least as long. Counting
+        # fence lines passed the first two and refused the third.
+        ("```\na\n~~~", False),
+        ("````\na\n```", False),
+        ("```\n~~~\n```", True),
+        ("~~~~\n```\n~~~~~", True),
+    ],
+)
+def test_a_release_text_may_hold_a_closed_fence_only(
+    tmp_path: Path, body: str, closed: bool
+) -> None:
+    text = f"**Upgrading:**\n\n{body}\n"
+    found = script.fragment_problems(_dir(tmp_path, {"+upgrade.release.md": text}))
+    if closed:
+        assert found == [], found
+    else:
+        assert len(found) == 1 and "doesn't close" in found[0], found
+
+
+@pytest.mark.parametrize("line", [" - second", "-\tsecond", " * second", "+ second"])
+def test_a_second_entry_at_column_1_or_after_a_tab_is_refused(tmp_path: Path, line: str) -> None:
+    """QA r3 on #732: each renders as another item of the category's list."""
     found = script.fragment_problems(
-        _dir(
-            tmp_path / "unclosed",
-            {"+upgrade.release.md": "**Upgrading:**\n\n```\nuv tool upgrade x\n"},
-        )
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n{line}\n"})
     )
-    assert len(found) == 1 and "doesn't close" in found[0], found
+    assert len(found) == 1 and "more than one entry (line 2," in found[0], found
+
+
+@pytest.mark.parametrize("underline", ["  ---", "  ===", "  -", "  ="])
+def test_a_setext_heading_names_its_underline(tmp_path: Path, underline: str) -> None:
+    """The line that makes it a heading is the underline, not the text above it."""
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n  more\n{underline}\n"})
+    )
+    assert len(found) == 1 and f"line 3, {underline!r}, reads as a heading" in found[0], found
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "**Security release:** x.\n\nUpgrading:\n\n- a\n- b\n",
+        "Text.\n\n---\n\nMore text, a rule before it.\n",
+        "> A quote.\n",
+        "| a | b |\n|---|---|\n| 1 | 2 |\n",
+    ],
+)
+def test_a_release_text_may_hold_blocks(tmp_path: Path, text: str) -> None:
+    assert script.fragment_problems(_dir(tmp_path, {"+x.release.md": text})) == []
+
+
+@pytest.mark.parametrize("text", ["<details>\nx\n</details>\n", "Text.\n\n  ## Indented heading\n"])
+def test_a_release_text_may_not_hold_html_or_headings(tmp_path: Path, text: str) -> None:
+    found = script.fragment_problems(_dir(tmp_path, {"+x.release.md": text}))
+    assert len(found) == 1 and ("HTML block" in found[0] or "heading" in found[0]), found
 
 
 def test_a_byte_order_mark_is_named(tmp_path: Path) -> None:
@@ -606,6 +728,102 @@ def test_the_towncrier_pins_agree() -> None:
     assert len(pins) == 1, pins
     for path in (ROOT / ".github" / "workflows" / "ci.yml", ROOT / "CLAUDE.md"):
         assert "towncrier==" in path.read_text(encoding="utf-8"), path
+
+
+def test_the_parser_pins_agree_with_the_lock() -> None:
+    """CI runs the check with `uv run --no-project --with`, outside the lock: each of its pins is
+    the lock's version, and the dev extra pins cmarkgfm to the same one."""
+    import tomllib
+
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = {package["name"]: package["version"] for package in lock["package"]}
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    withs = re.findall(r"^\s*WITH: (.+)$", ci, re.MULTILINE)
+    assert len(withs) == 2 and len(set(withs)) == 1, withs
+    pins = dict(re.findall(r"--with ([a-z0-9-]+)==([0-9][0-9.]*)", withs[0]))
+    assert set(pins) == {"cmarkgfm", "cffi", "pycparser"}, pins
+    for name, version in pins.items():
+        assert locked[name] == version, (name, version, locked[name])
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert f'"cmarkgfm=={pins["cmarkgfm"]}"' in pyproject
+    # Both steps that run the script run it with them.
+    assert ci.count("uv run $WITH python scripts/changelog_fragments.py") == 3, ci
+
+
+def _draft(entries: dict[str, list[str]], release: str = "") -> str:
+    """A draft as `towncrier build --draft` writes it, preamble included."""
+    parts = [
+        "Draft only -- nothing has been written.",
+        "What is seen below is what would be written.",
+        "",
+        "## 0.0.0 (2000-01-01)",
+        "",
+    ]
+    if release:
+        parts += [release, ""]
+    for name, items in entries.items():
+        parts += [f"### {name}", "", *items, ""]
+    return "\n".join(parts) + "\n"
+
+
+def test_the_draft_check_passes_notes_that_match(tmp_path: Path) -> None:
+    root = _dir(
+        tmp_path,
+        {
+            "731.added.md": "- **a** (#731): a\n",
+            "731.fixed.md": "- **b** (#731): b\n",
+            "730.fixed.md": "- **c** (#730): c\n",
+        },
+    )
+    draft = _draft(
+        {"Added": ["- **a** (#731): a"], "Fixed": ["- **b** (#731): b", "- **c** (#730): c"]},
+        release="**Security release:** x.",
+    )
+    assert script.notes_problems(root, draft) == []
+
+
+@pytest.mark.parametrize(
+    ("entries", "says"),
+    [
+        # One entry fewer than the fragments: a fragment that took in its neighbor.
+        ({"Fixed": ["- **b** (#731): b"]}, "renders {'Fixed': 1} where changelog.d/ holds"),
+        (
+            {"Fixed": ["- **b** (#731): b", "- **c** (#730): c", "<details>", "x", "</details>"]},
+            "an HTML block",
+        ),
+        (
+            {"Fixed": ["- **b** (#731): b", "- **c** (#730): c", "", "### Fixed", "", "- d"]},
+            "a heading",
+        ),
+        ({"Fixed": ["- **b** (#731): b", "", "---", "", "- **c** (#730): c"]}, "a block"),
+    ],
+)
+def test_the_draft_check_refuses_notes_that_dont(
+    tmp_path: Path, entries: dict[str, list[str]], says: str
+) -> None:
+    root = _dir(
+        tmp_path, {"731.fixed.md": "- **b** (#731): b\n", "730.fixed.md": "- **c** (#730): c\n"}
+    )
+    found = script.notes_problems(root, _draft(entries))
+    assert found and says in " ".join(found), found
+
+
+def test_the_draft_check_needs_the_versions_heading(tmp_path: Path) -> None:
+    assert "no '## <version>'" in script.notes_problems(_dir(tmp_path, {}), "nothing\n")[0]
+
+
+def test_the_notes_command_reads_the_draft(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _dir(tmp_path, {"731.fixed.md": "- **b** (#731): b\n"})
+    draft = tmp_path / "notes.md"
+    draft.write_text(_draft({"Fixed": ["- **b** (#731): b"]}), encoding="utf-8")
+    assert script.main(["notes", str(draft)], root) == 0
+    draft.write_text(_draft({"Fixed": []}), encoding="utf-8")
+    assert script.main(["notes", str(draft)], root) == 1
+    assert "::error::" in capsys.readouterr().out
+    assert script.main(["notes", str(tmp_path / "missing.md")], root) == 1
+    assert "couldn't read" in capsys.readouterr().out
 
 
 def test_fragment_only_prs_skip_vdsm() -> None:

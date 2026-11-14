@@ -8,11 +8,14 @@ refused), and `towncrier check` passes any PR that edits `CHANGELOG.md` (here a 
 adding or changing a fragment named for its own number and removing none, as a release PR that
 assembled every fragment, or with the `no changelog` label).
 
-Standard library only. Each problem prints as a GitHub Actions error.
+Each problem prints as a GitHub Actions error. How a fragment renders is read with `cmarkgfm`,
+the Python binding of cmark-gfm, GitHub's own Markdown parser (QA r3 on #732), pinned in the dev
+extra and in CI's `uv run --with`; everything else is standard library.
 
 Usage:
     python scripts/changelog_fragments.py check
     python scripts/changelog_fragments.py check --base <base commit> --pr <N> --labels "<a>,<b>"
+    python scripts/changelog_fragments.py notes <towncrier build --draft's output>
 """
 
 from __future__ import annotations
@@ -22,45 +25,164 @@ import re
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
+
+import cmarkgfm
+from cmarkgfm.cmark import Options
 
 DIRECTORY = "changelog.d"
 # Files in the directory that aren't fragments (also towncrier's `ignore`, in pyproject.toml).
 # macOS writes .DS_Store into a folder Finder opens; towncrier would refuse it (pre-QA r6 on #732).
 NOT_FRAGMENTS = frozenset({"README.md", "template.md", ".DS_Store"})
-# A Markdown heading as CommonMark reads one inside the entry: a fragment is a list item whose
-# content starts at column 2, so up to 5 spaces of indent (2 + 3), then 1-6 #, then a space, a
-# tab or the line's end; or a setext underline (=== or ---) (pre-QA r6 and QA r2 on #732: each
-# renders as a heading on GitHub's release page). Tabs are expanded to 4 columns first.
-_HEADING = re.compile(r" {0,5}(?:#{1,6}(?:[ \t]|$)|(?:=+|-+)[ \t]*$)")
-# A nested list item or block quote inside the entry, up to 5 spaces in (6 or more is indented
-# code, pre-QA r7 on #732): a heading after one renders at any depth.
-_NESTED = re.compile(r" {0,5}(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+|>[ \t]?)+")
-_NESTED_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
-# A line at column 0 or 1 isn't inside the entry, so one that opens a block ends the list: a
-# fence or `<pre>` (and the like) turns the rest of the notes, later categories too, into one
-# block; a quote, an ordered item or a thematic break splits the category's list (pre-QA r7 on
-# #732, rendered with GitHub's Markdown API). Indent an entry's continuation lines 2 or more.
-_BLOCK_START = re.compile(
-    r" ?(?:```|~~~|<(?:pre|script|style|textarea|div)\b|>|[0-9]{1,9}[.)](?:[ \t]|$)"
-    r"|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$)",
-    re.IGNORECASE,
-)
-_FENCE = re.compile(r" {0,3}(?:```|~~~)")
+# The release tools read CHANGELOG.md line by line (publish.yml's awk, the release gate), so a
+# heading at a line's start ends a section there even inside a code block, where GitHub shows it
+# as code (pre-QA r5 on #731).
+_LINE_HEADING = re.compile(r"#{1,6}(?:[ \t]|$)")
 _BOM = "\ufeff"
+# A bullet list item's start, as CommonMark reads one at column 0 to 3.
+_BULLET = re.compile(r" {0,3}[-*+](?:[ \t]|$)")
+# The categories' headings, in towncrier's order (pyproject.toml's types, the template).
+CATEGORIES = {"added": "Added", "changed": "Changed", "fixed": "Fixed"}
+# A fragment is rendered between neighbors as a release assembles it (changelog.d/template.md):
+# the version's heading, then an entry above it and one below it in its category, then the next
+# category. An entry's neighbors are other PRs' entries, so what it does to them is what to check.
+_TITLE = "## 0.0.0 (2000-01-01)"
+_ABOVE = "- **Above** (#1): the entry above this one"
+_BELOW = "- **Below** (#2): the entry below this one"
+_NEXT = "- **Next** (#3): the next category's entry"
 
 
-def _heading_line(lines: list[str]) -> tuple[int, str] | None:
-    """The first line (1-based number, text) that would render as a heading, or None. Only lines
-    indented 6 or more columns (indented code inside the entry) are exempt."""
-    for number, line in enumerate(lines, start=1):
-        expanded = line.expandtabs(4)
-        if _HEADING.match(expanded):
-            return number, line
-        nested = _NESTED.match(expanded)
-        if nested and _NESTED_HEADING.match(expanded[nested.end() :]):
-            return number, line
-    return None
+# GitHub's own options for its Markdown, as far as structure goes, plus each block's source lines.
+_OPTIONS = Options.CMARK_OPT_SOURCEPOS | Options.CMARK_OPT_FOOTNOTES
+_HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+# A setext heading's underline, at any depth (after a list marker or a quote's `>`).
+_UNDERLINE = re.compile(r"[ \t>*+0-9.)-]*?(?:=+|-+)[ \t]*$")
+_VOID = frozenset({"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"})
+
+
+@dataclass
+class _Block:
+    """A top-level block of rendered notes: its tag (`h2`, `ul`, `p`, `pre`, `hr`, ... or `html`
+    for an HTML block, which GitHub writes as a comment with no source position), the line
+    (0-based) it starts on (a setext heading's underline), the first line after the block before
+    it (`gap`: where a block GitHub writes nothing for, such as a footnote definition, sat), a
+    heading's text and a list's items' lines."""
+
+    kind: str
+    line: int
+    gap: int
+    text: str = ""
+    items: list[int] = field(default_factory=list)
+
+
+class _Shape(HTMLParser):
+    """The top-level blocks of cmark-gfm's HTML, and the lines of every heading inside one."""
+
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__(convert_charrefs=True)
+        self.lines = lines
+        self.depth = 0
+        self.end = -1  # the last line of the last top-level block GitHub gave a position
+        self.blocks: list[_Block] = []
+        self.nested: list[int] = []
+
+    def at(self, line: int) -> str:
+        return self.lines[line] if 0 <= line < len(self.lines) else ""
+
+    def _after(self) -> int:
+        line = self.end + 1
+        while line < len(self.lines) and not self.lines[line].strip():
+            line += 1
+        return line
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        position = re.fullmatch(r"(\d+):\d+-(\d+):\d+", dict(attrs).get("data-sourcepos") or "")
+        first, last = (int(position[1]) - 1, int(position[2]) - 1) if position else (None, None)
+        line = first
+        if tag in _HEADINGS and first is not None and last is not None and first != last:
+            # A setext heading: name its underline, the line that makes it one. cmark-gfm's end
+            # for one can run onto the next line, so the underline is looked for, not assumed.
+            underline = (n for n in range(first + 1, last + 1) if _UNDERLINE.match(self.at(n)))
+            line = next(underline, first)
+        if self.depth == 0:
+            gap = self._after()
+            self.blocks.append(_Block(tag, gap if line is None else line, gap))
+            if last is not None:
+                self.end = last
+        elif tag in _HEADINGS:
+            self.nested.append(self._after() if line is None else line)
+        if tag == "li" and self.depth == 1 and self.blocks and first is not None:
+            self.blocks[-1].items.append(first)
+        if tag not in _VOID:
+            self.depth += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag not in _VOID:
+            self.depth -= 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag not in _VOID:
+            self.depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self.depth >= 1 and self.blocks and self.blocks[-1].kind in _HEADINGS:
+            self.blocks[-1].text += data
+
+    def handle_comment(self, data: str) -> None:
+        if self.depth == 0:
+            gap = self._after()
+            self.blocks.append(_Block("html", gap, gap))
+
+
+@dataclass
+class _Layout:
+    """The notes as GitHub renders them: each category's items' lines, and the first block that
+    breaks the layout, with why (`heading`, `html` or `split`), or None."""
+
+    categories: dict[str, list[int]]
+    problem: tuple[str, _Block] | None
+
+
+def _layout(text: str) -> _Layout:
+    """Read notes as GitHub renders them, with cmark-gfm, GitHub's own Markdown parser (QA r3 on
+    #732: four rounds of regex rules each missed a Markdown rule, and markdown-it-py, a CommonMark
+    parser, missed GitHub's HTML blocks after a list item's text and its footnotes): `## <version>`,
+    any free text, then each category's `### <name>` and one list. The first problem is a heading
+    inside a block, a heading that isn't the next category's (`heading`), an HTML block outside
+    every list (`html`), or a block between a category's heading and its list or after its list
+    (`split`)."""
+    shape = _Shape(text.splitlines())
+    shape.feed(cmarkgfm.github_flavored_markdown_to_html(text, options=_OPTIONS))
+    shape.close()
+    problems = [("heading", _Block("heading", line, line)) for line in shape.nested]
+    categories: dict[str, list[int]] = {}
+    names = list(CATEGORIES.values())
+    current: str | None = None
+    for index, block in enumerate(shape.blocks):
+        if block.kind == "html":
+            problems.append(("html", block))
+        elif index == 0:
+            if block.kind != "h2":
+                problems.append(("heading" if block.kind in _HEADINGS else "split", block))
+        elif block.kind in _HEADINGS:
+            text_ = block.text.strip()
+            last = names.index(current) if current else -1
+            if block.kind != "h3" or text_ not in names or names.index(text_) <= last:
+                problems.append(("heading", block))
+            else:
+                current = text_
+                categories[current] = []
+        elif current is None:
+            pass  # the release's own text, before the first category
+        elif block.kind == "ul" and not categories[current]:
+            categories[current] = block.items
+        else:
+            problems.append(("split", block))
+    first = min(problems, key=lambda p: p[1].line) if problems else None
+    return _Layout(categories, first)
 
 
 SKIP_LABEL = "no changelog"
@@ -120,46 +242,100 @@ def _content_problem(text: str, pr: str | None) -> str | None:
         return "it's empty."
     lines = text.strip("\n").splitlines()
     lead = len(text) - len(text.lstrip("\n"))  # blank lines before the first, for line numbers
-    # Line by line, code blocks too: every reader of CHANGELOG.md (publish.yml's awk, the release
-    # gate) is line-based, so a heading inside a fence still ends the section (pre-QA r5 on #731).
-    heading = _heading_line(lines)
-    if heading:
-        at, shown = heading
-        at += lead  # the file's own line number
-        return (
-            f"line {at}, {shown[:60]!r}, reads as a heading; the notes add the category "
-            f"headings ({_HOW})."
-        )
+    for at, line in enumerate(lines, start=1 + lead):
+        if _LINE_HEADING.match(line):
+            return (
+                f"line {at}, {line[:60]!r}, reads as a heading; the notes add the category "
+                f"headings ({_HOW})."
+            )
     if _COMMENT in text:
         return "it has `<!--`, which would hide the rest of the notes (towncrier's marker too)."
-    if pr is None:
-        # A release's own text may hold a fenced block (an Upgrading example) at column 0, but
-        # an unclosed one would swallow the rest of the notes.
-        if sum(1 for line in lines if _FENCE.match(line)) % 2:
+    if pr is not None:
+        if SECURITY_MARKER in text:
             return (
-                "it opens a code fence (``` or ~~~) it doesn't close, which would swallow the "
-                "rest of the notes."
+                f"only a release's own text (+<name>.release.md) says {SECURITY_MARKER}: the "
+                f"servers' update check announces any release whose notes hold it ({_HOW})."
             )
+        if not lines[0].startswith("- "):
+            return "an entry starts with `- `, as it would under its heading in CHANGELOG.md."
+    problem = _render_problem(lines, lead, release=pr is None)
+    if problem:
+        return problem
+    if pr is not None:
+        number = re.search(r"\(#([0-9]+)", lines[0])
+        if number is None or number.group(1) != pr:
+            return f"its first (#N) isn't #{pr}, the PR number in its name."
+    return None
+
+
+def _more_than_one(shown: str) -> str:
+    return (
+        f"it holds more than one entry ({shown} starts another); give each its own file ({_HOW})."
+    )
+
+
+def _render_problem(lines: list[str], lead: int, *, release: bool) -> str | None:
+    """Why the fragment, rendered among its neighbors as a release assembles it, would change
+    them or show what the notes don't hold (QA r3 on #732), or None. An entry must stay one item
+    of its category's list, with the entries around it and the next category as they were; a
+    release's own text, before the categories, must leave them as they were. Neither may hold a
+    heading, at any depth, or an HTML block outside the entry."""
+    if release:
+        before = [_TITLE, ""]
+        after = ["", f"### {CATEGORIES['added']}", "", _NEXT]
+        expected = {CATEGORIES["added"]: 1}
+    else:
+        before = [_TITLE, "", f"### {CATEGORIES['added']}", "", _ABOVE]
+        after = [_BELOW, "", f"### {CATEGORIES['fixed']}", "", _NEXT]
+        expected = {CATEGORIES["added"]: 3, CATEGORIES["fixed"]: 1}
+    layout = _layout("\n".join([*before, *lines, *after]) + "\n")
+
+    def where(line: int) -> str | None:
+        """The fragment's own line at the notes' ``line``, for the message, or None."""
+        index = line - len(before)
+        if 0 <= index < len(lines):
+            return f"line {index + 1 + lead}, {lines[index][:60]!r},"
         return None
-    if SECURITY_MARKER in text:
-        return (
-            f"only a release's own text (+<name>.release.md) says {SECURITY_MARKER}: the "
-            f"servers' update check announces any release whose notes hold it ({_HOW})."
-        )
-    if not lines[0].startswith("- "):
-        return "an entry starts with `- `, as it would under its heading in CHANGELOG.md."
-    if any(re.match(r"[-*+] ", line) for line in lines[1:]):
-        return f"it holds more than one entry; give each its own file ({_HOW})."
-    for at, line in enumerate(lines[1:], start=2 + lead):
-        if _BLOCK_START.match(line.expandtabs(4)):
+
+    if layout.problem:
+        kind, block = layout.problem
+        # A block GitHub writes nothing for (a footnote definition) shows only as the next
+        # block's start: the line that did it is the first after the block before.
+        line = block.line if where(block.line) or kind != "split" else block.gap
+        shown = where(line)
+        if kind == "heading":
+            # Only a line of the fragment can be one; the neighbors' headings are the template's.
             return (
-                f"line {at}, {line[:60]!r}, starts a block outside the entry, which would split "
-                f"or swallow the notes after it: indent the entry's later lines 2 spaces or more "
-                f"({_HOW})."
+                f"{shown or 'a line'} reads as a heading on GitHub; the notes add the category "
+                f"headings ({_HOW})."
             )
-    number = re.search(r"\(#([0-9]+)", lines[0])
-    if number is None or number.group(1) != pr:
-        return f"its first (#N) isn't #{pr}, the PR number in its name."
+        if kind == "html":
+            # Indented into the entry, GitHub keeps one inside it; at a line's start, it ends the
+            # entry and turns the next PR's into raw text (QA r3 on #732).
+            return (
+                f"{shown or 'a line'} starts an HTML block outside the entry, which would show "
+                f"the entries after it as raw text: indent it 2 spaces or more, or write it in "
+                f"Markdown ({_HOW})."
+            )
+        if shown and _BULLET.match(lines[line - len(before)].expandtabs(4)):
+            # Another marker (`*`, `+`) starts a list of its own: to the author, a second entry.
+            return _more_than_one(shown)
+        return (
+            f"{shown or 'a line'} starts a block outside the entry, which would split or swallow "
+            f"the notes after it: indent the entry's later lines 2 spaces or more ({_HOW})."
+        )
+    if not release:
+        items = layout.categories.get(CATEGORIES["added"], [])
+        extra = [line for line in items[1:-1] if line > len(before)]
+        if len(items) > expected[CATEGORIES["added"]] and extra:
+            return _more_than_one(where(extra[0]) or "a line")
+    if {name: len(items) for name, items in layout.categories.items()} != expected:
+        # A block the fragment opens and never closes (a code fence, most likely) took in the
+        # notes after it: the entries below it and the next category never render.
+        return (
+            "it opens a block it doesn't close (a code fence, most likely), which would swallow "
+            "the rest of the notes."
+        )
     return None
 
 
@@ -358,6 +534,43 @@ def changelog_problems(root: Path) -> list[str]:
     return found
 
 
+def notes_problems(root: Path, draft: str) -> list[str]:
+    """Why the next release's notes, as `towncrier build --draft` writes them, wouldn't show
+    as the fragments say (QA r3 on #732): read as GitHub renders them, they hold the version's
+    heading, then only the category headings, each with one list of as many items as that
+    category has fragments, and no other heading, nor an HTML block outside the lists. Each
+    fragment is checked on its own too; this checks what the template makes of them together."""
+    found = re.search(r"^## ", draft, re.MULTILINE)
+    if found is None:
+        return ["towncrier's draft of the notes has no '## <version>' heading."]
+    notes = draft[found.start() :]
+    layout = _layout(notes)
+    problems: list[str] = []
+    if layout.problem:
+        kind, block = layout.problem
+        line = block.line
+        shown = notes.splitlines()[line][:60] if line < len(notes.splitlines()) else ""
+        what = {"heading": "a heading", "html": "an HTML block", "split": "a block"}[kind]
+        problems.append(
+            f"towncrier's draft of the notes has {what} where the layout doesn't take one, at "
+            f"line {line + 1} of the notes, {shown!r}: check the fragment it comes from."
+        )
+    counts: dict[str, int] = {}
+    directory = root / DIRECTORY
+    for path in directory.iterdir() if directory.is_dir() else []:
+        entry = _ENTRY.fullmatch(path.name)
+        if entry:
+            name = CATEGORIES[path.name.split(".")[1]]
+            counts[name] = counts.get(name, 0) + 1
+    rendered = {name: len(items) for name, items in layout.categories.items()}
+    if rendered != counts:
+        problems.append(
+            f"towncrier's draft of the notes renders {rendered or 'no entries'} where "
+            f"changelog.d/ holds {counts or 'no entries'} (entries per category)."
+        )
+    return problems
+
+
 def _annotation(message: str) -> str:
     escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     return f"::error::{escaped}"
@@ -370,7 +583,21 @@ def main(argv: list[str], root: Path = Path()) -> int:
     check.add_argument("--base", help="the PR's base commit: also require a fragment")
     check.add_argument("--pr", type=int, help="the PR's number (with --base)")
     check.add_argument("--labels", default="", help="the PR's labels, comma-separated")
+    notes = commands.add_parser("notes", help="check towncrier's draft of the next notes")
+    notes.add_argument("draft", type=Path, help="the file `towncrier build --draft` wrote")
     args = parser.parse_args(argv)
+    if args.command == "notes":
+        try:
+            draft = args.draft.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            print(_annotation(f"couldn't read {args.draft}: {type(error).__name__}"))
+            return 1
+        found = notes_problems(root, draft)
+        for message in found:
+            print(_annotation(message))
+        if not found:
+            print("The draft of the next release's notes renders as its fragments say.")
+        return 1 if found else 0
     found = fragment_problems(root) + changelog_problems(root)
     if args.base:
         if args.pr is None:

@@ -48,6 +48,10 @@ dev = [
     "types-PyYAML>=6.0",
     "types-regex>=2026.9.29",
     "respx>=0.22",
+    # scripts/changelog_fragments.py reads how a fragment renders with GitHub's own parser
+    # (cmark-gfm) (#732); CI's `changelog` job runs it with the same pins through `uv run --with`
+    # (tests/scripts checks they agree with uv.lock)
+    "cmarkgfm==2025.10.22",
     # tests/test_readme.py builds the wheel metadata with the build backend (#487)
     "hatchling>=1.27",
     "hatch-fancy-pypi-readme>=25.1",
@@ -111,6 +115,11 @@ exclude = [
     "scripts/vdsm_setup\\.py$",
     "tests/vdsm/",
 ]
+
+# cmarkgfm (scripts/changelog_fragments.py, #732) ships no type information.
+[[tool.mypy.overrides]]
+module = ["cmarkgfm", "cmarkgfm.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
