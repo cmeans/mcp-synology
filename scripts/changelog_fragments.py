@@ -83,9 +83,11 @@ def _is_underline(text: str) -> bool:
 
 # A link reference or footnote definition's label, anywhere in the text and across lines (a
 # candidate the parser then confirms, QA r4 on #732): `[label]:` or `[^label]:`.
-# A label holds no unescaped `[` (CommonMark), which also keeps this linear: allowing one made a
-# run of `[` quadratic (pre-QA r10 on #732); `\` escapes any character, a line break included.
-_DEFINITION = re.compile(r"\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:")
+# A label holds no unescaped `[` (CommonMark), and `\` escapes any character, a line break
+# included (pre-QA r10 on #732). A definition starts a line, after any indent, list markers or
+# `>`, so a candidate is tried once a line: tried at every `[`, a run of `\[` was quadratic
+# (QA r5 on #732).
+_DEFINITION = re.compile(r"(?m)^[ \t>*+0-9.)-]*\[(\^?)((?:[^\[\]\\]|\\[\s\S])+)\]:")
 # Where raw HTML starts, outside code spans (only for naming its line in a refusal).
 _RAW_TAG = re.compile(r"<[A-Za-z/!?]")
 # A fragment's size limit: an entry is a line or a short paragraph, a release's text a few
@@ -460,13 +462,18 @@ def _no_code(text: str) -> str:
     return re.sub(r"(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)", blank, fenced)
 
 
-def _probe_links(notes: list[str], references: list[str]) -> set[int]:
-    """Which of ``references``, in a paragraph after ``notes``, GitHub renders as links."""
-    probe = "\n".join([*notes, " ".join(references)]) + "\n"
+def _probe_links(notes: list[str], references: list[str]) -> set[tuple[int, str]]:
+    """Each of ``references`` that GitHub renders as a link after ``notes``, with where it goes.
+    Each is a paragraph of its own: in one, a backtick or a `<` in one label paired with
+    another's into a code span or a tag, and neither became a link (QA r5 on #732)."""
+    probe = "\n\n".join(["\n".join(notes), *references]) + "\n"
     rendered = cmarkgfm.github_flavored_markdown_to_html(probe, options=_OPTIONS)
-    paragraph = re.search(rf'<p data-sourcepos="{len(notes) + 1}:[^"]*">(.*?)</p>', rendered, re.S)
+    start = rendered.find(f'<p data-sourcepos="{len(notes) + 2}:')
+    tail = rendered[start:] if start >= 0 else ""
+    # The footnotes section's back-links would read as the last probe's links.
+    tail = tail.split('<section class="footnotes"', 1)[0]
     reader = _Probe()
-    reader.feed(paragraph[1] if paragraph else "")
+    reader.feed(tail)
     return reader.linked
 
 
@@ -476,11 +483,11 @@ class _Probe(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.marker = -1
-        self.linked: set[int] = set()
+        self.linked: set[tuple[int, str]] = set()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag == "a" and self.marker >= 0:
-            self.linked.add(self.marker)
+            self.linked.add((self.marker, dict(attrs).get("href") or ""))
 
     def handle_data(self, data: str) -> None:
         found = re.findall(r"QZ(\d+)ZQ", data)
@@ -503,13 +510,16 @@ def _definition_problem(
         return None
     references = []
     for number, found in enumerate(candidates):
-        label = " ".join(found[2].split())
+        # A label across lines carries each later line's indent and `>` (QA r5 on #732): the
+        # label GitHub matches is the text without them, its whitespace collapsed.
+        label = " ".join(re.sub(r"\n[ \t>]*", " ", found[2]).split())
         references.append(f"QZ{number}ZQ [{found[1]}{label}]")
-    linked = _probe_links([*before, *lines, *after, ""], references)
     # GitHub links some text by itself (an email, `www.`), defined or not (pre-QA r10 on #732):
-    # only what links with the fragment and not without it is the fragment's definition.
+    # the fragment's definition is a link that goes elsewhere with it than without it, so a
+    # definition whose label is an email still counts (QA r5).
+    linked = _probe_links([*before, *lines, *after, ""], references)
     linked -= _probe_links([*before, *after, ""], references)
-    for number in sorted(linked):
+    for number in sorted({marker for marker, _ in linked}):
         found = candidates[number]
         index = body.count("\n", 0, found.start())
         at = f"line {index + 1 + lead}, {lines[index][:60]!r},"
@@ -568,6 +578,17 @@ def branch_problem(root: Path, base: str, pr: int, labels: list[str]) -> str | N
             f"release's notes, and a `**Security release:**` line there is announced by every "
             f"running server "
             f"({_HOW}). Move it into the release PR."
+        )
+    if release_texts and _fragments_left(root):
+        # A release PR may add its text only to build it: left unbuilt, it opens the next
+        # release's notes, the label or not (QA r5 on #732).
+        left = _fragments_left(root)
+        return (
+            f"this release PR adds or changes a release's own text ({_named(release_texts)}) but "
+            f"leaves {len(left)} CHANGELOG fragment(s) unbuilt ({_named(left)}): run "
+            f"`towncrier build --version <version> --yes` (CLAUDE.md, release step 4), which "
+            f"assembles them into the version's section and deletes them, the {SKIP_LABEL!r} "
+            f"label or not."
         )
     if SKIP_LABEL in labels:
         return None
@@ -788,6 +809,12 @@ def _annotation(message: str) -> str:
 
 
 def main(argv: list[str], root: Path = Path()) -> int:
+    # A refusal quotes the fragment's own text: on a console that can't encode it (cp1252 on
+    # Windows, a pipe), print an escape rather than crash before printing (QA r5 on #732), as
+    # src/mcp_synology/cli/startup.py does.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(prog="changelog_fragments.py")
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("check", help="check the fragments (and a PR's, with --base)")

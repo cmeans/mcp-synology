@@ -326,6 +326,11 @@ def _annotation(message: str) -> str:
 
 
 def main(argv: list[str], root: Path = Path()) -> int:
+    # A problem can quote a file name or CHANGELOG text: on a console that can't encode it, print
+    # an escape rather than crash (QA r5 on #732, as changelog_fragments.py does).
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="backslashreplace")
     if len(argv) != 1:
         print("usage: check_release.py <tag>", file=sys.stderr)
         return 2

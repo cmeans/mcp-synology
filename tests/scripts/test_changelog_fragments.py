@@ -636,16 +636,20 @@ def test_only_a_release_pr_adds_a_releases_own_text(branch: Path, labels: list[s
     assert "only a release PR" in problem, problem
 
 
-def test_a_release_pr_may_add_its_own_text(branch: Path) -> None:
-    """Built in the same PR, it's gone; added before the build, a release PR may hold it."""
+@pytest.mark.parametrize("labels", [[], ["no changelog"]])
+def test_a_release_pr_may_not_leave_its_own_text_unbuilt(branch: Path, labels: list[str]) -> None:
+    """QA r5 on #732: with the label, a release PR's unbuilt `+x.release.md` passed, and its
+    security line would have opened the next release's notes."""
     (branch / "changelog.d" / "700.fixed.md").unlink()
-    (branch / "changelog.d" / "+x.release.md").write_text("Text.\n", encoding="utf-8")
+    (branch / "changelog.d" / "+x.release.md").write_text(
+        "**Security release:** x.\n", encoding="utf-8"
+    )
     _release(branch, "1.1.0")
     _commit(branch)
-    problem = script.branch_problem(branch, "main", 731, [])
-    # Past the release-text rule; it's then told the text is left unbuilt, as any fragment is.
+    problem = script.branch_problem(branch, "main", 731, labels)
     assert problem is not None and "only a release PR" not in problem, problem
-    assert "leaves 1 CHANGELOG fragment(s) (+x.release.md)" in problem, problem
+    assert "leaves 1 CHANGELOG fragment(s) unbuilt (+x.release.md)" in problem, problem
+    assert "towncrier build" in problem, problem
 
 
 def test_changing_a_releases_own_text_is_refused_too(branch: Path) -> None:
@@ -889,6 +893,63 @@ def test_the_same_text_in_two_categories_passes(tmp_path: Path) -> None:
         script.fragment_problems(_dir(tmp_path, {"900.added.md": entry, "900.fixed.md": entry}))
         == []
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # QA r5 on #732, each confirmed on GitHub: an email label links by itself in both
+        # renders; a label across quoted lines carries its `>`; two labels' backticks or `<`
+        # paired across one shared probe paragraph.
+        "  [a@b.example]: https://attacker.example\n",
+        "  > [foo\n  > bar]: https://evil.example\n",
+        "  [x`]: https://evil1.example\n\n  [y`]: https://evil2.example\n",
+        "  [q<a title=']: https://e1.example\n\n  [r'>]: https://e2.example\n",
+    ],
+)
+def test_definitions_the_shared_probe_missed_are_refused(tmp_path: Path, text: str) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": f"- **x** (#731): y\n\n{text}"})
+    )
+    assert len(found) == 1 and "line 3," in found[0], found
+    assert "defines a link reference" in found[0], found
+
+
+def test_a_definition_is_tried_once_a_line(tmp_path: Path) -> None:
+    """QA r5 on #732: tried at every `[`, a run of `\\[` near the size limit took 1 s."""
+    import time
+
+    started = time.monotonic()
+    script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "- **x** (#731): y\n  [" + "\\[" * 8_000 + "\n"})
+    )
+    assert time.monotonic() - started < 0.5, "quadratic again?"
+
+
+def test_a_definition_shaped_text_mid_line_passes(tmp_path: Path) -> None:
+    found = script.fragment_problems(
+        _dir(tmp_path, {"731.fixed.md": "- **X** (#731): use `[^a]:` syntax, or [b]: c\n"})
+    )
+    assert found == [], found
+
+
+@pytest.mark.parametrize("module", ["changelog_fragments", "check_release"])
+def test_a_console_that_cant_encode_a_refusal_gets_escapes(module: str, tmp_path: Path) -> None:
+    """QA r5 on #732: on a cp1252 console the refusal quoting `修正` raised UnicodeEncodeError
+    and never printed."""
+    root = _dir(tmp_path, {"731.fixed.md": "# 修正 → done\n"})
+    command = ["check"] if module == "changelog_fragments" else ["v9.9.9"]
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / f"{module}.py"), *command],
+        cwd=root,
+        capture_output=True,
+        env={**__import__("os").environ, "PYTHONIOENCODING": "cp1252"},
+        check=False,
+    )
+    assert b"Traceback" not in result.stderr, result.stderr
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    if module == "changelog_fragments":
+        assert b"\\u4fee\\u6b63" in result.stdout, result.stdout
 
 
 def test_an_entry_that_renders_empty_is_refused(tmp_path: Path) -> None:
