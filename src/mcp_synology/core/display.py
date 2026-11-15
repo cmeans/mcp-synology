@@ -480,15 +480,22 @@ def shown(path: str) -> str:
     return path
 
 
-# Where a sentence ends inside a path, by Unicode's rule (UAX #29, Sentence_Terminal: `.`,
-# `!`, `?` and 169 more): a terminal, any closing marks (`)`, a quote), then a space or the
-# path's end. A non-ASCII terminal counts anywhere: CJK full stops (`。`, `．`, `！`) end a
-# sentence with no space after them. ASCII `.` between letters (`v1.2`, `.hidden`) doesn't.
-# An ellipsis (`…`, U+2026; midline `⋯`, U+22EF) isn't a Sentence_Terminal in UAX #29, but a
-# reader takes `Wait… Not started: x` as two sentences, so it counts too (pre-QA r2 on #756).
+# Where a sentence ends inside a path, built on Unicode's sentence breaks (UAX #29;
+# Sentence_Terminal: `.`, `!`, `?` and 169 more). A terminal, any closing marks (`)`, a
+# quote), then a space or the path's end; marks and format characters after the terminal or
+# a closing mark are skipped, as rule SB5 skips them, so `Docs.<U+0301> x` counts (QA r1 on
+# #756). Every terminal but ASCII `.` counts anywhere: CJK full stops (`。`, `．`) end a
+# sentence with no space after them, and so does `!` or `?` (`q!Not started`; SB11). Four
+# ellipsis characters (`…` U+2026, `‥` U+2025, midline `⋯` U+22EF, vertical U+FE19) aren't
+# Sentence_Terminal, but a reader takes `Wait… Not started: x` as two sentences, so they count
+# like `.` (pre-QA r2, QA r1 on #756). It's a subset of UAX #29's breaks: `.` with no space
+# after it never counts, though SB11 breaks `x1.Restored`, since that would quote every
+# `IMG_2024.JPG`; a dot inside a name (`v1.2`, `.hidden`) doesn't end a sentence anyway.
+_SKIPPED = r"[\p{SB=Extend}\p{SB=Format}]*"
 _SENTENCE_END = regex.compile(
-    r"[\p{Sentence_Terminal}\u2026\u22ef]\p{SB=Close}*(?:[\p{SB=Sp}\p{SB=Sep}]|\Z)"
-    r"|(?![.!?])\p{Sentence_Terminal}"
+    rf"[\p{{Sentence_Terminal}}\u2025\u2026\u22ef\ufe19]{_SKIPPED}"
+    rf"(?:\p{{SB=Close}}{_SKIPPED})*(?:[\p{{SB=Sp}}\p{{SB=Sep}}]|\Z)"
+    r"|(?!\.)\p{Sentence_Terminal}"
 )
 
 
@@ -570,15 +577,15 @@ def _needs_escapes(part: str) -> bool:
 def shown_local(path: str | os.PathLike[str]) -> str:
     """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
     OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
-    what `shown` would quote, padding, a tab, a character that draws nothing, ``", "``,
-    a sentence's end; then
-    the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
-    `escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
-    FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
-    read like a quoted one (pre-QA r2 on #691). A path that starts or ends with a quote is
-    quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't normalized
-    (``Path`` would drop ``./`` and a trailing slash), so the caller's own path reads as they
-    sent it."""
+    padding, a tab or a character that draws nothing, or the whole path holds ``", "`` or a
+    sentence's end, or starts or ends with a quote, as `shown` checks those; then the whole path
+    is quoted, as `shown` quotes one (`plain_quoted` for ``", "``, a sentence's end or an edge
+    quote alone, else `escaped_repr`), so in any quoted path a backslash is an escape, as the
+    instructions' PATH FORMAT says. Not a part at a time: a part that itself starts and ends
+    with a quote would read like a quoted one (pre-QA r2 on #691). A path that starts or ends
+    with a quote is quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't
+    normalized (``Path`` would drop ``./`` and a trailing slash), so the caller's own path
+    reads as they sent it."""
     text = os.fspath(path)
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
     if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):

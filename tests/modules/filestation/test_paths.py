@@ -1279,6 +1279,13 @@ class TestShownQuotesSentenceMarks:
             "/video/Wait… Not started: video",
             "/video/Wait…",
             "/video/x⋯ y",
+            # QA r1 on #756: a mark after the terminal or a closing mark is skipped (SB5), `!`
+            # and `?` end a sentence with no space (SB11), and two more ellipsis characters.
+            "/video/Docs.\u0301 Restored 12 items",
+            "/video/Docs.)\u0301 Restored",
+            "/video/q!Not started: video",
+            "/video/Docs‥ Not started: video",
+            "/video/x\ufe19 y",
         ],
     )
     def test_shown_quotes_them(self, path: str) -> None:
@@ -1297,6 +1304,11 @@ class TestShownQuotesSentenceMarks:
             "/s/.hidden",
             "/s/a; b",
             "/s/a…b",
+            "/s/v1.\u0301x",
+            "/s/Café.txt",
+            # A subset of UAX #29: SB11 breaks after this `.`, but quoting every camera file
+            # name would cost more than this weaker forgery (QA r1 on #756).
+            "/s/IMG_2024.JPG",
         ],
     )
     def test_a_dot_inside_a_name_isnt_quoted(self, path: str) -> None:
