@@ -437,9 +437,9 @@ def shown(path: str) -> str:
     part has whitespace at its start or end, a character that doesn't print (a tab, a
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
-    ``", "`` and nothing else to show is quoted without escapes, unless it holds a
-    backslash (`plain_quoted`, #685, below); so is one that starts or ends with a quote,
-    which would read as a quoted name (#691).
+    ``", "`` or ``". "`` or ending in ``.`` (#727, #736), and nothing else to show, is quoted
+    without escapes, unless it holds a backslash (`plain_quoted`, #685, below); so is one that
+    starts or ends with a quote, which would read as a quoted name (#691).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``escaped_repr``, which also shows what ``!r`` leaves as is
@@ -469,7 +469,7 @@ def shown(path: str) -> str:
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
-    if ", " in path or edge_quote(path):
+    if _reads_as_structure(path):
         # Quoted only, with no escapes: nothing else needs showing, so what's inside the
         # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
         # #692: repr doubled a backslash, `C:\new` read as `C:\\new`). A name that starts or
@@ -477,6 +477,15 @@ def shown(path: str) -> str:
         # (pre-QA r4 on #691).
         return plain_quoted(path)
     return path
+
+
+def _reads_as_structure(path: str) -> bool:
+    """Whether ``path``, written as is inline, would read as part of its message: ``", "``
+    as two paths (#685); ``". "`` as the end of a sentence and the start of another, so a
+    folder ``Docs. Restored 12 items into Docs`` writes a line of its own (#727); a final
+    ``.``, which the sentence's own period follows, as another valid path (``/s/d..``, #736);
+    or a quote at either end, as a quoted name (#691)."""
+    return ", " in path or ". " in path or path.endswith(".") or edge_quote(path)
 
 
 def json_quoted(text: str) -> str:
@@ -548,7 +557,8 @@ def _needs_escapes(part: str) -> bool:
 def shown_local(path: str | os.PathLike[str]) -> str:
     """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
     OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
-    what `shown` would quote, padding, a tab, a character that draws nothing or ``", "``; then
+    what `shown` would quote, padding, a tab, a character that draws nothing, ``", "``,
+    ``". "`` or a final ``.``; then
     the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
     `escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
     FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
@@ -560,7 +570,7 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
     if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
         return escaped_repr(text)
-    if not text or ", " in text or edge_quote(text):
+    if not text or _reads_as_structure(text):
         return plain_quoted(text)
     return text
 

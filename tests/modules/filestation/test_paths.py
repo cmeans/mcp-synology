@@ -1253,6 +1253,65 @@ class TestPathListsQuoteACommaName:
         assert where_it_went("/s/b", {"/s/b": self.COMMA}, "/s/d") == f"/s/b (to {self.COMMA!r})"
 
 
+class TestShownQuotesSentenceMarks:
+    """#727: a name holding ". " wrote sentences into a reply (`Already created before this
+    failure: /home/t/Docs. Restored 12 items into Docs.`); #736: a path ending in "." took the
+    sentence's own period and read as another valid path (`/video/d..`). Both are quoted now, as
+    a name holding ", " is (#685)."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/home/t/Docs. Restored 12 items into Docs",
+            "/s/q. Not started: video",
+            "/video/d.",
+            "/video/x..",
+            "/s/a. b/c",
+        ],
+    )
+    def test_shown_quotes_them(self, path: str) -> None:
+        from mcp_synology.core.display import shown, shown_local
+
+        assert shown(path) == repr(path)
+        assert shown_local(path) == repr(path)
+
+    @pytest.mark.parametrize(
+        "path", ["/video/v1.2", "/s/report.pdf", "/s/a.b/c", "/s/Mr.Smith", "/s/.hidden"]
+    )
+    def test_a_dot_inside_a_name_isnt_quoted(self, path: str) -> None:
+        from mcp_synology.core.display import shown
+
+        assert shown(path) == path
+
+    @respx.mock
+    async def test_create_folders_list_cant_be_forged(self, mock_client: Any) -> None:
+        """#727's and #736's own examples, through create_folder's partial failure (#713)."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "create":
+                name = json.loads(params["name"])
+                if name == "c":
+                    return httpx.Response(200, json={"success": False, "error": {"code": 418}})
+                path = f"{params['folder_path']}/{name}"
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": path}]}}
+                )
+            return httpx.Response(200, json={"success": True, "data": {"files": []}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(
+                mock_client, paths=["/video/q. Not started: video", "/video/c", "/video/d."]
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "Already created before this failure: '/video/q. Not started: video'." in (
+            message
+        ), message
+        assert message.endswith("Not started: '/video/d.'."), message
+
+
 class TestOnePathPerLine:
     """#693 (the maintainer's option B): every list of two or more paths in a reply or error is
     one path a line under its heading, so no separator a name can hold (", ", " and ", "; ")
