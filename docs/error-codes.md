@@ -713,9 +713,11 @@ but did not map to a more specific code above.**
 
 This is the fall-through for `SYNO.FileStation.*` calls whose DSM error code
 isn't in the specific-handler list (400–421 range is mostly covered; codes
-like 402 "System too busy" and 900 "Unexpected server error" land here). The
+like 402 "System too busy" and 900 "Failed to delete" land here). The
 envelope includes the DSM numeric code in the message text, so you can look
-it up directly.
+it up directly. For 900, 1000, 1001, 1002, 1100 and 1200, DSM often names the
+real cause too, and the message adds it: `Failed to create the folder: File
+already exists (DSM error 414)` (#749).
 
 Fix:
 
@@ -730,9 +732,8 @@ Fix:
    `retryable=true` (#490). Code 401 ("Unknown error") isn't: check **Log Center**.
    A failure partway through a multi-path copy, move, restore or delete is never
    retryable once something ran: retry only what the message lists as not done.
-4. **Code 900 ("Unexpected server error"):** check **Log Center** in DSM for
-   matching events. This usually indicates an internal DSM fault and may
-   require a package restart or reboot.
+4. **Code 900 ("Failed to delete"):** if the message names a cause (`… (DSM error 408)`),
+   act on that code. Without one, check **Log Center** in DSM for matching events.
 5. **Code 600 ("Search folder access denied") from `search_files`:** before
    0.10.0, a search with no pattern, extension, size or date got this from
    DSM (with the default `filetype=all`), whatever the folder's permissions.
