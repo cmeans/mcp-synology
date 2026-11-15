@@ -3686,7 +3686,12 @@ class TestRestoreRecreatesMissingFolders:
         assert [c["folder_path"] + "/" + json.loads(c["name"]) for c in created] == [
             "/home/t/sub/deeper"
         ]
-        assert "Re-created /home/t/sub/deeper (no longer there)" in out
+        # Both are original folders, and both were missing (pre-QA r2 on #725: /home/t/sub,
+        # made by force_parent, wasn't named).
+        assert out.endswith(
+            "Re-created to restore into (they were no longer there):\n"
+            "  /home/t/sub\n  /home/t/sub/deeper"
+        ), out
 
     @staticmethod
     def _failing(missing: set[str], fail_on: str, failure: Any, started: list[str]) -> object:
@@ -3807,6 +3812,43 @@ class TestRestoreRecreatesMissingFolders:
             "Already re-created before this failure:\n  /home/p\n  /home/p/z\n  /home/p/z/deep\n"
             "Nothing was restored."
         ), message
+        assert started == [], started
+
+    @pytest.mark.parametrize(
+        ("failure", "fail_on", "expected"),
+        [
+            # A refusal after /home/t/a/b was made: force_parent made /home/t/a, an original
+            # folder of its own, with it.
+            (
+                418,
+                "/home/t/c/d",
+                "Already re-created before this failure:\n  /home/t/a\n  /home/t/a/b\n",
+            ),
+            # No answer for /home/t/a/b: /home/t/a may have been made with it.
+            (
+                httpx.ReadTimeout("timed out"),
+                "/home/t/a/b",
+                "May have been re-created:\n  /home/t/a\n  /home/t/a/b\n",
+            ),
+        ],
+    )
+    @respx.mock
+    async def test_an_original_folder_above_another_is_named(
+        self, mock_client: DsmClient, failure: Any, fail_on: str, expected: str
+    ) -> None:
+        """Pre-QA r2 on #725: an original folder that is also a deeper one's parent is made by
+        force_parent, not its own request, and neither list named it."""
+        started: list[str] = []
+        missing = {"/home/t/a", "/home/t/a/b", "/home/t/c", "/home/t/c/d"}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing(missing, fail_on, failure, started)
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                mock_client, share="home", paths=["t/a/x.txt", "t/a/b/y.txt", "t/c/d/z.txt"]
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert expected in message, message
         assert started == [], started
 
     @respx.mock

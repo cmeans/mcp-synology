@@ -2407,23 +2407,22 @@ async def _recreate_missing_folders(
             )
         except (httpx.TransportError, SynologyError) as e:
             # The folders made before this one stay on the NAS, empty: say which (#725).
-            made = _made_with_parents(created, parents, gone)
-            # Its own missing parents: force_parent may have made them before the failure.
-            above = [p for p in parents if p in gone and path.startswith(p + "/") and p not in made]
+            made = _made_with_parents(created, gone)
+            # Its own missing parents, original folders too: force_parent may have made them.
+            above = [p for p in sorted(gone) if path.startswith(p + "/") and p not in made]
             raise _recreate_failed(e, path, above, made) from None
         created.append(path)
-    return sorted(created), _made_with_parents(created, parents, gone)
+    made = _made_with_parents(created, gone)
+    # An original folder above a deeper one is made by force_parent, not its own request, and is
+    # restored into all the same (pre-QA r2 on #725: the note and `fresh` left it out).
+    return [path for path in made if path in wanted], made
 
 
-def _made_with_parents(created: list[str], parents: list[str], gone: set[str]) -> list[str]:
-    """The folders re-created, with the missing parents ``force_parent`` made along the way."""
+def _made_with_parents(created: list[str], gone: set[str]) -> list[str]:
+    """The folders re-created, with every missing folder above one that ``force_parent`` made
+    along the way: a parent, or an original folder above a deeper one (pre-QA r2 on #725)."""
     return sorted(
-        set(created)
-        | {
-            parent
-            for parent in parents
-            if parent in gone and any(path.startswith(parent + "/") for path in created)
-        }
+        set(created) | {p for p in gone if any(path.startswith(p + "/") for path in created)}
     )
 
 
