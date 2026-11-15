@@ -1286,13 +1286,18 @@ class TestShownQuotesSentenceMarks:
             "/video/q!Not started: video",
             "/video/Docs‥ Not started: video",
             "/video/x\ufe19 y",
+            # SB=Format is skipped too (pre-QA r3 on #756): U+070F is the one Format character
+            # `shown` doesn't already escape.
+            "/video/Docs.\u070f Restored 12 items",
         ],
     )
     def test_shown_quotes_them(self, path: str) -> None:
         from mcp_synology.core.display import shown, shown_local
 
-        assert shown(path) == repr(path)
-        assert shown_local(path) == repr(path)
+        # Quoted as written, no escapes (`plain_quoted`): `repr` would escape U+070F.
+        assert "'" not in path
+        assert shown(path) == f"'{path}'"
+        assert shown_local(path) == f"'{path}'"
 
     @pytest.mark.parametrize(
         "path",
@@ -1306,8 +1311,8 @@ class TestShownQuotesSentenceMarks:
             "/s/a…b",
             "/s/v1.\u0301x",
             "/s/Café.txt",
-            # A subset of UAX #29: SB11 breaks after this `.`, but quoting every camera file
-            # name would cost more than this weaker forgery (QA r1 on #756).
+            # Not UAX #29's exact breaks: SB11 breaks after this `.`, but quoting every camera
+            # file name would cost more than this weaker forgery (QA r1 on #756).
             "/s/IMG_2024.JPG",
         ],
     )

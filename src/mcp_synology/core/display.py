@@ -437,8 +437,9 @@ def shown(path: str) -> str:
     part has whitespace at its start or end, a character that doesn't print (a tab, a
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
-    ``", "`` or a sentence's end (``". "``, ``"! "``, a final ``.``, a CJK full stop: #727,
-    #736), and nothing else to show, is quoted
+    ``", "`` or a sentence's end (`_SENTENCE_END`: ``". "``, ``"! "``, a final ``.``, ``!``
+    or a CJK full stop anywhere, an ellipsis: #727, #736, #756), and nothing else to show, is
+    quoted
     without escapes, unless it holds a backslash (`plain_quoted`, #685, below); so is one that
     starts or ends with a quote, which would read as a quoted name (#691).
 
@@ -488,9 +489,11 @@ def shown(path: str) -> str:
 # sentence with no space after them, and so does `!` or `?` (`q!Not started`; SB11). Four
 # ellipsis characters (`…` U+2026, `‥` U+2025, midline `⋯` U+22EF, vertical U+FE19) aren't
 # Sentence_Terminal, but a reader takes `Wait… Not started: x` as two sentences, so they count
-# like `.` (pre-QA r2, QA r1 on #756). It's a subset of UAX #29's breaks: `.` with no space
-# after it never counts, though SB11 breaks `x1.Restored`, since that would quote every
-# `IMG_2024.JPG`; a dot inside a name (`v1.2`, `.hidden`) doesn't end a sentence anyway.
+# like `.` (pre-QA r2, QA r1 on #756). Built on UAX #29's classes, not its exact breaks: it
+# quotes `. ` before any letter (SB8 doesn't break `Docs. restored`, but a reader may) and the
+# ellipses, and never a `.` with no space after it (SB11 breaks `x1.Restored`, but the same
+# rule would quote every `IMG_2024.JPG`); a dot inside a name (`v1.2`, `.hidden`) doesn't
+# end a sentence anyway (pre-QA r3 on #756).
 _SKIPPED = r"[\p{SB=Extend}\p{SB=Format}]*"
 _SENTENCE_END = regex.compile(
     rf"[\p{{Sentence_Terminal}}\u2025\u2026\u22ef\ufe19]{_SKIPPED}"
