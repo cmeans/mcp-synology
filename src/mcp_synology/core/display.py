@@ -484,8 +484,10 @@ def shown(path: str) -> str:
 # `!`, `?` and 169 more): a terminal, any closing marks (`)`, a quote), then a space or the
 # path's end. A non-ASCII terminal counts anywhere: CJK full stops (`。`, `．`, `！`) end a
 # sentence with no space after them. ASCII `.` between letters (`v1.2`, `.hidden`) doesn't.
+# An ellipsis (`…`, U+2026; midline `⋯`, U+22EF) isn't a Sentence_Terminal in UAX #29, but a
+# reader takes `Wait… Not started: x` as two sentences, so it counts too (pre-QA r2 on #756).
 _SENTENCE_END = regex.compile(
-    r"\p{Sentence_Terminal}\p{SB=Close}*(?:[\p{SB=Sp}\p{SB=Sep}]|\Z)"
+    r"[\p{Sentence_Terminal}\u2026\u22ef]\p{SB=Close}*(?:[\p{SB=Sp}\p{SB=Sep}]|\Z)"
     r"|(?![.!?])\p{Sentence_Terminal}"
 )
 

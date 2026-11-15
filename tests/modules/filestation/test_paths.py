@@ -1275,6 +1275,10 @@ class TestShownQuotesSentenceMarks:
             "/video/d!",
             "/s/旅行。北京",  # a CJK full stop ends a sentence with no space after it
             "/s/a．b",
+            # An ellipsis isn't a Sentence_Terminal, but reads as one (pre-QA r2 on #756).
+            "/video/Wait… Not started: video",
+            "/video/Wait…",
+            "/video/x⋯ y",
         ],
     )
     def test_shown_quotes_them(self, path: str) -> None:
@@ -1285,12 +1289,21 @@ class TestShownQuotesSentenceMarks:
 
     @pytest.mark.parametrize(
         "path",
-        ["/video/v1.2", "/s/report.pdf", "/s/a.b/c", "/s/Mr.Smith", "/s/.hidden", "/s/a; b"],
+        [
+            "/video/v1.2",
+            "/s/report.pdf",
+            "/s/a.b/c",
+            "/s/Mr.Smith",
+            "/s/.hidden",
+            "/s/a; b",
+            "/s/a…b",
+        ],
     )
     def test_a_dot_inside_a_name_isnt_quoted(self, path: str) -> None:
-        from mcp_synology.core.display import shown
+        from mcp_synology.core.display import shown, shown_local
 
         assert shown(path) == path
+        assert shown_local(path) == path
 
     @respx.mock
     async def test_create_folders_list_cant_be_forged(self, mock_client: Any) -> None:
