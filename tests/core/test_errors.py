@@ -269,3 +269,5 @@ class TestFileStationCause:
         assert str(error_from_code(1101, "SYNO.FileStation.CreateFolder")) == (
             "Too many folders in the parent folder"
         )
+        # 900 read as a crash with a cause (pre-QA r1 and r2 on #749).
+        assert str(error_from_code(900, "SYNO.FileStation.Delete")) == "Failed to delete"

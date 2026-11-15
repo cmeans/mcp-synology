@@ -715,9 +715,11 @@ This is the fall-through for `SYNO.FileStation.*` calls whose DSM error code
 isn't in the specific-handler list (400–421 range is mostly covered; codes
 like 402 "System too busy" and 900 "Failed to delete" land here). The
 envelope includes the DSM numeric code in the message text, so you can look
-it up directly. For 900, 1000, 1001, 1002, 1100 and 1200, DSM often names the
-real cause too, and the message adds it: `Failed to create the folder: File
-already exists (DSM error 414)` (#749).
+it up directly. For 900, 1000, 1001, 1002, 1100 and 1200, when DSM's reply to the
+request names the real cause, the message adds it (#749): `Failed to create the
+folder: No such file or directory (DSM error 408)` for `create_folder` with
+`force_parent=false` under a missing parent. Captured for 1100 and 1200; a copy,
+move or delete task's own status isn't read for one yet (#750).
 
 Fix:
 

@@ -477,6 +477,7 @@ def filestation_cause(errors: object) -> int | None:
     items = errors if isinstance(errors, list) else [errors]
     for item in items:
         code = item.get("code") if isinstance(item, dict) else None
+        # A bool passes isinstance(int), but True and False are 1 and 0, no File Station code.
         if isinstance(code, int) and code in FILESTATION_ERROR_CODES and code not in WRAPPER_CODES:
             return code
     return None
@@ -507,6 +508,10 @@ def _with_detail(message: str, errors: object) -> str:
     return message + error_detail(errors)
 
 
+# File Station's busy codes: their advice is to wait and retry, so they're retryable (#490).
+_BUSY_CODES = (402, 421)
+
+
 def _filestation_error(code: int, message: str, suggestion: str) -> SynologyError:
     """The typed error for File Station code ``code``."""
     if code == 407:  # a refusal, like 105: never re-auth on it
@@ -519,7 +524,7 @@ def _filestation_error(code: int, message: str, suggestion: str) -> SynologyErro
         return DiskFullError(message, code=code, suggestion=suggestion)
     if code in (418, 419):
         return IllegalNameError(message, code=code, suggestion=suggestion)
-    if code in (402, 421):
+    if code in _BUSY_CODES:
         return BusyError(message, code=code, suggestion=suggestion)
     return FileStationError(message, code=code, suggestion=suggestion)
 
@@ -583,8 +588,9 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
             error = _filestation_error(code, message, suggestion)
             error.cause = cause
             # The cause's advice, so its flag too: a busy cause says to wait and retry
-            # (pre-QA r1 on #749: it was told that beside retryable false).
-            error.retryable = _filestation_error(cause, "", "").retryable
+            # (pre-QA r1 on #749: it was told that beside retryable false). Set on the
+            # instance, after `_filestation_error` built the wrapper's own type.
+            error.retryable = cause in _BUSY_CODES
             return error
         return _filestation_error(code, message, suggestion)
 
