@@ -3705,7 +3705,7 @@ class TestRestoreRecreatesMissingFolders:
                 if folder == fail_on:
                     if isinstance(failure, Exception):
                         raise failure
-                    if failure in (502, 403):
+                    if failure in (500, 502, 403):
                         return httpx.Response(failure, text="proxy says no")
                     if failure == "html":
                         # A reply that isn't DSM's: a proxy's login page (#282).
@@ -3733,6 +3733,8 @@ class TestRestoreRecreatesMissingFolders:
                 True,
             ),
             (502, "/home/t/b may have been re-created.", "unavailable", True),
+            # DSM's own 500 too, not only a proxy's (pre-QA r4 on #745: `>= 500` unpinned).
+            (500, "/home/t/b may have been re-created.", "unavailable", True),
             ("html", "/home/t/b may have been re-created.", None, None),
         ],
     )
@@ -3764,6 +3766,11 @@ class TestRestoreRecreatesMissingFolders:
             assert (error["code"], error["retryable"]) == (code, retryable), error
         lost = failure != 418
         assert ("Running it again is safe" in error["suggestion"]) is lost, error
+        if isinstance(failure, httpx.ReadTimeout):
+            # Once (pre-QA r4 on #745: the duplicate guard was unpinned).
+            assert error["suggestion"] == (
+                "Running it again is safe: it re-creates only the original folders still missing."
+            ), error
         assert ("Re-creating /home/t/b failed." in message) is not lost, message
         assert started == [], started  # nothing moved
 
@@ -3868,6 +3875,21 @@ class TestRestoreRecreatesMissingFolders:
         assert f"'{folder}' may have been re-created. Nothing was restored." in message, message
 
     @respx.mock
+    async def test_a_name_cant_forge_the_refusal_line(self, mock_client: DsmClient) -> None:
+        """Pre-QA r4 on #745: the refusal's `Re-creating … failed.` guard had no test."""
+        started: list[str] = []
+        folder = "/home/t/Decoy failed. Real"
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing({folder}, folder, 418, started)
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                mock_client, share="home", paths=["t/Decoy failed. Real/x.txt"]
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert f"Re-creating '{folder}' failed." in message, message
+
+    @respx.mock
     async def test_a_proxys_4xx_is_a_refusal(self, mock_client: DsmClient) -> None:
         """QA r1 on #745: a proxy's 403 was called unanswered ("may have been re-created",
         "running it again is safe") beside `retryable: false`; it never reached DSM."""
@@ -3907,6 +3929,21 @@ class TestRestoreRecreatesMissingFolders:
         assert "Already re-created before this failure:\n  /home/t/ab\n  /home/t/ab/x\n" in (
             message
         ), message
+
+    @respx.mock
+    async def test_a_prefix_sibling_isnt_in_the_may_have_list(self, mock_client: DsmClient) -> None:
+        """Pre-QA r4 on #745: `above` is matched by path parts too (`startswith(p)` survived)."""
+        started: list[str] = []
+        missing = {"/home/t/a", "/home/t/ab", "/home/t/ab/x"}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._failing(missing, "/home/t/ab/x", httpx.ReadTimeout("t"), started)
+        )
+        with pytest.raises(ToolError) as exc:
+            await restore_from_recycle_bin(
+                mock_client, share="home", paths=["t/a/1.txt", "t/ab/x/2.txt"]
+            )
+        message = json.loads(str(exc.value))["error"]["message"]
+        assert "May have been re-created:\n  /home/t/ab\n  /home/t/ab/x\n" in message, message
 
     @respx.mock
     async def test_the_first_folder_failing_names_none(self, mock_client: DsmClient) -> None:
