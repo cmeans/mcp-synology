@@ -224,8 +224,14 @@ class TestCreateFolderPartWay:
             "/video/x",
             False,
         )
-        assert "force_parent=true (the default) accepts it" in error["suggestion"], error
-        assert "overwrite" not in error["suggestion"], error
+        # With force_parent=true DSM accepts a folder, so only a file is there (vdsm).
+        assert error["suggestion"] == (
+            "A file is there, and a folder can't be created over it: pick another name."
+            if force_parent
+            else "If it's a folder, force_parent=true (the default) accepts it as it is; a "
+            "file there can't become a folder, so pick another name. list_files shows which "
+            "it is."
+        ), error
 
     @respx.mock
     async def test_a_taken_name_holding_the_marker_is_quoted(self, mock_client: DsmClient) -> None:

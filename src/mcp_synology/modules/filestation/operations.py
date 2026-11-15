@@ -307,10 +307,14 @@ async def _create_one(
                     retryable=False,
                     param="paths",
                     value=given,
+                    # With force_parent=true DSM accepts an existing folder, so only a file
+                    # gets here (vdsm 7.1-7.4.1; pre-QA r1 on #749: the advice hedged).
                     suggestion=(
-                        "If it's a folder, force_parent=true (the default) accepts it as it "
-                        "is; a file there can't become a folder, so pick another name. "
-                        "list_files shows which it is."
+                        "A file is there, and a folder can't be created over it: pick another name."
+                        if force_parent
+                        else "If it's a folder, force_parent=true (the default) accepts it "
+                        "as it is; a file there can't become a folder, so pick another "
+                        "name. list_files shows which it is."
                     ),
                 )
         synology_error_response("Create folder", e)

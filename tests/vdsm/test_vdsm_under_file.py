@@ -2,9 +2,10 @@
 
 DSM answers a path below a file (`…/f0.txt/x`) in ways that don't say so: getinfo's 401 entry
 ("can't be read"), DirSize's 0 B, a download's HTTP 404, a copy or move's 1002 into it,
-CreateFolder's 1100 ("Insufficient filesystem permissions"), Upload's 401 and Rename's 1200
-(vdsm 7.1). Every File Station tool names the file instead. #517 did list_files and
-search_files (`test_vdsm_search.py`). Run as the non-admin test user and as admin.
+CreateFolder's 1100 (then read as "Insufficient filesystem permissions", #749), Upload's 401
+and Rename's 1200 (vdsm 7.1). Every File Station tool names the file instead. #517 did
+list_files and search_files (`test_vdsm_search.py`). Run as the non-admin test user and as
+admin.
 
 Run with: uv run pytest -m vdsm -v tests/vdsm/test_vdsm_under_file.py
 """

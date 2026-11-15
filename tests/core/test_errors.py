@@ -198,7 +198,8 @@ class TestFileStationCause:
         )
         assert type(err) is FileStationError, type(err)
         assert (err.code, err.cause) == (wrapper, 414)
-        assert str(err).endswith(": File already exists (DSM error 414)"), str(err)
+        label = FILESTATION_ERROR_CODES[wrapper][0]
+        assert str(err) == f"{label}: File already exists (DSM error 414)", str(err)
         assert err.suggestion is not None and "overwrite=true" in err.suggestion
 
     @pytest.mark.parametrize(
@@ -220,6 +221,19 @@ class TestFileStationCause:
         err = error_from_code(1100, "SYNO.FileStation.CreateFolder", errors)
         assert err.cause is None
         assert str(err) == "Failed to create the folder"
+
+    @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
+    @pytest.mark.parametrize(
+        "cause",
+        sorted(c for c in FILESTATION_ERROR_CODES if c < 900),
+    )
+    def test_the_causes_advice_and_flag_agree(self, wrapper: int, cause: int) -> None:
+        """Pre-QA r1 on #749: a busy cause's "wait and retry" came beside the wrapper's
+        retryable false."""
+        error = error_from_code(wrapper, "SYNO.FileStation.CopyMove", [{"code": cause}])
+        assert error.suggestion is not None
+        says_retry = re.search(r"(?:^|\. )(?:wait and )?retry\b", error.suggestion, re.I)
+        assert bool(says_retry) is error.retryable, (wrapper, cause, error.suggestion)
 
     def test_the_first_known_cause_counts(self) -> None:
         err = error_from_code(

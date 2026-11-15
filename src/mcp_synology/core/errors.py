@@ -420,7 +420,9 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "The user may not have permission to search this folder. "
         "Try searching a specific share instead of the root path.",
     ),
-    900: ("Unexpected server error", "Check DSM logs for details."),
+    # Synology's guide: "Failed to delete file(s)/folder(s)"; with a cause from `errors`
+    # (#749) it read as a crash ("Unexpected server error: No such file or directory").
+    900: ("Failed to delete", "Check DSM logs for details."),
     1000: (
         "Failed to copy files",
         "Check source paths exist and user has read permission.",
@@ -580,6 +582,9 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
             message = f"{message}: {inner} (DSM error {cause})"
             error = _filestation_error(code, message, suggestion)
             error.cause = cause
+            # The cause's advice, so its flag too: a busy cause says to wait and retry
+            # (pre-QA r1 on #749: it was told that beside retryable false).
+            error.retryable = _filestation_error(cause, "", "").retryable
             return error
         return _filestation_error(code, message, suggestion)
 
