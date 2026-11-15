@@ -2405,12 +2405,91 @@ async def _recreate_missing_folders(
                     "force_parent": "true",
                 },
             )
-        except SynologyError as e:
-            synology_error_response("Restore files", e)
+        except (httpx.TransportError, SynologyError) as e:
+            # The folders made before this one stay on the NAS, empty: say which (#725).
+            made = _made_with_parents(created, gone)
+            # Its own missing parents, original folders too: force_parent may have made them.
+            above = [p for p in sorted(gone) if path.startswith(p + "/") and p not in made]
+            raise _recreate_failed(e, path, above, made) from None
         created.append(path)
-    made = set(created) | {
-        parent
-        for parent in parents
-        if parent in gone and any(path.startswith(parent + "/") for path in created)
-    }
-    return sorted(created), sorted(made)
+    made = _made_with_parents(created, gone)
+    # An original folder above a deeper one is made by force_parent, not its own request, and is
+    # restored into all the same (pre-QA r2 on #725: the note and `fresh` left it out).
+    return [path for path in made if path in wanted], made
+
+
+def _made_with_parents(created: list[str], gone: set[str]) -> list[str]:
+    """The folders re-created, with every missing folder above one that ``force_parent`` made
+    along the way: a parent, or an original folder above a deeper one (pre-QA r2 on #725)."""
+    return sorted(
+        set(created) | {p for p in gone if any(path.startswith(p + "/") for path in created)}
+    )
+
+
+def _recreate_failed(
+    e: httpx.TransportError | SynologyError, path: str, above: list[str], made: list[str]
+) -> ToolError:
+    """The error for a restore whose re-creation of the original folder ``path`` failed (#725):
+    the cause, whether ``path`` and its missing parents ``above`` may exist now (a request DSM
+    didn't answer may have made them; one that never connected sent nothing, #222), the folders
+    re-created before it, which stay, and that nothing was restored. A retry is safe: it checks
+    the folders again and re-creates only what's still missing, so that's the advice, not a
+    check first (pre-QA r1 on #725)."""
+    # Sent with no DSM answer: the folder may exist now. A connection never made sent nothing,
+    # and a 4xx status is a refusal before DSM acted (a proxy's 403; QA r1 on #745: it was
+    # called both unanswered and not retryable); a 5xx is the stall a proxy reports (#282).
+    lost = (
+        isinstance(e, (httpx.TransportError, DsmReplyError))
+        or (isinstance(e, DsmHttpError) and e.status >= 500)
+    ) and not (isinstance(e, httpx.TransportError) and never_sent(e))
+    try:
+        if isinstance(e, httpx.TransportError):
+            connected = lost
+            error_response(
+                ErrorCode.TIMEOUT
+                if isinstance(e, httpx.TimeoutException)
+                else ErrorCode.UNAVAILABLE,
+                (
+                    f"Restore files failed: DSM didn't answer while re-creating the original "
+                    f"folder {shown_beside(path, ' (')} ({describe_transport_error(e)})"
+                    if connected
+                    else f"Restore files failed: couldn't connect to DSM to re-create the "
+                    f"original folder {shown_beside(path, ' (')} ({describe_transport_error(e)})"
+                ),
+                retryable=True,
+                suggestion=(
+                    _RERUN_IS_SAFE
+                    if connected
+                    else "Check that the NAS is reachable, then try again."
+                ),
+            )
+        synology_error_response("Restore files", e)
+    except ToolError as error:
+        body = json.loads(str(error))
+    details = body["error"]
+    message = sentence(str(details["message"]))
+    if lost:
+        maybe = sorted([*above, path])
+        message = then(
+            message,
+            # Guarded like the refusal's marker (QA r1 on #745: a folder named
+            # `Decoy may have been re-created. Real` read as two).
+            f"{shown_beside(path, ' may have been re-created')} may have been re-created."
+            if len(maybe) == 1
+            else path_list("May have been re-created", [shown(p) for p in maybe]),
+        )
+    elif not isinstance(e, httpx.TransportError):
+        # DSM's refusal names no folder, nor does a proxy's 4xx. The path isn't last in the
+        # sentence: a name ending in `.` would read as another path before its period (#736).
+        message = then(message, f"Re-creating {shown_beside(path, ' failed')} failed.")
+    if made:
+        message = then(
+            message, path_list("Already re-created before this failure", [shown(p) for p in made])
+        )
+    details["message"] = then(message, "Nothing was restored.")
+    if lost and _RERUN_IS_SAFE not in str(details.get("suggestion") or ""):
+        _add_advice(details, _RERUN_IS_SAFE)
+    return rewrapped_error(body)
+
+
+_RERUN_IS_SAFE = "Running it again is safe: it re-creates only the original folders still missing."
