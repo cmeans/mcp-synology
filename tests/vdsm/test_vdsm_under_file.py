@@ -291,8 +291,8 @@ async def test_restore_to_original_folders_under_a_file(nas_client: Any, tmp_pat
             f"NAS: /home/{top}/d is a file. Nothing was restored."
         )
         if error["message"] != expected:
-            # #741: failed once on DSM 7.2.2 (a 408 for the bin item right after the delete) and
-            # didn't reproduce in about 175 runs; say what the bin held then.
+            # #741: failed once on DSM 7.2.2 (a 408 for the bin item right after the delete),
+            # and local repeats didn't reproduce it; say what the bin held then.
             refused = time.monotonic() - deleted_at
             state = await _bin_state(client, top, deleted_at)
             pytest.fail(
