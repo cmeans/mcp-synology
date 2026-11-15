@@ -1663,8 +1663,9 @@ def create_server(config: AppConfig) -> MCPServer:
         "host": conn.host if conn else "unknown",
         "port": str(conn.port) if conn else "5000",
         # As LOCAL PATHS below writes its folders (`shown_local`, #697): quoted when a part
-        # holds a line break (which could forge a line, pre-QA r4 on #541), padding, `, ` or a
-        # character that draws nothing; a joiner Unicode uses stays as written.
+        # holds a line break (which could forge a line, pre-QA r4 on #541), padding or a
+        # character that draws nothing, or the path holds `, `, a sentence's end (#727, #736,
+        # #756) or a quote at an end; a joiner Unicode uses stays as written.
         "home_dir": shown_local(Path.home()),
         "platform": _platform_label(),
     }

@@ -567,7 +567,8 @@ class TestListFiles:
             side_effect=self._folder(["#recycle", "a.txt", "b.txt"])
         )
         result = await list_files(mock_client, path="/video/.", limit=1, hide_recycle=True)
-        assert "Contents of /video/. (2 items)" in result
+        # A path ending in "." is quoted (#736).
+        assert "Contents of '/video/.' (2 items)" in result
         assert result.endswith("Use offset=1 to see more.")
 
     @respx.mock

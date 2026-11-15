@@ -1253,6 +1253,104 @@ class TestPathListsQuoteACommaName:
         assert where_it_went("/s/b", {"/s/b": self.COMMA}, "/s/d") == f"/s/b (to {self.COMMA!r})"
 
 
+class TestShownQuotesSentenceMarks:
+    """#727: a name holding ". " wrote sentences into a reply (`Already created before this
+    failure: /home/t/Docs. Restored 12 items into Docs.`); #736: a path ending in "." took the
+    sentence's own period and read as another valid path (`/video/d..`). Both are quoted now, as
+    a name holding ", " is (#685)."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/home/t/Docs. Restored 12 items into Docs",
+            "/s/q. Not started: video",
+            "/video/d.",
+            "/video/x..",
+            "/s/a. b/c",
+            # Every sentence end Unicode defines (UAX #29; pre-QA r1 on #727's PR).
+            "/video/q! Not started: video",
+            "/video/q? x",
+            "/video/q.) x",
+            '/video/q." x',
+            "/video/d!",
+            "/s/旅行。北京",  # a CJK full stop ends a sentence with no space after it
+            "/s/a．b",
+            # An ellipsis isn't a Sentence_Terminal, but reads as one (pre-QA r2 on #756).
+            "/video/Wait… Not started: video",
+            "/video/Wait…",
+            "/video/x⋯ y",
+            # QA r1 on #756: a mark after the terminal or a closing mark is skipped (SB5), `!`
+            # and `?` end a sentence with no space (SB11), and two more ellipsis characters.
+            "/video/Docs.\u0301 Restored 12 items",
+            "/video/Docs.)\u0301 Restored",
+            "/video/q!Not started: video",
+            "/video/Docs‥ Not started: video",
+            "/video/x\ufe19 y",
+            # SB=Format is skipped too (pre-QA r3 on #756): U+070F is the one Format character
+            # `shown` doesn't already escape.
+            "/video/Docs.\u070f Restored 12 items",
+        ],
+    )
+    def test_shown_quotes_them(self, path: str) -> None:
+        from mcp_synology.core.display import shown, shown_local
+
+        # Quoted as written, no escapes (`plain_quoted`): `repr` would escape U+070F.
+        assert "'" not in path
+        assert shown(path) == f"'{path}'"
+        assert shown_local(path) == f"'{path}'"
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/video/v1.2",
+            "/s/report.pdf",
+            "/s/a.b/c",
+            "/s/Mr.Smith",
+            "/s/.hidden",
+            "/s/a; b",
+            "/s/a…b",
+            "/s/v1.\u0301x",
+            "/s/Café.txt",
+            # Not UAX #29's exact breaks: SB11 breaks after this `.`, but quoting every camera
+            # file name would cost more than this weaker forgery (QA r1 on #756).
+            "/s/IMG_2024.JPG",
+        ],
+    )
+    def test_a_dot_inside_a_name_isnt_quoted(self, path: str) -> None:
+        from mcp_synology.core.display import shown, shown_local
+
+        assert shown(path) == path
+        assert shown_local(path) == path
+
+    @respx.mock
+    async def test_create_folders_list_cant_be_forged(self, mock_client: Any) -> None:
+        """#727's and #736's own examples, through create_folder's partial failure (#713)."""
+        from mcp_synology.modules.filestation.operations import create_folder
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            params = dict(request.url.params)
+            if params.get("method") == "create":
+                name = json.loads(params["name"])
+                if name == "c":
+                    return httpx.Response(200, json={"success": False, "error": {"code": 418}})
+                path = f"{params['folder_path']}/{name}"
+                return httpx.Response(
+                    200, json={"success": True, "data": {"folders": [{"path": path}]}}
+                )
+            return httpx.Response(200, json={"success": True, "data": {"files": []}})
+
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=respond)
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(
+                mock_client, paths=["/video/q. Not started: video", "/video/c", "/video/d."]
+            )
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert "Already created before this failure: '/video/q. Not started: video'." in (
+            message
+        ), message
+        assert message.endswith("Not started: '/video/d.'."), message
+
+
 class TestOnePathPerLine:
     """#693 (the maintainer's option B): every list of two or more paths in a reply or error is
     one path a line under its heading, so no separator a name can hold (", ", " and ", "; ")

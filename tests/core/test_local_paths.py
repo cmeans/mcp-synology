@@ -793,4 +793,7 @@ def test_shown_local_reads_windows_separators(monkeypatch: pytest.MonkeyPatch) -
     assert shown_local("C:\\Users\\Jo Smith\\Downloads") == "C:\\Users\\Jo Smith\\Downloads"
     assert shown_local("C:/Users/jo/ x") == "'C:/Users/jo/ x'"  # padding after "/"
     assert shown_local("C:\\Users\\jo\\a, b") == repr("C:\\Users\\jo\\a, b")
+    # A sentence's end is quoted the same way (#756): a quoted path's backslashes are escapes.
+    assert shown_local("C:\\Users\\J. Smith") == repr("C:\\Users\\J. Smith")
+    assert shown_local("C:\\Users\\me\\v1.2\\a.pdf") == "C:\\Users\\me\\v1.2\\a.pdf"
     assert shown_local("C:\\Users\\jo\\tab\tx") == repr("C:\\Users\\jo\\tab\tx")

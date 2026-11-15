@@ -437,9 +437,11 @@ def shown(path: str) -> str:
     part has whitespace at its start or end, a character that doesn't print (a tab, a
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
-    ``", "`` and nothing else to show is quoted without escapes, unless it holds a
-    backslash (`plain_quoted`, #685, below); so is one that starts or ends with a quote,
-    which would read as a quoted name (#691).
+    ``", "`` or a sentence's end (`_SENTENCE_END`: ``". "``, ``"! "``, a final ``.``, ``!``
+    or a CJK full stop anywhere, an ellipsis: #727, #736, #756), and nothing else to show, is
+    quoted
+    without escapes, unless it holds a backslash (`plain_quoted`, #685, below); so is one that
+    starts or ends with a quote, which would read as a quoted name (#691).
 
     The rule (#510): a refusal of an argument as given quotes it with ``!r`` (the caller's
     own text, shown exactly), or ``escaped_repr``, which also shows what ``!r`` leaves as is
@@ -447,8 +449,8 @@ def shown(path: str) -> str:
     path on this machine, refused or not, goes through `shown_local` (#691: repr doubles each
     Windows backslash); an
     error or list that names a path the server checked or got
-    from DSM uses ``shown`` (plain unless something would be invisible or the path holds
-    ``", "``), and so does a reply
+    from DSM uses ``shown`` (plain unless something would be invisible or the path would read
+    as its line's structure: ``", "``, a sentence's end, a quote at an end), and so does a reply
     naming what a call acted on, successful or not: a delete's, copy's, move's or restore's
     summary and its skipped list (#519), a rename's, upload's, download's or create_folder's
     reply and get_dir_size's title (#688), since those are the paths a model will act on next.
@@ -469,7 +471,7 @@ def shown(path: str) -> str:
     # Marks, joiners and variation selectors where Unicode uses them show as written
     # (`नमस्ते`, NFD `Café`, 👨<ZWJ>👩<ZWJ>👧, ❤<VS16>); anywhere else they're quoted
     # (`rep<ZWJ>ort.pdf`).
-    if ", " in path or edge_quote(path):
+    if _reads_as_structure(path):
         # Quoted only, with no escapes: nothing else needs showing, so what's inside the
         # quotes is the path exactly, as the server instructions tell a model (pre-QA r2 on
         # #692: repr doubled a backslash, `C:\new` read as `C:\\new`). A name that starts or
@@ -477,6 +479,36 @@ def shown(path: str) -> str:
         # (pre-QA r4 on #691).
         return plain_quoted(path)
     return path
+
+
+# Where a sentence ends inside a path, built on Unicode's sentence breaks (UAX #29;
+# Sentence_Terminal: `.`, `!`, `?` and 169 more). A terminal, any closing marks (`)`, a
+# quote), then a space or the path's end; marks and format characters after the terminal or
+# a closing mark are skipped, as rule SB5 skips them, so `Docs.<U+0301> x` counts (QA r1 on
+# #756). Every terminal but ASCII `.` counts anywhere: CJK full stops (`。`, `．`) end a
+# sentence with no space after them, and so does `!` or `?` (`q!Not started`; SB11). Four
+# ellipsis characters (`…` U+2026, `‥` U+2025, midline `⋯` U+22EF, vertical U+FE19) aren't
+# Sentence_Terminal, but a reader takes `Wait… Not started: x` as two sentences, so they count
+# like `.` (pre-QA r2, QA r1 on #756). Built on UAX #29's classes, not its exact breaks: it
+# quotes `. ` before any letter (SB8 doesn't break `Docs. restored`, but a reader may) and the
+# ellipses, and never a `.` with no space after it (SB11 breaks `x1.Restored`, but the same
+# rule would quote every `IMG_2024.JPG`); a dot inside a name (`v1.2`, `.hidden`) doesn't
+# end a sentence anyway (pre-QA r3 on #756).
+_SKIPPED = r"[\p{SB=Extend}\p{SB=Format}]*"
+_SENTENCE_END = regex.compile(
+    rf"[\p{{Sentence_Terminal}}\u2025\u2026\u22ef\ufe19]{_SKIPPED}"
+    rf"(?:\p{{SB=Close}}{_SKIPPED})*(?:[\p{{SB=Sp}}\p{{SB=Sep}}]|\Z)"
+    r"|(?!\.)\p{Sentence_Terminal}"
+)
+
+
+def _reads_as_structure(path: str) -> bool:
+    """Whether ``path``, written as is inline, would read as part of its message: ``", "``
+    as two paths (#685); a sentence's end, so a folder ``Docs. Restored 12 items into Docs``
+    or ``q! Not started: video`` writes a sentence of its own (#727), and a final ``.`` takes
+    the sentence's own period after it as another valid path (``/s/d..``, #736); or a quote at
+    either end, as a quoted name (#691)."""
+    return ", " in path or _SENTENCE_END.search(path) is not None or edge_quote(path)
 
 
 def json_quoted(text: str) -> str:
@@ -548,19 +580,20 @@ def _needs_escapes(part: str) -> bool:
 def shown_local(path: str | os.PathLike[str]) -> str:
     """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
     OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
-    what `shown` would quote, padding, a tab, a character that draws nothing or ``", "``; then
-    the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
-    `escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
-    FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
-    read like a quoted one (pre-QA r2 on #691). A path that starts or ends with a quote is
-    quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't normalized
-    (``Path`` would drop ``./`` and a trailing slash), so the caller's own path reads as they
-    sent it."""
+    padding, a tab or a character that draws nothing, or the whole path holds ``", "`` or a
+    sentence's end, or starts or ends with a quote, as `shown` checks those; then the whole path
+    is quoted, as `shown` quotes one (`plain_quoted` for ``", "``, a sentence's end or an edge
+    quote alone, else `escaped_repr`), so in any quoted path a backslash is an escape, as the
+    instructions' PATH FORMAT says. Not a part at a time: a part that itself starts and ends
+    with a quote would read like a quoted one (pre-QA r2 on #691). A path that starts or ends
+    with a quote is quoted too, so it can't read as a quoted path (pre-QA r3). The text isn't
+    normalized (``Path`` would drop ``./`` and a trailing slash), so the caller's own path
+    reads as they sent it."""
     text = os.fspath(path)
     seps = "".join(re.escape(s) for s in (os.sep, os.altsep) if s)
     if any(_needs_escapes(part) for part in re.split(f"[{seps}]", text) if part):
         return escaped_repr(text)
-    if not text or ", " in text or edge_quote(text):
+    if not text or _reads_as_structure(text):
         return plain_quoted(text)
     return text
 

@@ -4404,14 +4404,15 @@ class TestDeleteFailurePartway:
             # The task's own error, on a path ending in a dot (pre-QA on #480).
             (
                 {"finished": True, "error": {"code": 407}, "path": "/video/v1."},
-                # The path's own dot, then the sentence's period.
-                "DSM error code 407 on path: /video/v1.. Already deleted before this failure: "
+                # A path ending in a dot is quoted, so the sentence's period after it can't
+                # read as part of it (#736: it read as /video/v1..).
+                "DSM error code 407 on path: '/video/v1.'. Already deleted before this failure: "
                 "/video/a. Not started: /video/c.",
             ),
             # Per-item errors: listed once, never twice (pre-QA on #480).
             (
                 {"finished": True, "errors": [{"code": 900, "path": "/video/v1."}]},
-                "/video/v1. (DSM error 900). Already deleted before this failure: /video/a. "
+                "'/video/v1.' (DSM error 900). Already deleted before this failure: /video/a. "
                 "Not started: /video/c.",
             ),
         ],
@@ -4654,9 +4655,10 @@ class TestDeleteFailurePartway:
         out = _with_progress_so_far(
             error, "/video/x..", ["/video/notes..."], ["/video/v1.", "/video/b"]
         )
+        # Each is quoted, so no sentence period reads as part of one (#736).
         assert json.loads(str(out))["error"]["message"] == (
-            "Failed. Failed on: /video/x... Already deleted before this failure: "
-            "/video/notes....\nNot started:\n  /video/v1.\n  /video/b"
+            "Failed. Failed on: '/video/x..'. Already deleted before this failure: "
+            "'/video/notes...'.\nNot started:\n  '/video/v1.'\n  /video/b"
         )
 
     def test_an_error_that_isnt_the_envelope_is_kept(self) -> None:
@@ -8343,4 +8345,5 @@ class TestSourcesDsmWontShow:
             "replaced what was already there: '/w/src/a, b'. A file replaced this way may not "
             "be in the recycle bin. Not started: "
         ) in message, message
-        assert message.endswith("Not started: /w/src/b. Not started: c."), message
+        # The name holding ". Not started: " is quoted too, so it can't write that line (#727).
+        assert message.endswith("Not started: '/w/src/b. Not started: c'."), message
