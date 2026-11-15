@@ -42,7 +42,15 @@ async def test_a_taken_name_is_already_exists(nas_client: Any, tmp_path: Path) -
         # An existing folder with force_parent=false.
         error = await _error(create_folder(client, paths=[f"{top}/d"], force_parent=False))
         assert error["code"] == "already_exists", error
-        assert error["message"] == f"Create folder failed: {top}/d already exists.", error
+        assert error["message"] == (
+            f"Create folder failed (DSM error 1100): {top}/d already exists."
+        ), error
+        # A missing parent with force_parent=false: 1100 with 408 inside (QA r1 on #751).
+        error = await _error(create_folder(client, paths=[f"{top}/no/x"], force_parent=False))
+        assert error["code"] == "not_found", error
+        assert error["message"] == (
+            f"Create folder failed (DSM error 1100): the parent folder {top}/no doesn't exist."
+        ), error
         # With force_parent=true (the default) an existing folder isn't an error.
         assert f"{top}/d" in await create_folder(client, paths=[f"{top}/d"])
         # A file at the path, either way.

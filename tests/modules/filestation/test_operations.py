@@ -218,7 +218,9 @@ class TestCreateFolderPartWay:
             await create_folder(mock_client, paths=["/video/x"], force_parent=force_parent)
         error = json.loads(str(exc_info.value))["error"]
         assert error["code"] == "already_exists", error
-        assert error["message"] == "Create folder failed: /video/x already exists.", error
+        assert error["message"] == (
+            "Create folder failed (DSM error 1100): /video/x already exists."
+        ), error
         assert (error["param"], error["value"], error["retryable"]) == (
             "paths",
             "/video/x",
@@ -228,9 +230,8 @@ class TestCreateFolderPartWay:
         assert error["suggestion"] == (
             "A file is there, and a folder can't be created over it: pick another name."
             if force_parent
-            else "If it's a folder, force_parent=true (the default) accepts it as it is; a "
-            "file there can't become a folder, so pick another name. list_files shows which "
-            "it is."
+            else "If it's a folder, it's already there: leave it out of the call. A file "
+            "there can't become a folder, so pick another name. list_files shows which it is."
         ), error
 
     @respx.mock
@@ -241,7 +242,40 @@ class TestCreateFolderPartWay:
         with pytest.raises(ToolError) as exc_info:
             await create_folder(mock_client, paths=[f"/video/{name}"], force_parent=False)
         message = json.loads(str(exc_info.value))["error"]["message"]
-        assert message == f"Create folder failed: '/video/{name}' already exists.", message
+        assert message == (
+            f"Create folder failed (DSM error 1100): '/video/{name}' already exists."
+        ), message
+
+    @pytest.mark.parametrize("force_parent", [False, True])
+    @respx.mock
+    async def test_a_missing_parent_is_named(
+        self, mock_client: DsmClient, force_parent: bool
+    ) -> None:
+        """QA r1 on #751: 1100 with 408 inside (a missing parent, force_parent=false; vdsm
+        7.2.2) got 408's own advice, which sent the model searching for a path that was right.
+        With force_parent=true DSM creates the parent, so a 408 there keeps DSM's text."""
+        missing = {"code": 1100, "errors": [{"code": 408, "path": "/video/p"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"x": missing}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/p/x"], force_parent=force_parent)
+        error = json.loads(str(exc_info.value))["error"]
+        if force_parent:
+            assert error["code"] == "filestation_error", error
+            assert error["message"].endswith("No such file or directory (DSM error 408)"), error
+            return
+        assert error["code"] == "not_found", error
+        assert error["message"] == (
+            "Create folder failed (DSM error 1100): the parent folder /video/p doesn't exist."
+        ), error
+        assert error["suggestion"] == (
+            "Create the parent folder first, or pass force_parent=true to create missing "
+            "parent folders too."
+        ), error
+        assert (error["param"], error["value"], error["retryable"]) == (
+            "paths",
+            "/video/p/x",
+            False,
+        )
 
     @respx.mock
     async def test_1100_without_a_cause_keeps_dsms_answer(self, mock_client: DsmClient) -> None:

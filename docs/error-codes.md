@@ -718,14 +718,18 @@ envelope includes the DSM numeric code in the message text, so you can look
 it up directly. For 900, 1000, 1001, 1002, 1100 and 1200, when DSM's reply to the
 request names the real cause, the message adds it (#749): `Failed to create the
 folder: No such file or directory (DSM error 408)` for `create_folder` with
-`force_parent=false` under a missing parent. Captured for 1100 and 1200; a copy,
+`force_parent=false` under a missing parent (which `create_folder` itself now
+reports as a missing parent). Captured for 1100 and 1200; a copy,
 move or delete task's own status isn't read for one yet (#750).
 
 Fix:
 
 1. Read the numeric DSM code from the message (e.g., "DSM error 402"). This
    is the authoritative identifier — the `filestation_error` label is just
-   the bucket.
+   the bucket. When the message holds two (`Failed to create the folder: … (DSM
+   error 408)` after `(DSM error 1100)`), the first is a wrapper whose Synology
+   entry only says the cause is elsewhere, and the second is that cause: act on
+   the second (#749).
 2. Cross-reference against the
    [Synology File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf)
    for that specific code.

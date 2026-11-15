@@ -213,6 +213,9 @@ class TestFileStationCause:
             [{"code": True}],  # True == 1, no File Station code
             [{"code": 9999}],  # not a File Station code
             [{"code": 1100}],  # a wrapper isn't a cause
+            [{"code": 599}],  # nor a task's, a search's or an upload's code (QA r1 on #751)
+            [{"code": 600}],
+            [{"code": 1800}],
             ["414"],
             {"name": "path", "reason": "x"},
         ],
@@ -234,6 +237,16 @@ class TestFileStationCause:
         assert error.suggestion is not None
         says_retry = re.search(r"(?:^|\. )(?:wait and )?retry\b", error.suggestion, re.I)
         assert bool(says_retry) is error.retryable, (wrapper, cause, error.suggestion)
+
+    def test_errors_for_log_names_codes_and_paths(self) -> None:
+        """QA r1 on #751: the DEBUG line read only Photos' name and reason."""
+        from mcp_synology.core.errors import errors_for_log
+
+        assert errors_for_log([{"code": 414, "path": "/s/x"}, {"code": 999}]) == (
+            " [errors: 414 /s/x, 999]"
+        )
+        assert errors_for_log({"code": 408}) == " [errors: 408]"
+        assert errors_for_log(None) == errors_for_log([{"name": "rating"}]) == ""
 
     def test_the_first_known_cause_counts(self) -> None:
         err = error_from_code(

@@ -297,13 +297,30 @@ async def _create_one(
                     value=given,  # the caller's own text (QA r1 on #714)
                     suggestion=UNDER_FILE_ADVICE,
                 )
+            if e.cause == 408 and not force_parent:
+                # A missing parent: 1100 with 408 inside (vdsm 7.2.2; QA r1 on #751: 408's
+                # own advice sent the model searching for a path that was right).
+                parent_shown = shown_beside(parent, " doesn't exist")
+                error_response(
+                    ErrorCode.NOT_FOUND,
+                    f"Create folder failed (DSM error 1100): the parent folder {parent_shown} "
+                    "doesn't exist.",
+                    retryable=False,
+                    param="paths",
+                    value=given,
+                    suggestion=(
+                        "Create the parent folder first, or pass force_parent=true to create "
+                        "missing parent folders too."
+                    ),
+                )
             if e.cause == 414:
                 # A name already taken: 1100 with 414 inside, for a folder with
                 # force_parent=false and for a file either way (vdsm 7.1-7.4.1, #749). It
                 # read as a permissions problem.
                 error_response(
                     ErrorCode.ALREADY_EXISTS,
-                    f"Create folder failed: {shown_beside(p, ' already exists')} already exists.",
+                    f"Create folder failed (DSM error 1100): "
+                    f"{shown_beside(p, ' already exists')} already exists.",
                     retryable=False,
                     param="paths",
                     value=given,
@@ -312,9 +329,9 @@ async def _create_one(
                     suggestion=(
                         "A file is there, and a folder can't be created over it: pick another name."
                         if force_parent
-                        else "If it's a folder, force_parent=true (the default) accepts it "
-                        "as it is; a file there can't become a folder, so pick another "
-                        "name. list_files shows which it is."
+                        else "If it's a folder, it's already there: leave it out of the "
+                        "call. A file there can't become a folder, so pick another name. "
+                        "list_files shows which it is."
                     ),
                 )
         synology_error_response("Create folder", e)

@@ -478,9 +478,23 @@ def filestation_cause(errors: object) -> int | None:
     for item in items:
         code = item.get("code") if isinstance(item, dict) else None
         # A bool passes isinstance(int), but True and False are 1 and 0, no File Station code.
-        if isinstance(code, int) and code in FILESTATION_ERROR_CODES and code not in WRAPPER_CODES:
+        # A file operation's own code (400-421): not a task's, a search's or an upload's
+        # (599, 600, 1800-1803), nor a wrapper (QA r1 on #751).
+        if isinstance(code, int) and code in FILESTATION_ERROR_CODES and code < 500:
             return code
     return None
+
+
+def errors_for_log(errors: object) -> str:
+    """``" [errors: 414 /s/x]"``: File Station's `{code, path}` entries for a DEBUG line, or
+    ``""`` (QA r1 on #751: `error_detail` reads only Photos' name and reason)."""
+    items = errors if isinstance(errors, list) else [errors]
+    parts = [
+        f"{item.get('code')} {item.get('path', '')}".strip()
+        for item in items
+        if isinstance(item, dict) and "code" in item
+    ]
+    return f" [errors: {', '.join(parts)}]" if parts else ""
 
 
 def error_detail(errors: object) -> str:
