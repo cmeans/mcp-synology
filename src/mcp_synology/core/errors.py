@@ -475,12 +475,7 @@ def filestation_cause(errors: object) -> int | None:
     items = errors if isinstance(errors, list) else [errors]
     for item in items:
         code = item.get("code") if isinstance(item, dict) else None
-        if (
-            isinstance(code, int)
-            and not isinstance(code, bool)
-            and code in FILESTATION_ERROR_CODES
-            and code not in WRAPPER_CODES
-        ):
+        if isinstance(code, int) and code in FILESTATION_ERROR_CODES and code not in WRAPPER_CODES:
             return code
     return None
 

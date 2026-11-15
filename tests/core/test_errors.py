@@ -209,7 +209,7 @@ class TestFileStationCause:
             {},
             [{"path": "/s/x"}],
             [{"code": "414"}],  # not a number
-            [{"code": True}],  # a bool isn't a code
+            [{"code": True}],  # True == 1, no File Station code
             [{"code": 9999}],  # not a File Station code
             [{"code": 1100}],  # a wrapper isn't a cause
             ["414"],
