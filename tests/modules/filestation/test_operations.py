@@ -168,6 +168,8 @@ class TestCreateFolderPartWay:
                     raise fail[name]
                 if isinstance(fail.get(name), str):
                     return httpx.Response(int(fail[name]), text="Bad Gateway")
+                if isinstance(fail.get(name), dict):  # the whole error, `errors` and all
+                    return httpx.Response(200, json={"success": False, "error": fail[name]})
                 if name in fail:
                     return httpx.Response(
                         200, json={"success": False, "error": {"code": fail[name]}}
@@ -202,6 +204,104 @@ class TestCreateFolderPartWay:
             "Create folder failed (DSM error 418): Illegal name or path. Failed on: /video/b. "
             "Already created before this failure: /video/a. Not started: /video/c."
         )
+
+    @pytest.mark.parametrize("force_parent", [False, True])
+    @respx.mock
+    async def test_a_taken_name_is_already_exists(
+        self, mock_client: DsmClient, force_parent: bool
+    ) -> None:
+        """#749: DSM's 1100 with 414 inside (a folder with force_parent=false, a file either
+        way; vdsm 7.1-7.4.1) read as "Insufficient filesystem permissions"."""
+        taken = {"code": 1100, "errors": [{"code": 414, "path": "/video/x"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"x": taken}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/x"], force_parent=force_parent)
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "already_exists", error
+        assert error["message"] == (
+            "Create folder failed (DSM error 1100): /video/x already exists."
+        ), error
+        assert (error["param"], error["value"], error["retryable"]) == (
+            "paths",
+            "/video/x",
+            False,
+        )
+        # With force_parent=true DSM accepts a folder, so only a file is there (vdsm).
+        assert error["suggestion"] == (
+            "A file is there, and a folder can't be created over it: pick another name."
+            if force_parent
+            else "If it's a folder, it's already there: leave it out of the call. A file "
+            "there can't become a folder, so pick another name. list_files shows which it is."
+        ), error
+
+    @respx.mock
+    async def test_a_taken_name_holding_the_marker_is_quoted(self, mock_client: DsmClient) -> None:
+        taken = {"code": 1100, "errors": [{"code": 414}]}
+        name = "x already exists. y"
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({name: taken}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=[f"/video/{name}"], force_parent=False)
+        message = json.loads(str(exc_info.value))["error"]["message"]
+        assert message == (
+            f"Create folder failed (DSM error 1100): '/video/{name}' already exists."
+        ), message
+
+    @pytest.mark.parametrize("force_parent", [False, True])
+    @respx.mock
+    async def test_a_missing_parent_is_named(
+        self, mock_client: DsmClient, force_parent: bool
+    ) -> None:
+        """QA r1 on #751: 1100 with 408 inside (a missing parent, force_parent=false; vdsm
+        7.2.2) got 408's own advice, which sent the model searching for a path that was right.
+        With force_parent=true DSM creates the parent, so a 408 there keeps DSM's text."""
+        missing = {"code": 1100, "errors": [{"code": 408, "path": "/video/p"}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"x": missing}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/p/x"], force_parent=force_parent)
+        error = json.loads(str(exc_info.value))["error"]
+        if force_parent:
+            assert error["code"] == "filestation_error", error
+            assert error["message"].endswith("No such file or directory (DSM error 408)"), error
+            return
+        assert error["code"] == "not_found", error
+        assert error["message"] == (
+            "Create folder failed (DSM error 1100): the parent folder /video/p doesn't "
+            "exist, or this account can't see it."
+        ), error
+        assert error["suggestion"] == (
+            "Create the parent folder first, or pass force_parent=true to create missing "
+            "parent folders too."
+        ), error
+        assert (error["param"], error["value"], error["retryable"]) == (
+            "paths",
+            "/video/p/x",
+            False,
+        )
+
+    @respx.mock
+    async def test_1100_without_a_cause_keeps_dsms_answer(self, mock_client: DsmClient) -> None:
+        """#749: no `errors` detail, no claim: the wrapper's own text, no longer a
+        permissions claim."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(side_effect=self._dsm({"x": 1100}))
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/x"])
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "filestation_error", error
+        assert error["message"] == (
+            "Create folder failed (DSM error 1100): Failed to create the folder"
+        ), error
+
+    @respx.mock
+    async def test_the_under_a_file_check_comes_first(self, mock_client: DsmClient) -> None:
+        """A path under a file with 414 inside is still named by the file in the way (#702)."""
+        taken = {"code": 1100, "errors": [{"code": 414}]}
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._dsm({"x": taken}, files=("/video/f.txt",))
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await create_folder(mock_client, paths=["/video/f.txt/x"])
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found" and "is a file" in error["message"], error
 
     @respx.mock
     async def test_the_under_a_file_refusal_names_them_too(self, mock_client: DsmClient) -> None:
@@ -603,7 +703,10 @@ class TestRename:
         def side_effect(request: httpx.Request) -> httpx.Response:
             params = dict(request.url.params)
             if params.get("method") == "rename":
-                return httpx.Response(200, json={"success": False, "error": {"code": 1200}})
+                error: dict[str, Any] = {"code": 1200}
+                if "cause" in getinfo:  # DSM's `errors` detail (#749)
+                    error["errors"] = [{"code": int(getinfo["cause"])}]
+                return httpx.Response(200, json={"success": False, "error": error})
             if params.get("method") == "getinfo":
                 path = params["path"]
                 kind = getinfo.get(path, "file")
@@ -663,6 +766,45 @@ class TestRename:
             assert (error["param"], error["value"]) == ("new_name", "b"), error
         if code in ("not_found", "already_exists"):
             assert error["retryable"] is False, error
+
+    @respx.mock
+    async def test_rename_1200_with_414_inside_is_taken_with_no_lookup(
+        self, mock_client: DsmClient
+    ) -> None:
+        """#749: DSM names the cause (414 inside 1200, vdsm 7.1-7.4.1); the getinfo check
+        isn't needed, and a source getinfo would call missing doesn't change it."""
+        route = respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"cause": "414", "/video/a": "missing"})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/a", new_name="b")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "already_exists", error
+        assert (error["param"], error["value"]) == ("new_name", "b"), error
+        assert "/video/b already exists" in error["message"], error
+        methods = [dict(c.request.url.params).get("method") for c in route.calls]
+        assert "getinfo" not in methods, methods
+
+    @respx.mock
+    async def test_rename_1200_with_another_cause_keeps_the_lookup(
+        self, mock_client: DsmClient
+    ) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"cause": "408", "/video/a": "missing"})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/a", new_name="b")
+        error = json.loads(str(exc_info.value))["error"]
+        assert error["code"] == "not_found", error
+
+    @respx.mock
+    async def test_rename_to_its_own_name_with_414_isnt_taken(self, mock_client: DsmClient) -> None:
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+            side_effect=self._rename_1200({"cause": "414", "/video/a": "file"})
+        )
+        with pytest.raises(ToolError) as exc_info:
+            await rename(mock_client, path="/video/a", new_name="a")
+        assert json.loads(str(exc_info.value))["error"]["code"] != "already_exists"
 
     @respx.mock
     @pytest.mark.parametrize(

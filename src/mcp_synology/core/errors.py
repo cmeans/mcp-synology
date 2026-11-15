@@ -98,6 +98,9 @@ class SynologyError(Exception):
 
     error_code: ErrorCode = ErrorCode.DSM_ERROR
     retryable: bool = False
+    # The File Station code DSM gave as the cause of a wrapper code (1100 for a 414, #749):
+    # see `filestation_cause`.
+    cause: int | None = None
 
     def __init__(
         self,
@@ -388,7 +391,12 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "No such file or directory",
         f"Use list_files or search_files to find the correct path. {ESCAPED_NAME_ADVICE}",
     ),
-    414: ("File already exists", "Use overwrite=true to replace existing files."),
+    # Neutral: create_folder and rename take no `overwrite` (#726); upload words its own.
+    414: (
+        "File already exists",
+        "Something with that name is already there: pick another name, or, where the tool "
+        "takes overwrite, set overwrite=true to replace it.",
+    ),
     415: (
         "Disk quota exceeded",
         "This account's quota on that volume, or the shared folder's quota, is full. Free "
@@ -412,7 +420,9 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "The user may not have permission to search this folder. "
         "Try searching a specific share instead of the root path.",
     ),
-    900: ("Unexpected server error", "Check DSM logs for details."),
+    # Synology's guide: "Failed to delete file(s)/folder(s)"; with a cause from `errors`
+    # (#749) it read as a crash ("Unexpected server error: No such file or directory").
+    900: ("Failed to delete", "Check DSM logs for details."),
     1000: (
         "Failed to copy files",
         "Check source paths exist and user has read permission.",
@@ -427,14 +437,21 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "and file ownership allows the operation. "
         "Files owned by other users (e.g., service accounts) may require admin access.",
     ),
+    # Synology's File Station API guide: "Failed to create a folder. More information in
+    # <errors> object." It answers it for a name already taken (414 inside, vdsm 7.1-7.4.1,
+    # #749), not only for permissions.
     1100: (
-        "Insufficient filesystem permissions",
-        "The DSM user does not have write access to this shared folder. "
-        "Check DSM > Control Panel > Shared Folder > Permissions.",
+        "Failed to create the folder",
+        "Check that the parent folder exists, nothing is already there by that name, and "
+        "this DSM account can write to it (DSM > Control Panel > Shared Folder > "
+        "Permissions).",
     ),
+    # The guide: "The number of folders to the parent folder would exceed the system
+    # limitation." (#749)
     1101: (
-        "Unsupported target filesystem",
-        "The destination filesystem does not support this operation.",
+        "Too many folders in the parent folder",
+        "The parent folder holds as many folders as the file system allows: create it "
+        "somewhere else.",
     ),
     1200: (
         "The path may not exist, or the new name may already be taken in that folder",
@@ -445,6 +462,39 @@ FILESTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
     1802: ("Upload error", "Check the destination path and disk space."),
     1803: ("Upload timeout", "Try a smaller file or increase the timeout."),
 }
+
+
+# File Station codes whose cause DSM puts in `error.errors` (Synology's File Station API guide
+# says "More information in <errors> object" for these): delete, copy, move, a destination,
+# create folder, rename (#726, #749).
+WRAPPER_CODES = frozenset({900, 1000, 1001, 1002, 1100, 1200})
+
+
+def filestation_cause(errors: object) -> int | None:
+    """The File Station code DSM gave as a wrapper code's cause in ``error.errors``
+    (`[{"code": 414, "path": "..."}]`), or None. Only a known code that isn't itself a
+    wrapper counts, so a malformed or nested detail changes nothing (#749)."""
+    items = errors if isinstance(errors, list) else [errors]
+    for item in items:
+        code = item.get("code") if isinstance(item, dict) else None
+        # A bool passes isinstance(int), but True and False are 1 and 0, no File Station code.
+        # A file operation's own code (400-421): not a task's, a search's or an upload's
+        # (599, 600, 1800-1803), nor a wrapper (QA r1 on #751).
+        if isinstance(code, int) and code in FILESTATION_ERROR_CODES and code < 500:
+            return code
+    return None
+
+
+def errors_for_log(errors: object) -> str:
+    """``" [errors: 414 /s/x]"``: File Station's `{code, path}` entries for a DEBUG line, or
+    ``""`` (QA r1 on #751: `error_detail` reads only Photos' name and reason)."""
+    items = errors if isinstance(errors, list) else [errors]
+    parts = [
+        f"{item.get('code')} {item.get('path', '')}".strip()
+        for item in items
+        if isinstance(item, dict) and "code" in item
+    ]
+    return f" [errors: {', '.join(parts)}]" if parts else ""
 
 
 def error_detail(errors: object) -> str:
@@ -470,6 +520,27 @@ def error_detail(errors: object) -> str:
 
 def _with_detail(message: str, errors: object) -> str:
     return message + error_detail(errors)
+
+
+# File Station's busy codes: their advice is to wait and retry, so they're retryable (#490).
+_BUSY_CODES = (402, 421)
+
+
+def _filestation_error(code: int, message: str, suggestion: str) -> SynologyError:
+    """The typed error for File Station code ``code``."""
+    if code == 407:  # a refusal, like 105: never re-auth on it
+        return SynologyPermissionError(message, code=code, suggestion=suggestion)
+    if code == 408:
+        return PathNotFoundError(message, code=code, suggestion=suggestion)
+    if code == 414:
+        return SynologyFileExistsError(message, code=code, suggestion=suggestion)
+    if code in (415, 416):  # quota full or volume full: both are out of space
+        return DiskFullError(message, code=code, suggestion=suggestion)
+    if code in (418, 419):
+        return IllegalNameError(message, code=code, suggestion=suggestion)
+    if code in _BUSY_CODES:
+        return BusyError(message, code=code, suggestion=suggestion)
+    return FileStationError(message, code=code, suggestion=suggestion)
 
 
 def error_from_code(code: int, api_name: str = "", errors: object = None) -> SynologyError:
@@ -522,19 +593,20 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
     # File Station codes (400-series for SYNO.FileStation.*)
     if "FileStation" in api_name and code in FILESTATION_ERROR_CODES:
         message, suggestion = FILESTATION_ERROR_CODES[code]
-        if code == 407:  # a refusal, like 105: never re-auth on it
-            return SynologyPermissionError(message, code=code, suggestion=suggestion)
-        if code == 408:
-            return PathNotFoundError(message, code=code, suggestion=suggestion)
-        if code == 414:
-            return SynologyFileExistsError(message, code=code, suggestion=suggestion)
-        if code in (415, 416):  # quota full or volume full: both are out of space
-            return DiskFullError(message, code=code, suggestion=suggestion)
-        if code in (418, 419):
-            return IllegalNameError(message, code=code, suggestion=suggestion)
-        if code in (402, 421):
-            return BusyError(message, code=code, suggestion=suggestion)
-        return FileStationError(message, code=code, suggestion=suggestion)
+        # A wrapper code's cause, when DSM sent one, is named and its advice used; the
+        # error keeps the wrapper's code and type, which its callers test (#726, #749).
+        cause = filestation_cause(errors) if code in WRAPPER_CODES else None
+        if cause is not None:
+            inner, suggestion = FILESTATION_ERROR_CODES[cause]
+            message = f"{message}: {inner} (DSM error {cause})"
+            error = _filestation_error(code, message, suggestion)
+            error.cause = cause
+            # The cause's advice, so its flag too: a busy cause says to wait and retry
+            # (pre-QA r1 on #749: it was told that beside retryable false). Set on the
+            # instance, after `_filestation_error` built the wrapper's own type.
+            error.retryable = cause in _BUSY_CODES
+            return error
+        return _filestation_error(code, message, suggestion)
 
     # Common codes (100-series, shared across all APIs)
     if code in COMMON_ERROR_CODES:

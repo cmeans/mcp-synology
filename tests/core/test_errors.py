@@ -182,3 +182,105 @@ class TestFileStationRetryableAgreesWithItsAdvice:
         # retry" after a fix (1200's "check both … then retry") isn't.
         says_retry = re.search(r"(?:^|\. )(?:wait and )?retry\b", suggestion, re.IGNORECASE)
         assert bool(says_retry) is error.retryable, (code, suggestion)
+
+
+class TestFileStationCause:
+    """#726, #749: a wrapper code's cause in DSM's ``errors`` (CreateFolder 1100 and Rename
+    1200 with 414 inside, vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1) is named, and the error keeps the
+    wrapper's code and type."""
+
+    @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
+    def test_a_wrapper_names_its_cause(self, wrapper: int) -> None:
+        from mcp_synology.core.errors import FileStationError
+
+        err = error_from_code(
+            wrapper, "SYNO.FileStation.CreateFolder", [{"code": 414, "path": "/s/x"}]
+        )
+        assert type(err) is FileStationError, type(err)
+        assert (err.code, err.cause) == (wrapper, 414)
+        label = FILESTATION_ERROR_CODES[wrapper][0]
+        assert str(err) == f"{label}: File already exists (DSM error 414)", str(err)
+        assert err.suggestion is not None and "overwrite=true" in err.suggestion
+
+    @pytest.mark.parametrize(
+        "errors",
+        [
+            None,
+            [],
+            {},
+            [{"path": "/s/x"}],
+            [{"code": "414"}],  # not a number
+            [{"code": True}],  # True == 1, no File Station code
+            [{"code": 9999}],  # not a File Station code
+            [{"code": 1100}],  # a wrapper isn't a cause
+            [{"code": 599}],  # nor a task's, a search's or an upload's code (QA r1 on #751)
+            [{"code": 600}],
+            [{"code": 1800}],
+            ["414"],
+            {"name": "path", "reason": "x"},
+        ],
+    )
+    def test_no_cause_leaves_the_wrapper_as_it_was(self, errors: object) -> None:
+        err = error_from_code(1100, "SYNO.FileStation.CreateFolder", errors)
+        assert err.cause is None
+        assert str(err) == "Failed to create the folder"
+
+    @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
+    @pytest.mark.parametrize(
+        "cause",
+        sorted(c for c in FILESTATION_ERROR_CODES if c < 900),
+    )
+    def test_the_causes_advice_and_flag_agree(self, wrapper: int, cause: int) -> None:
+        """Pre-QA r1 on #749: a busy cause's "wait and retry" came beside the wrapper's
+        retryable false."""
+        error = error_from_code(wrapper, "SYNO.FileStation.CopyMove", [{"code": cause}])
+        assert error.suggestion is not None
+        says_retry = re.search(r"(?:^|\. )(?:wait and )?retry\b", error.suggestion, re.I)
+        assert bool(says_retry) is error.retryable, (wrapper, cause, error.suggestion)
+
+    def test_errors_for_log_names_codes_and_paths(self) -> None:
+        """QA r1 on #751: the DEBUG line read only Photos' name and reason."""
+        from mcp_synology.core.errors import errors_for_log
+
+        assert errors_for_log([{"code": 414, "path": "/s/x"}, {"code": 999}]) == (
+            " [errors: 414 /s/x, 999]"
+        )
+        assert errors_for_log({"code": 408}) == " [errors: 408]"
+        assert errors_for_log(None) == errors_for_log([{"name": "rating"}]) == ""
+
+    def test_the_first_known_cause_counts(self) -> None:
+        err = error_from_code(
+            1200, "SYNO.FileStation.Rename", [{"code": 9999}, {"code": 408}, {"code": 414}]
+        )
+        assert err.cause == 408
+
+    def test_a_dict_cause_counts_too(self) -> None:
+        err = error_from_code(1100, "SYNO.FileStation.CreateFolder", {"code": 414})
+        assert err.cause == 414
+
+    def test_a_code_that_isnt_a_wrapper_ignores_errors(self) -> None:
+        err = error_from_code(408, "SYNO.FileStation.List", [{"code": 414}])
+        assert isinstance(err, PathNotFoundError)
+        assert err.cause is None and str(err) == "No such file or directory"
+
+    def test_other_apis_ignore_it(self) -> None:
+        err = error_from_code(1100, "SYNO.API.Info", [{"code": 414}])
+        assert err.cause is None
+
+    def test_the_414_advice_doesnt_assume_overwrite(self) -> None:
+        """#726: create_folder and rename take no `overwrite`."""
+        err = error_from_code(414, "SYNO.FileStation.CreateFolder")
+        assert err.suggestion is not None
+        assert err.suggestion.startswith("Something with that name is already there")
+        assert "where the tool takes overwrite" in err.suggestion
+
+    def test_1100_and_1101_say_what_the_guide_says(self) -> None:
+        """#749: 1100 read as a permissions problem, 1101 as an unsupported file system."""
+        assert str(error_from_code(1100, "SYNO.FileStation.CreateFolder")) == (
+            "Failed to create the folder"
+        )
+        assert str(error_from_code(1101, "SYNO.FileStation.CreateFolder")) == (
+            "Too many folders in the parent folder"
+        )
+        # 900 read as a crash with a cause (pre-QA r1 and r2 on #749).
+        assert str(error_from_code(900, "SYNO.FileStation.Delete")) == "Failed to delete"

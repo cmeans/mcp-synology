@@ -284,8 +284,7 @@ async def _create_one(
     except (DsmHttpError, DsmReplyError):
         raise  # create_folder says this folder may have been created (#713)
     except SynologyError as e:
-        # DSM's 1100 "Insufficient filesystem permissions" for a folder under a file (vdsm
-        # 7.1, #702), which points at permissions.
+        # DSM's 1100 "Failed to create a folder" for a folder under a file (vdsm 7.1, #702).
         if e.code == 1100:
             blocker = await diagnose_under_file(client, p)
             if blocker:
@@ -298,18 +297,60 @@ async def _create_one(
                     value=given,  # the caller's own text (QA r1 on #714)
                     suggestion=UNDER_FILE_ADVICE,
                 )
+            if e.cause == 408 and not force_parent:
+                # A missing parent: 1100 with 408 inside (vdsm 7.1-7.4.1; QA r1 on #751:
+                # 408's own advice sent the model searching for a path that was right).
+                # DSM answers 408 for a folder this account can't see too, so that's said.
+                parent_shown = shown_beside(parent, " doesn't exist")
+                error_response(
+                    ErrorCode.NOT_FOUND,
+                    f"Create folder failed (DSM error 1100): the parent folder {parent_shown} "
+                    "doesn't exist, or this account can't see it.",
+                    retryable=False,
+                    param="paths",
+                    value=given,
+                    suggestion=(
+                        "Create the parent folder first, or pass force_parent=true to create "
+                        "missing parent folders too."
+                    ),
+                )
+            if e.cause == 414:
+                # A name already taken: 1100 with 414 inside, for a folder with
+                # force_parent=false and for a file either way (vdsm 7.1-7.4.1, #749). It
+                # read as a permissions problem.
+                error_response(
+                    ErrorCode.ALREADY_EXISTS,
+                    f"Create folder failed (DSM error 1100): "
+                    f"{shown_beside(p, ' already exists')} already exists.",
+                    retryable=False,
+                    param="paths",
+                    value=given,
+                    # With force_parent=true DSM accepts an existing folder, so only a file
+                    # gets here (vdsm 7.1-7.4.1; pre-QA r1 on #749: the advice hedged).
+                    suggestion=(
+                        "A file is there, and a folder can't be created over it: pick another name."
+                        if force_parent
+                        else "If it's a folder, it's already there: leave it out of the "
+                        "call. A file there can't become a folder, so pick another name. "
+                        "list_files shows which it is."
+                    ),
+                )
         synology_error_response("Create folder", e)
     return data
 
 
-async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_name: str) -> None:
-    """Say which of DSM's two causes a rename's 1200 was, when getinfo can tell (#188).
+async def _explain_rename_1200(
+    client: DsmClient, path: str, original: str, new_name: str, cause: int | None = None
+) -> None:
+    """Say which of DSM's two causes a rename's 1200 was, when DSM or getinfo can tell (#188).
 
     DSM answers 1200 both for a source that doesn't exist and for a name already taken in
-    that folder (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1). A source getinfo reports missing
-    (408) is `not_found`; when getinfo shows both the source and the new path exist,
-    `already_exists` (rename never replaces, #183). Anything else, including a failed
-    check, returns, and the caller reports the 1200 with its table message.
+    that folder (vdsm DSM 7.1, 7.2.2, 7.3.2 and 7.4.1). For a taken name it says so: 414
+    in the reply's `errors` (``cause``, #749), `already_exists` with no lookup. Otherwise a
+    source getinfo reports missing (408) is `not_found`; when getinfo shows both the source
+    and the new path exist, `already_exists` (rename never replaces, #183). Anything else,
+    including a failed check, returns, and the caller reports the 1200 with its table
+    message.
     """
     parent, _, name = path.rpartition("/")
     target = f"{parent}/{new_name}"
@@ -318,6 +359,8 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
     # refuses one before sending it since #479, so this is a defensive guard). `rename`
     # refuses "." and ".." before getting here (#449).
     can_be_taken = bool(parent) and new_name != name
+    if cause == 414 and can_be_taken:
+        _rename_taken(target, new_name)
     try:
         source = await path_exists(client, path)
         taken = source is True and can_be_taken and await path_exists(client, target) is True
@@ -346,15 +389,20 @@ async def _explain_rename_1200(client: DsmClient, path: str, original: str, new_
             suggestion=missing_paths_suggestion([(path, 408)]),
         )
     if taken:
-        error_response(
-            ErrorCode.ALREADY_EXISTS,
-            f"Rename failed (DSM error 1200): {shown(target)} already exists. Rename doesn't "
-            "replace an existing file or folder.",
-            retryable=False,
-            param="new_name",
-            value=new_name,
-            suggestion="Pick another name, or move or delete the existing one first.",
-        )
+        _rename_taken(target, new_name)
+
+
+def _rename_taken(target: str, new_name: str) -> NoReturn:
+    """The refusal of a rename onto a name already taken in its folder (#183, #188)."""
+    error_response(
+        ErrorCode.ALREADY_EXISTS,
+        f"Rename failed (DSM error 1200): {shown(target)} already exists. Rename doesn't "
+        "replace an existing file or folder.",
+        retryable=False,
+        param="new_name",
+        value=new_name,
+        suggestion="Pick another name, or move or delete the existing one first.",
+    )
 
 
 async def rename(
@@ -389,7 +437,7 @@ async def rename(
         )
     except SynologyError as e:
         if e.code == 1200:
-            await _explain_rename_1200(client, normalized, path, new_name)
+            await _explain_rename_1200(client, normalized, path, new_name, e.cause)
         synology_error_response("Rename", e)
 
     files = data.get("files", [])

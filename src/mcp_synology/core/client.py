@@ -37,6 +37,7 @@ from mcp_synology.core.errors import (
     detached_copy,
     error_detail,
     error_from_code,
+    errors_for_log,
 )
 from mcp_synology.core.formatting import CollidingKeysError, escape_nas_text, needs_escaping
 from mcp_synology.core.redaction import redact_urls
@@ -767,7 +768,7 @@ class DsmClient:
             api,
             method,
             code,
-            error_detail(error.get("errors")),
+            error_detail(error.get("errors")) + errors_for_log(error.get("errors")),
         )
 
         # Transparent re-auth on session errors (one retry)
@@ -986,7 +987,7 @@ class DsmClient:
             api,
             method,
             code,
-            error_detail(error.get("errors")),
+            error_detail(error.get("errors")) + errors_for_log(error.get("errors")),
         )
 
         # Re-auth on session errors (file must be re-opened on retry)

@@ -258,8 +258,10 @@ Fix:
 
 **A file with the target name already exists at the destination.**
 
-This fires for upload, download, rename, copy, and move when the destination
-is occupied and the caller did not opt in to overwriting.
+This fires for upload, download, rename, create_folder, copy, and move when the
+destination is occupied and the caller did not opt in to overwriting (or, for
+`create_folder`, asked for a new folder with `force_parent=false`, or a file is
+already there).
 
 Fix:
 
@@ -269,6 +271,9 @@ Fix:
   leave the destination in a corrupted state.
 - For `rename`: choose a different target name, or `delete_files` the existing
   target first.
+- For `create_folder`: if it's a folder, it already exists: leave it out of
+  the call (`list_files` shows which it is); a file at that path can't become
+  a folder, so pick another name.
 - If you need atomicity: write to a temporary name and rename on success
   rather than relying on `overwrite=true`.
 
@@ -709,15 +714,24 @@ but did not map to a more specific code above.**
 
 This is the fall-through for `SYNO.FileStation.*` calls whose DSM error code
 isn't in the specific-handler list (400–421 range is mostly covered; codes
-like 402 "System too busy" and 900 "Unexpected server error" land here). The
+like 402 "System too busy" and 900 "Failed to delete" land here). The
 envelope includes the DSM numeric code in the message text, so you can look
-it up directly.
+it up directly. For 900, 1000, 1001, 1002, 1100 and 1200, when DSM's reply to the
+request names the real cause, the message adds it (#749), in the form
+`<wrapper>: <cause> (DSM error <cause code>)`. The causes captured so far (1100
+and 1200 with 414 inside, 1100 with 408 inside) each become a more specific
+code in `create_folder` and `rename`, so a `filestation_error` with a cause is
+one not captured yet; a copy, move or delete task's own status isn't read for
+one either (#750).
 
 Fix:
 
 1. Read the numeric DSM code from the message (e.g., "DSM error 402"). This
    is the authoritative identifier — the `filestation_error` label is just
-   the bucket.
+   the bucket. When the message holds two (`<wrapper>: <cause> (DSM error N)`
+   after `(DSM error 1100)`, say), the first is a wrapper whose Synology entry
+   only says the cause is elsewhere, and the second is that cause: act on the
+   second (#749).
 2. Cross-reference against the
    [Synology File Station API documentation](https://global.download.synology.com/download/Document/Software/DeveloperGuide/Package/FileStation/All/enu/Synology_File_Station_API_Guide.pdf)
    for that specific code.
@@ -726,9 +740,8 @@ Fix:
    `retryable=true` (#490). Code 401 ("Unknown error") isn't: check **Log Center**.
    A failure partway through a multi-path copy, move, restore or delete is never
    retryable once something ran: retry only what the message lists as not done.
-4. **Code 900 ("Unexpected server error"):** check **Log Center** in DSM for
-   matching events. This usually indicates an internal DSM fault and may
-   require a package restart or reboot.
+4. **Code 900 ("Failed to delete"):** if the message names a cause (`… (DSM error 408)`),
+   act on that code. Without one, check **Log Center** in DSM for matching events.
 5. **Code 600 ("Search folder access denied") from `search_files`:** before
    0.10.0, a search with no pattern, extension, size or date got this from
    DSM (with the default `filetype=all`), whatever the folder's permissions.
