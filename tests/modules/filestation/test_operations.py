@@ -265,7 +265,8 @@ class TestCreateFolderPartWay:
             return
         assert error["code"] == "not_found", error
         assert error["message"] == (
-            "Create folder failed (DSM error 1100): the parent folder /video/p doesn't exist."
+            "Create folder failed (DSM error 1100): the parent folder /video/p doesn't "
+            "exist, or this account can't see it."
         ), error
         assert error["suggestion"] == (
             "Create the parent folder first, or pass force_parent=true to create missing "

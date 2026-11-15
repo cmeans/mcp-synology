@@ -298,13 +298,14 @@ async def _create_one(
                     suggestion=UNDER_FILE_ADVICE,
                 )
             if e.cause == 408 and not force_parent:
-                # A missing parent: 1100 with 408 inside (vdsm 7.2.2; QA r1 on #751: 408's
-                # own advice sent the model searching for a path that was right).
+                # A missing parent: 1100 with 408 inside (vdsm 7.1-7.4.1; QA r1 on #751:
+                # 408's own advice sent the model searching for a path that was right).
+                # DSM answers 408 for a folder this account can't see too, so that's said.
                 parent_shown = shown_beside(parent, " doesn't exist")
                 error_response(
                     ErrorCode.NOT_FOUND,
                     f"Create folder failed (DSM error 1100): the parent folder {parent_shown} "
-                    "doesn't exist.",
+                    "doesn't exist, or this account can't see it.",
                     retryable=False,
                     param="paths",
                     value=given,

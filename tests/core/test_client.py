@@ -320,6 +320,22 @@ class TestRequest:
         assert route.calls[0].request.headers["cookie"] == "id=-4Ms56tk; proxy_auth=abc"
 
     @respx.mock
+    async def test_request_logs_file_station_errors(self, caplog: pytest.LogCaptureFixture) -> None:
+        """QA r1 on #751: the DEBUG line showed only Photos' name and reason, so File
+        Station's `{code, path}` entries (a wrapper's cause) were dropped."""
+        respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={
+                "success": False,
+                "error": {"code": 1100, "errors": [{"code": 414, "path": "/s/x"}]},
+            }
+        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.core.client"):
+            async with _make_client(_default_cache()) as client:
+                with pytest.raises(SynologyError):
+                    await client.request("SYNO.FileStation.List", "list_share", version=2)
+        assert "error code 1100 [errors: 414 /s/x]" in caplog.text, caplog.text
+
+    @respx.mock
     async def test_request_without_session_sends_no_session_cookie(self) -> None:
         route = respx.get(f"{BASE_URL}/webapi/entry.cgi").respond(
             json={"success": True, "data": {}}
@@ -1812,6 +1828,30 @@ class TestGeneralTransfers:
         for api in ("SYNO.Foto.Upload.Item", "SYNO.Foto.Thumbnail", "SYNO.Foto.Browse.Item"):
             cache[api] = ApiInfoEntry(path="entry.cgi", min_version=1, max_version=2)
         return cache
+
+    @respx.mock
+    async def test_upload_multipart_logs_file_station_errors(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """QA r1 on #751: the DEBUG line showed only Photos' name and reason."""
+        client = make_client(self._cache())
+        local = tmp_path / "a.jpg"
+        local.write_bytes(b"x")
+        respx.post(f"{BASE_URL}/webapi/entry.cgi").respond(
+            json={"success": False, "error": {"code": 1100, "errors": [{"code": 414}]}}
+        )
+        with caplog.at_level("DEBUG", logger="mcp_synology.core.client"):
+            async with client:
+                with pytest.raises(SynologyError):
+                    await client.upload_multipart(
+                        "SYNO.FileStation.Upload",
+                        "upload",
+                        2,
+                        {"path": "/s"},
+                        file_path=local,
+                        filename="a.jpg",
+                    )
+        assert "error code 1100 [errors: 414]" in caplog.text, caplog.text
 
     @respx.mock
     async def test_upload_multipart_sends_fields_as_given(self, tmp_path: Path) -> None:
