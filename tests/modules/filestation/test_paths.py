@@ -1267,6 +1267,14 @@ class TestShownQuotesSentenceMarks:
             "/video/d.",
             "/video/x..",
             "/s/a. b/c",
+            # Every sentence end Unicode defines (UAX #29; pre-QA r1 on #727's PR).
+            "/video/q! Not started: video",
+            "/video/q? x",
+            "/video/q.) x",
+            '/video/q." x',
+            "/video/d!",
+            "/s/旅行。北京",  # a CJK full stop ends a sentence with no space after it
+            "/s/a．b",
         ],
     )
     def test_shown_quotes_them(self, path: str) -> None:
@@ -1276,7 +1284,8 @@ class TestShownQuotesSentenceMarks:
         assert shown_local(path) == repr(path)
 
     @pytest.mark.parametrize(
-        "path", ["/video/v1.2", "/s/report.pdf", "/s/a.b/c", "/s/Mr.Smith", "/s/.hidden"]
+        "path",
+        ["/video/v1.2", "/s/report.pdf", "/s/a.b/c", "/s/Mr.Smith", "/s/.hidden", "/s/a; b"],
     )
     def test_a_dot_inside_a_name_isnt_quoted(self, path: str) -> None:
         from mcp_synology.core.display import shown

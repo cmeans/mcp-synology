@@ -437,7 +437,8 @@ def shown(path: str) -> str:
     part has whitespace at its start or end, a character that doesn't print (a tab, a
     no-break space) or one `invisible_problem` refuses, so a stray space or a hidden
     character is visible once paths are taken exactly (#488, #489, #515). A path holding
-    ``", "`` or ``". "`` or ending in ``.`` (#727, #736), and nothing else to show, is quoted
+    ``", "`` or a sentence's end (``". "``, ``"! "``, a final ``.``, a CJK full stop: #727,
+    #736), and nothing else to show, is quoted
     without escapes, unless it holds a backslash (`plain_quoted`, #685, below); so is one that
     starts or ends with a quote, which would read as a quoted name (#691).
 
@@ -447,8 +448,8 @@ def shown(path: str) -> str:
     path on this machine, refused or not, goes through `shown_local` (#691: repr doubles each
     Windows backslash); an
     error or list that names a path the server checked or got
-    from DSM uses ``shown`` (plain unless something would be invisible or the path holds
-    ``", "``), and so does a reply
+    from DSM uses ``shown`` (plain unless something would be invisible or the path would read
+    as its line's structure: ``", "``, a sentence's end, a quote at an end), and so does a reply
     naming what a call acted on, successful or not: a delete's, copy's, move's or restore's
     summary and its skipped list (#519), a rename's, upload's, download's or create_folder's
     reply and get_dir_size's title (#688), since those are the paths a model will act on next.
@@ -479,13 +480,23 @@ def shown(path: str) -> str:
     return path
 
 
+# Where a sentence ends inside a path, by Unicode's rule (UAX #29, Sentence_Terminal: `.`,
+# `!`, `?` and 169 more): a terminal, any closing marks (`)`, a quote), then a space or the
+# path's end. A non-ASCII terminal counts anywhere: CJK full stops (`。`, `．`, `！`) end a
+# sentence with no space after them. ASCII `.` between letters (`v1.2`, `.hidden`) doesn't.
+_SENTENCE_END = regex.compile(
+    r"\p{Sentence_Terminal}\p{SB=Close}*(?:[\p{SB=Sp}\p{SB=Sep}]|\Z)"
+    r"|(?![.!?])\p{Sentence_Terminal}"
+)
+
+
 def _reads_as_structure(path: str) -> bool:
     """Whether ``path``, written as is inline, would read as part of its message: ``", "``
-    as two paths (#685); ``". "`` as the end of a sentence and the start of another, so a
-    folder ``Docs. Restored 12 items into Docs`` writes a line of its own (#727); a final
-    ``.``, which the sentence's own period follows, as another valid path (``/s/d..``, #736);
-    or a quote at either end, as a quoted name (#691)."""
-    return ", " in path or ". " in path or path.endswith(".") or edge_quote(path)
+    as two paths (#685); a sentence's end, so a folder ``Docs. Restored 12 items into Docs``
+    or ``q! Not started: video`` writes a sentence of its own (#727), and a final ``.`` takes
+    the sentence's own period after it as another valid path (``/s/d..``, #736); or a quote at
+    either end, as a quoted name (#691)."""
+    return ", " in path or _SENTENCE_END.search(path) is not None or edge_quote(path)
 
 
 def json_quoted(text: str) -> str:
@@ -558,7 +569,7 @@ def shown_local(path: str | os.PathLike[str]) -> str:
     """A path on this machine, for a message (#691), by `shown`'s rule for a NAS path: as the
     OS writes it, Windows backslashes too, unless a part (split by the OS's separators) holds
     what `shown` would quote, padding, a tab, a character that draws nothing, ``", "``,
-    ``". "`` or a final ``.``; then
+    a sentence's end; then
     the whole path is quoted, as `shown` quotes one (`plain_quoted` for ``", "`` alone, else
     `escaped_repr`), so in any quoted path a backslash is an escape, as the instructions' PATH
     FORMAT says. Not a part at a time: a part that itself starts and ends with a quote would
