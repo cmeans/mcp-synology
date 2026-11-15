@@ -258,8 +258,10 @@ Fix:
 
 **A file with the target name already exists at the destination.**
 
-This fires for upload, download, rename, copy, and move when the destination
-is occupied and the caller did not opt in to overwriting.
+This fires for upload, download, rename, create_folder, copy, and move when the
+destination is occupied and the caller did not opt in to overwriting (or, for
+`create_folder`, asked for a new folder with `force_parent=false`, or a file is
+already there).
 
 Fix:
 
@@ -269,6 +271,8 @@ Fix:
   leave the destination in a corrupted state.
 - For `rename`: choose a different target name, or `delete_files` the existing
   target first.
+- For `create_folder`: an existing folder is fine with `force_parent=true` (the
+  default); a file at that path can't become a folder, so pick another name.
 - If you need atomicity: write to a temporary name and rename on success
   rather than relying on `overwrite=true`.
 
