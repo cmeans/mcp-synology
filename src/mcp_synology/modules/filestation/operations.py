@@ -2435,10 +2435,13 @@ def _recreate_failed(
     re-created before it, which stay, and that nothing was restored. A retry is safe: it checks
     the folders again and re-creates only what's still missing, so that's the advice, not a
     check first (pre-QA r1 on #725)."""
-    # Sent with no DSM answer: the folder may exist now. A connection never made sent nothing.
-    lost = isinstance(e, (httpx.TransportError, DsmHttpError, DsmReplyError)) and not (
-        isinstance(e, httpx.TransportError) and never_sent(e)
-    )
+    # Sent with no DSM answer: the folder may exist now. A connection never made sent nothing,
+    # and a 4xx status is a refusal before DSM acted (a proxy's 403; QA r1 on #745: it was
+    # called both unanswered and not retryable); a 5xx is the stall a proxy reports (#282).
+    lost = (
+        isinstance(e, (httpx.TransportError, DsmReplyError))
+        or (isinstance(e, DsmHttpError) and e.status >= 500)
+    ) and not (isinstance(e, httpx.TransportError) and never_sent(e))
     try:
         if isinstance(e, httpx.TransportError):
             connected = lost
@@ -2469,13 +2472,15 @@ def _recreate_failed(
         maybe = sorted([*above, path])
         message = then(
             message,
-            f"{shown(path)} may have been re-created."
+            # Guarded like the refusal's marker (QA r1 on #745: a folder named
+            # `Decoy may have been re-created. Real` read as two).
+            f"{shown_beside(path, ' may have been re-created')} may have been re-created."
             if len(maybe) == 1
             else path_list("May have been re-created", [shown(p) for p in maybe]),
         )
     elif not isinstance(e, httpx.TransportError):
-        # DSM's refusal names no folder. The path isn't last in the sentence: a name ending in
-        # `.` would read as another path before its period (#736).
+        # DSM's refusal names no folder, nor does a proxy's 4xx. The path isn't last in the
+        # sentence: a name ending in `.` would read as another path before its period (#736).
         message = then(message, f"Re-creating {shown_beside(path, ' failed')} failed.")
     if made:
         message = then(
