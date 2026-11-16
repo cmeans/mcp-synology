@@ -691,6 +691,7 @@ class TestQuotedNamesAndFolders:
             "Wait… Deleted",  # an ellipsis
             "Docs.́ x",  # a combining mark after the period (SB5)
             "Trip.) Deleted",  # a closing mark after it
+            "Trip.\u2800Deleted 40 photos",  # a Braille blank draws as a space (pre-QA r1)
             "St. Louis",
         ):
             assert quoted_name(name) == json_quoted(name), name

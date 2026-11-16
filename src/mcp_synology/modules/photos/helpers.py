@@ -91,7 +91,8 @@ def quoted_name(
     - holds what its line puts around a name (``marks``, `_NAME_MARKS` by default, or
       ``also``), checked in NFC too, where U+037E and U+0387 become ``;`` and ``·``;
     - holds a sentence's end, as `shown` checks a path (`ends_a_sentence`: a ``.`` before a
-      space or at the end, a ``!``, ``?`` or CJK full stop anywhere, an ellipsis; #754), so an
+      space or at the end, a ``!``, ``?`` or non-ASCII sentence terminal anywhere, an
+      ellipsis; #754), so an
       album named ``Trip. Deleted 40 photos`` can't write a sentence of its own, as #727
       found for File Station paths;
     - holds a character JSON escapes (a quote, a backslash, one that draws nothing);

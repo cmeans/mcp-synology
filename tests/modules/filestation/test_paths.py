@@ -1289,6 +1289,8 @@ class TestShownQuotesSentenceMarks:
             # SB=Format is skipped too (pre-QA r3 on #756): U+070F is the one Format character
             # `shown` doesn't already escape.
             "/video/Docs.\u070f Restored 12 items",
+            # The Braille blank draws as a space but isn't SB=Sp (pre-QA r1 on #754).
+            "/video/Docs.\u2800Restored 12 items",
         ],
     )
     def test_shown_quotes_them(self, path: str) -> None:
