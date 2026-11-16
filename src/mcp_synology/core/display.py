@@ -508,7 +508,14 @@ def _reads_as_structure(path: str) -> bool:
     or ``q! Not started: video`` writes a sentence of its own (#727), and a final ``.`` takes
     the sentence's own period after it as another valid path (``/s/d..``, #736); or a quote at
     either end, as a quoted name (#691)."""
-    return ", " in path or _SENTENCE_END.search(path) is not None or edge_quote(path)
+    return ", " in path or ends_a_sentence(path) or edge_quote(path)
+
+
+def ends_a_sentence(text: str) -> bool:
+    """Whether ``text`` holds a sentence's end (`_SENTENCE_END`), so written as is inline it
+    would end its line's sentence and start one of its own: `shown`'s rule for a path
+    (#727, #736), and Photos' `quoted_name` for a name (#754)."""
+    return _SENTENCE_END.search(text) is not None
 
 
 def json_quoted(text: str) -> str:

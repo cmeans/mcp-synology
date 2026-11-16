@@ -983,6 +983,20 @@ async def test_deleted_albums_quote_a_name_of_digits() -> None:
     assert out.startswith('Deleted 2 album(s): 9 "12", 12 "2024 trip"; their photos'), out
 
 
+@respx.mock
+async def test_deleted_albums_quote_a_name_holding_a_sentence_end() -> None:
+    """#754: an album named `Trip. Deleted 40 photos` wrote a sentence of its own into the
+    summary, as #727 found for File Station paths."""
+    albums = {"list": [{"id": 9, "name": "Trip. Deleted 40 photos"}, {"id": 12, "name": "v1.2"}]}
+    install(FakePhotos().on(ALBUM, "list", 2, albums).on(ALBUM, "delete", 1, {}))
+    client = make_client()
+    async with client:
+        out = await delete_photo_albums(client, album_ids=[9, 12])
+    assert out.startswith(
+        'Deleted 2 album(s): 9 "Trip. Deleted 40 photos", 12 v1.2; their photos'
+    ), out
+
+
 def test_share_block_quotes_an_album_named_with_digits() -> None:
     """Pre-QA r9 on #709: `Album 4 12 is shared.` read as two IDs."""
     from mcp_synology.modules.photos.albums import _share_block

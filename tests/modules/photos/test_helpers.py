@@ -9,7 +9,7 @@ import pytest
 import respx
 from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_synology.core.display import shown
+from mcp_synology.core.display import ends_a_sentence, json_quoted, shown
 from mcp_synology.core.errors import ApiNotFoundError, DsmHttpError, SynologyError
 from mcp_synology.modules.photos.helpers import (
     QUOTES_HINT,
@@ -677,6 +677,29 @@ class TestQuotedNamesAndFolders:
         assert quoted_name("\u300cAnn\u300d") == '"\u300cAnn\u300d"'
         assert quoted_name("Jo\u037e Ann") == '"Jo\u037e Ann"'  # NFC makes it "; "
         assert quoted_name("a \u0387 b") == '"a \u0387 b"'  # NFC makes it " · "
+
+    def test_a_name_holding_a_sentence_end_is_quoted(self) -> None:
+        """#754: a name is quoted by `shown`'s sentence-end rule (#727, #756), so an album
+        named `Trip. Deleted 40 photos` can't write a sentence of its own."""
+        for name in (
+            "Trip. Deleted 40 photos",
+            "Trip.",  # a final period would take the line's own after it (#736)
+            "Wow! Shared",
+            "Why? Not",
+            "q!x",  # `!` and `?` anywhere (SB11)
+            "旅。削除",  # a CJK full stop, no space after it
+            "Wait… Deleted",  # an ellipsis
+            "Docs.́ x",  # a combining mark after the period (SB5)
+            "Trip.) Deleted",  # a closing mark after it
+            "St. Louis",
+        ):
+            assert quoted_name(name) == json_quoted(name), name
+            assert quoted_name(name) != name, name
+        for plain in ("v1.2", "IMG_2024.JPG", ".hidden", "41.88", "F1.5", "a.b c"):
+            assert quoted_name(plain) == plain, plain
+        # The same rule as a path's, not a copy of it (one function, #754).
+        for text in ("Trip. x", "Trip.", "v1.2", "q!x", "a.b"):
+            assert (quoted_name(text) != text) == ends_a_sentence(text), text
 
     def test_a_folder_is_quoted_only_when_it_holds_what_follows_it(self) -> None:
         assert shown_folder("/Trips/2024") == "/Trips/2024"
