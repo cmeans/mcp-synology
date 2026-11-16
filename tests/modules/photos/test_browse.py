@@ -829,6 +829,9 @@ class TestGetPhoto:
         washington = {"address": {"city": "Washington, D.C.", "country": "USA"}}
         assert _location(washington) == '"Washington, D.C.", USA'
         assert _location({"gps": {"latitude": "1, 2", "longitude": 3}}) == '"1, 2", 3'
+        # #754: a part holding a sentence's end is quoted; a coordinate's dot isn't one.
+        louis = {"gps": {"latitude": 38.63, "longitude": -90.2}, "address": {"city": "St. Louis"}}
+        assert _location(louis) == '38.63, -90.2 · "St. Louis"'
 
     @respx.mock
     async def test_favorite_on_191(self) -> None:

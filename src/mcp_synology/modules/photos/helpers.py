@@ -21,7 +21,13 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import httpx
 
-from mcp_synology.core.display import edge_quote, json_quoted, plain_quoted, shown
+from mcp_synology.core.display import (
+    edge_quote,
+    ends_a_sentence,
+    json_quoted,
+    plain_quoted,
+    shown,
+)
 from mcp_synology.core.errors import (
     DsmHttpError,
     DsmReplyError,
@@ -84,6 +90,11 @@ def quoted_name(
 
     - holds what its line puts around a name (``marks``, `_NAME_MARKS` by default, or
       ``also``), checked in NFC too, where U+037E and U+0387 become ``;`` and ``·``;
+    - holds a sentence's end, as `shown` checks a path (`ends_a_sentence`: a ``.`` before a
+      space or at the end, a ``!``, ``?`` or non-ASCII sentence terminal anywhere, an
+      ellipsis; #754), so an
+      album named ``Trip. Deleted 40 photos`` can't write a sentence of its own, as #727
+      found for File Station paths;
     - holds a character JSON escapes (a quote, a backslash, one that draws nothing);
     - has whitespace at an end, starts or ends with any quote mark `shown` counts
       (`edge_quote`: Unicode's Quotation_Mark characters and a few look-alikes, #711, and a
@@ -109,6 +120,9 @@ def quoted_name(
         or text.startswith("(")
         or text.endswith(":")
         or any(m in text or m in nfc for m in (*marks, *also))
+        # Raw text only: no character's NFC form changes the answer (checked over every
+        # code point, alone and between letters, for #754).
+        or ends_a_sentence(text)
         # Any digit, not only ASCII: `9 ５ Trip` reads as IDs too (QA r7).
         or (beside_id and text[:1].isdigit())
     )

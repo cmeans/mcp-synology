@@ -483,10 +483,11 @@ def shown(path: str) -> str:
 
 # Where a sentence ends inside a path, built on Unicode's sentence breaks (UAX #29;
 # Sentence_Terminal: `.`, `!`, `?` and 169 more). A terminal, any closing marks (`)`, a
-# quote), then a space or the path's end; marks and format characters after the terminal or
-# a closing mark are skipped, as rule SB5 skips them, so `Docs.<U+0301> x` counts (QA r1 on
-# #756). Every terminal but ASCII `.` counts anywhere: CJK full stops (`。`, `．`) end a
-# sentence with no space after them, and so does `!` or `?` (`q!Not started`; SB11). Four
+# quote), then a space (or the Braille blank, below) or the path's end; marks and format
+# characters after the terminal or a closing mark are skipped, as rule SB5 skips them, so
+# `Docs.<U+0301> x` counts (QA r1 on #756). Every terminal but ASCII `.` counts anywhere:
+# CJK full stops (`。`, `．`) end a sentence with no space after them, and so does `!` or `?`
+# (`q!Not started`; SB11). Four
 # ellipsis characters (`…` U+2026, `‥` U+2025, midline `⋯` U+22EF, vertical U+FE19) aren't
 # Sentence_Terminal, but a reader takes `Wait… Not started: x` as two sentences, so they count
 # like `.` (pre-QA r2, QA r1 on #756). Built on UAX #29's classes, not its exact breaks: it
@@ -497,7 +498,9 @@ def shown(path: str) -> str:
 _SKIPPED = r"[\p{SB=Extend}\p{SB=Format}]*"
 _SENTENCE_END = regex.compile(
     rf"[\p{{Sentence_Terminal}}\u2025\u2026\u22ef\ufe19]{_SKIPPED}"
-    rf"(?:\p{{SB=Close}}{_SKIPPED})*(?:[\p{{SB=Sp}}\p{{SB=Sep}}]|\Z)"
+    # The Braille blank draws as a space but isn't SB=Sp, so `Trip.<U+2800>Deleted` read as
+    # two sentences (pre-QA r1 on #754).
+    rf"(?:\p{{SB=Close}}{_SKIPPED})*(?:[\p{{SB=Sp}}\p{{SB=Sep}}\u2800]|\Z)"
     r"|(?!\.)\p{Sentence_Terminal}"
 )
 
@@ -508,7 +511,14 @@ def _reads_as_structure(path: str) -> bool:
     or ``q! Not started: video`` writes a sentence of its own (#727), and a final ``.`` takes
     the sentence's own period after it as another valid path (``/s/d..``, #736); or a quote at
     either end, as a quoted name (#691)."""
-    return ", " in path or _SENTENCE_END.search(path) is not None or edge_quote(path)
+    return ", " in path or ends_a_sentence(path) or edge_quote(path)
+
+
+def ends_a_sentence(text: str) -> bool:
+    """Whether ``text`` holds a sentence's end (`_SENTENCE_END`), so written as is inline it
+    would end its line's sentence and start one of its own: `shown`'s rule for a path
+    (#727, #736), and Photos' `quoted_name` for a name (#754)."""
+    return _SENTENCE_END.search(text) is not None
 
 
 def json_quoted(text: str) -> str:
