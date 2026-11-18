@@ -594,17 +594,21 @@ def error_from_code(code: int, api_name: str = "", errors: object = None) -> Syn
     if "FileStation" in api_name and code in FILESTATION_ERROR_CODES:
         message, suggestion = FILESTATION_ERROR_CODES[code]
         # A wrapper code's cause, when DSM sent one, is named and its advice used; the
-        # error keeps the wrapper's code and type, which its callers test (#726, #749).
+        # error keeps the wrapper's DSM code and Python type, which its callers test
+        # (#726, #749).
         cause = filestation_cause(errors) if code in WRAPPER_CODES else None
         if cause is not None:
             inner, suggestion = FILESTATION_ERROR_CODES[cause]
             message = f"{message}: {inner} (DSM error {cause})"
             error = _filestation_error(code, message, suggestion)
             error.cause = cause
-            # The cause's advice, so its flag too: a busy cause says to wait and retry
-            # (pre-QA r1 on #749: it was told that beside retryable false). Set on the
-            # instance, after `_filestation_error` built the wrapper's own type.
+            # The cause's advice, so its flag and its envelope code too: a busy cause says
+            # to wait and retry (pre-QA r1 on #749: it was told that beside retryable
+            # false), and a 416 inside a 1100 is `disk_full`, with its help link, not
+            # `filestation_error` (#752). Set on the instance, after `_filestation_error`
+            # built the wrapper's own type.
             error.retryable = cause in _BUSY_CODES
+            error.error_code = _filestation_error(cause, message, suggestion).error_code
             return error
         return _filestation_error(code, message, suggestion)
 
