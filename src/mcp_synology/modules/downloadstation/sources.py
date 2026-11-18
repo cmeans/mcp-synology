@@ -260,6 +260,22 @@ def _normalized_host(host: str) -> str:
     return ".".join(labels).lower().rstrip(".")
 
 
+def _as_ipv4(ip: object) -> object:
+    """``ip`` as the IPv4 address it reaches: an IPv6 one carrying one (mapped, compatible,
+    translated, 6to4, Teredo, NAT64) is that IPv4 address; anything else is itself."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        inner = _embedded_v4(ip)
+        if inner is not None:
+            return inner
+    return ip
+
+
+def _same_address(ip: object, nas_ip: object) -> bool:
+    """Whether ``ip`` reaches the NAS's configured address: `[::ffff:8.8.8.8]` is 8.8.8.8
+    (QA r1 on #766)."""
+    return nas_ip is not None and (ip == nas_ip or _as_ipv4(ip) == _as_ipv4(nas_ip))
+
+
 def _check_host(host: str, nas: tuple[str, object] | None) -> None:
     """Refuse ``host`` when it's local, or the NAS's own host."""
     name = _normalized_host(host)
@@ -268,7 +284,7 @@ def _check_host(host: str, nas: tuple[str, object] | None) -> None:
     ip = _ip(name)
     if nas is not None:
         nas_name, nas_ip = nas
-        if name == nas_name or (ip is not None and ip == nas_ip):
+        if name == nas_name or (ip is not None and _same_address(ip, nas_ip)):
             raise _RefusedError("names the NAS itself")
     if ip is not None:
         kind = _ip_kind(ip)
@@ -298,6 +314,8 @@ def _host_port(text: str, nas: tuple[str, object] | None) -> None:
 def _unwrap(scheme: str, body: str) -> str:
     """The URL inside a `thunder://`, `flashget://` or `qqdl://` link's base64 body."""
     body = unquote(body).split("&", 1)[0].strip().rstrip("/")
+    if not body:  # `thunder://` with nothing wrapped
+        raise _cant_read("is a wrapped link with no URL in it")
     try:
         padded = body + "=" * (-len(body) % 4)
         decoded = base64.b64decode(padded.replace("-", "+").replace("_", "/"), validate=True)
@@ -315,6 +333,12 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
     if depth > _MAX_DEPTH:
         raise _cant_read("wraps links too deeply to read")
     stripped = uri.strip()
+    # Each whitespace-separated piece too, at every level (a wrapped link's URL, a magnet's
+    # tracker), in case a client splits a URI there. DSM 7.4.1 doesn't (QA r1 on #766).
+    pieces = stripped.split()
+    if len(pieces) > 1:
+        for piece in pieces:
+            _check_uri(piece, nas, depth)
     scheme, sep, rest = stripped.partition(":")
     scheme = scheme.lower()
     if not sep:
@@ -420,14 +444,10 @@ def refuse_local_sources(
         # are kept: they're split on below, each piece checked.
         if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in uri):
             _refuse(index, len(uris), _cant_read("holds a control character"))
-        # The whole URI, then each whitespace-separated piece of it, in case DSM splits a
-        # URI on a newline or space as its own paste box does.
-        pieces = uri.split()
-        for piece in [uri, *(pieces if len(pieces) > 1 else [])]:
-            try:
-                _check_uri(piece, nas)
-            except _RefusedError as e:
-                _refuse(index, len(uris), e)
+        try:
+            _check_uri(uri, nas)
+        except _RefusedError as e:
+            _refuse(index, len(uris), e)
 
 
 def _refuse(index: int, total: int, e: _RefusedError) -> NoReturn:

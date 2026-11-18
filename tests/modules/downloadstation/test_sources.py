@@ -198,6 +198,13 @@ REFUSED: list[tuple[str, str]] = [
     ("magnet:?xt=urn:btih:abc&dht=127.0.0.1:6881", "tracker, seed or peer"),
     # A percent-encoded ed2k link.
     ("ed2k://%7Cserver%7C127.0.0.1%7C4661%7C/", "loopback"),
+    # QA r1 on #766: whitespace inside a wrapped URL or a tracker, and an empty wrap.
+    (_thunder("http://example.com/\nhttp://127.0.0.1/"), "wraps a URL that names a loopback"),
+    (_qqdl("http://example.com/ http://127.0.0.1/"), "wraps a URL that names a loopback"),
+    (_flashget("http://example.com/\thttp://127.0.0.1/"), "wraps a URL that names a loopback"),
+    ("magnet:?xt=a&tr=http://example.com/%20http://127.0.0.1/", "tracker, seed or peer"),
+    ("thunder://", "no URL in it"),
+    ("qqdl://", "no URL in it"),
     # A percent-encoded wrapped body.
     ("thunder://" + _b64("AAhttp://127.0.0.1:5/ZZ").replace("=", "%3D"), "wraps a URL"),
 ]
@@ -267,6 +274,14 @@ def test_the_setting_lets_every_source_through(uri: str, phrase: str) -> None:
         ("192.168.1.20", "http://192.168.1.20/"),
         ("8.8.8.8", "http://8.8.8.8/"),
         ("8.8.8.8", "http://134744072/"),
+        # QA r1 on #766: an IPv6 spelling carrying the NAS's IPv4 address.
+        ("8.8.8.8", "http://[::ffff:8.8.8.8]/"),
+        ("8.8.8.8", "http://[::ffff:808:808]/"),
+        ("8.8.8.8", "http://[::8.8.8.8]/"),
+        ("8.8.8.8", "http://[64:ff9b::808:808]/"),
+        ("8.8.8.8", "http://[::ffff:0:808:808]/"),
+        ("8.8.8.8", "magnet:?xt=urn:btih:abc&tr=http://[::ffff:8.8.8.8]/"),
+        ("::ffff:8.8.8.8", "http://8.8.8.8/"),
         ("seska.example.me", "https://SESKA.example.me:5001/"),
         ("2001:db8::5", "http://[2001:db8:0::5]/"),
     ],
