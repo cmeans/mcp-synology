@@ -17,18 +17,25 @@ addresses by default the same way):
   globally routable: loopback, private, link-local, CGNAT `100.64/10`, unspecified,
   reserved, multicast, IPv6 unique-local;
 - a name that only a local network answers: `localhost` and `*.localhost`, a name with
-  no dot, `*.local`, `*.internal`, `*.home.arpa`;
-- the NAS's own host from the config (`connection.host`), however it's reached;
+  no dot, `*.local`, `*.internal`, `*.home.arpa`, and the private names RFC 6762
+  Appendix G lists (`*.lan`, `*.home`, `*.corp`, `*.private`, `*.intranet`) with
+  `*.localdomain`;
+- the NAS's own host from the config (`connection.host`), by that name or address;
 - the same inside a magnet link (its trackers, web seeds, sources and peers: `tr`, `ws`,
-  `xs`, `as`, `x.pe`), an ed2k link's servers and sources, and a `thunder://`,
-  `flashget://` or `qqdl://` link's wrapped URL, which Download Station unwraps;
-- a URI with a `//` but no host this can read, or a wrapped link that doesn't decode:
-  refused rather than guessed at.
+  `xs`, `as`, `x.pe`, each with any `.` suffix), an ed2k link's servers, sources and
+  every URL in it, and a `thunder://`, `flashget://` or `qqdl://` link's wrapped URL;
+- a fetching scheme (`http`, `https`, `ftp`, `ftps`, `sftp`) written with one slash, none
+  or backslashes (`http:/127.0.0.1`, `http:\\127.0.0.1`), read as curl and WHATWG
+  parsers read it, as `scheme://`;
+- each whitespace-separated piece of a URI, in case DSM splits on it;
+- a URI with no host this can read, or a wrapped link that doesn't decode: refused as
+  one that can't be checked, rather than guessed at.
 
 Not stoppable here (the docs say so): a public name whose DNS answers with an internal
-address, and a public server that redirects to one. Only the NAS's own firewall covers
-those. Scheme-less text and schemes Download Station doesn't take (`file:`, `gopher:`,
-`smb:`, `data:`) are left to DSM, which refuses them with 1901.
+address, a public server that redirects to one, and the trackers and web seeds inside a
+`.torrent` file (`torrent_file_path`). Scheme-less text and schemes Download Station
+doesn't take (`file:`, `gopher:`, `smb:`, `data:`) are left to DSM, which refuses them
+with 1901.
 
 A refusal never quotes the URI or its host: create_download's ``uri`` is exempt from the
 check for characters that could forge a reply line (#604), so it's never echoed. It
@@ -50,10 +57,27 @@ from mcp_synology.core.formatting import error_response
 
 # Names only a local network answers (RFC 6761 `localhost`, RFC 6762 `.local`, RFC 8375
 # `.home.arpa`, ICANN's reserved `.internal`); a name with no dot is refused too.
-_LOCAL_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa")
+# RFC 6762 Appendix G's private names and `.localdomain` (`localhost.localdomain`) too.
+_LOCAL_SUFFIXES = (
+    ".localhost",
+    ".local",
+    ".internal",
+    ".home.arpa",
+    ".localdomain",
+    ".lan",
+    ".home",
+    ".corp",
+    ".private",
+    ".intranet",
+)
+_LOCAL_NAMES = frozenset({"localhost", *(s[1:] for s in _LOCAL_SUFFIXES)})
+
+# Schemes Download Station fetches by host: written with one slash, none or backslashes,
+# they're still read as `scheme://host` (curl rewrites `http:/h` to `http://h`).
+_FETCH_SCHEMES = frozenset({"http", "https", "ftp", "ftps", "sftp"})
 
 # Magnet parameters naming a server the NAS would contact (BEP 9, BEP 19 and the magnet
-# URI scheme's `xs`/`as`/`x.pe`), each also with a `.N` suffix (`tr.1`).
+# URI scheme's `xs`/`as`/`x.pe`), each also with any `.` suffix (`tr.1`, `tr.x`).
 _MAGNET_SOURCE_KEYS = frozenset({"tr", "ws", "xs", "as", "x.pe"})
 
 _WRAPPED = ("thunder", "flashget", "qqdl")
@@ -62,6 +86,12 @@ _FLASHGET_MARK = "[FLASHGET]"
 # ed2k: `ed2k://|server|<host>|<port>|/` and `|sources,<host>:<port>,...|` in a file link.
 _ED2K_SERVER = re.compile(r"\|server\|([^|]*)\|", re.IGNORECASE)
 _ED2K_SOURCES = re.compile(r"\|sources,([^|]*)", re.IGNORECASE)
+# Any URL inside an ed2k link (`|serverlist|<url>|`, `|nodeslist|<url>|`).
+_ED2K_URL = re.compile(r"[a-z][a-z0-9+.-]*:[^|]*", re.IGNORECASE)
+
+# A deprecated IPv6 site-local range (RFC 3879) that Python counts as global.
+_SITE_LOCAL = ipaddress.IPv6Network("fec0::/10")
+
 
 # How deep wrapped links may nest (`thunder://` of a `qqdl://` of a URL) before the URI is
 # refused as unreadable.
@@ -77,9 +107,14 @@ _SETTING_HINT = (
 class _RefusedError(Exception):
     """A source the check refuses: ``what`` says why, without quoting it."""
 
-    def __init__(self, what: str) -> None:
+    def __init__(self, what: str, *, unreadable: bool = False) -> None:
         super().__init__(what)
         self.what = what
+        self.unreadable = unreadable
+
+
+def _cant_read(what: str) -> _RefusedError:
+    return _RefusedError(what, unreadable=True)
 
 
 _PRIVATE = "an address on a local or private network"
@@ -166,6 +201,8 @@ def _own_kind(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
         return "a link-local address (such as a cloud metadata service)"
     if ip.is_multicast:
         return "a multicast address"
+    if isinstance(ip, ipaddress.IPv6Address) and ip in _SITE_LOCAL:
+        return _PRIVATE
     if not ip.is_global:
         return _PRIVATE
     return None
@@ -185,7 +222,7 @@ def _check_host(host: str, nas: tuple[str, object] | None) -> None:
     """Refuse ``host`` when it's local, or the NAS's own host."""
     name = _normalized_host(host)
     if not name:
-        raise _RefusedError("has no host this server can read")
+        raise _cant_read("has no host this server can read")
     ip = _ip(name)
     if nas is not None:
         nas_name, nas_ip = nas
@@ -197,8 +234,8 @@ def _check_host(host: str, nas: tuple[str, object] | None) -> None:
             raise _RefusedError(f"names {kind}")
         return
     if ":" in name:  # an IPv6-looking host that didn't parse
-        raise _RefusedError("has no host this server can read")
-    if name == "localhost" or name.endswith(_LOCAL_SUFFIXES):
+        raise _cant_read("has no host this server can read")
+    if name in _LOCAL_NAMES or name.endswith(_LOCAL_SUFFIXES):
         raise _RefusedError("names a host only a local network answers")
     if "." not in name:
         raise _RefusedError("names a host with no domain, which only a local network answers")
@@ -224,7 +261,7 @@ def _unwrap(scheme: str, body: str) -> str:
         decoded = base64.b64decode(padded.replace("-", "+").replace("_", "/"), validate=True)
         text = decoded.decode("utf-8")
     except (binascii.Error, ValueError, UnicodeDecodeError) as e:
-        raise _RefusedError("is a wrapped link whose URL can't be read") from e
+        raise _cant_read("is a wrapped link whose URL can't be read") from e
     if scheme == "thunder" and text.startswith("AA") and text.endswith("ZZ"):
         text = text[2:-2]
     elif scheme == "flashget" and text.startswith(_FLASHGET_MARK) and text.endswith(_FLASHGET_MARK):
@@ -234,7 +271,7 @@ def _unwrap(scheme: str, body: str) -> str:
 
 def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None:
     if depth > _MAX_DEPTH:
-        raise _RefusedError("wraps links too deeply to read")
+        raise _cant_read("wraps links too deeply to read")
     stripped = uri.strip()
     scheme, sep, rest = stripped.partition(":")
     scheme = scheme.lower()
@@ -244,11 +281,15 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
             _check_uri(unquote(stripped), nas, depth + 1)
         return  # no scheme: DSM refuses it (1901)
     if scheme == "magnet":
-        query = rest.split("?", 1)[1] if "?" in rest else ""
-        for key, value in parse_qsl(query, keep_blank_values=True):
-            base = key.lower()
-            base = re.sub(r"\.\d+$", "", base)
-            if base not in _MAGNET_SOURCE_KEYS or not value:
+        # With or without the `?`, `&` or `;` between parameters.
+        query = rest.split("?", 1)[1] if "?" in rest else rest
+        for key, value in parse_qsl(query.replace(";", "&"), keep_blank_values=True):
+            name = key.strip().lower()
+            base = next(
+                (k for k in _MAGNET_SOURCE_KEYS if name == k or name.startswith(k + ".")),
+                None,
+            )
+            if base is None or not value:
                 continue
             try:
                 if base == "x.pe":
@@ -256,7 +297,9 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
                 else:
                     _check_uri(value, nas, depth + 1)
             except _RefusedError as e:
-                raise _RefusedError(f"has a tracker, seed or peer that {e.what}") from e
+                raise _RefusedError(
+                    f"has a tracker, seed or peer that {e.what}", unreadable=e.unreadable
+                ) from e
         return
     if scheme in _WRAPPED:
         body = rest[2:] if rest.startswith("//") else rest
@@ -265,7 +308,7 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
         except _RefusedError as e:
             if e.what.startswith("is a wrapped link") or e.what.startswith("wraps"):
                 raise
-            raise _RefusedError(f"wraps a URL that {e.what}") from e
+            raise _RefusedError(f"wraps a URL that {e.what}", unreadable=e.unreadable) from e
         return
     if scheme == "ed2k":
         for host in _ED2K_SERVER.findall(rest):
@@ -274,18 +317,27 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
             for source in group.split(","):
                 if source.strip():
                     _host_port(source, nas)
+        for url in _ED2K_URL.findall(rest):
+            _check_uri(url, nas, depth + 1)
         return
-    if not rest.startswith("//"):
+    if scheme in _FETCH_SCHEMES:
+        # `http:/h`, `http:h` and `http:\\h` are fetched as `http://h` (curl rewrites them;
+        # WHATWG reads `\\` as `/`). Both readings of a `\\` are checked: RFC 3986's, where
+        # `http://a\\@b/` is host b, and WHATWG's, where it's host a.
+        readings = [
+            f"{scheme}://" + rest.lstrip("/\\"),
+            f"{scheme}://" + rest.replace("\\", "/").lstrip("/"),
+        ]
+    elif rest.startswith(("//", "\\")):
+        readings = [stripped, stripped.replace("\\", "/")]
+    else:
         return  # `mailto:`-style: no host to fetch; DSM refuses what it can't use
-    try:
-        parts = urlsplit(stripped)
-        host = parts.hostname
-    except ValueError as e:  # an unclosed `[` or a bad IPv6 literal
-        raise _RefusedError("has no host this server can read") from e
-    _check_host(host or "", nas)
-    # A `\` reads as `/` to many URL parsers (WHATWG): check what such a parser sees too.
-    if "\\" in parts.netloc:
-        _check_host(parts.netloc.replace("\\", "/").split("/", 1)[0].rsplit("@", 1)[-1], nas)
+    for reading in dict.fromkeys(readings):
+        try:
+            host = urlsplit(reading).hostname
+        except ValueError as e:  # an unclosed `[` or a bad IPv6 literal
+            raise _cant_read("has no host this server can read") from e
+        _check_host(host or "", nas)
 
 
 def nas_identity(nas_host: str | None) -> tuple[str, object] | None:
@@ -308,18 +360,35 @@ def refuse_local_sources(
         return
     nas = nas_identity(nas_host)
     for index, uri in enumerate(uris, start=1):
-        try:
-            _check_uri(uri, nas)
-        except _RefusedError as e:
-            _refuse(index, len(uris), e.what)
+        # The whole URI, then each whitespace-separated piece of it, in case DSM splits a
+        # URI on a newline or space as its own paste box does.
+        pieces = uri.split()
+        for piece in [uri, *(pieces if len(pieces) > 1 else [])]:
+            try:
+                _check_uri(piece, nas)
+            except _RefusedError as e:
+                _refuse(index, len(uris), e)
 
 
-def _refuse(index: int, total: int, what: str) -> NoReturn:
-    which = "The URI" if total == 1 else f"URI {index} of {total}"
+def _refuse(index: int, total: int, e: _RefusedError) -> NoReturn:
+    which = "the URI" if total == 1 else f"URI {index} of {total}"
+    if e.unreadable:
+        error_response(
+            ErrorCode.INVALID_PARAMETER,
+            f"Create download refused: {which} {e.what}, so it can't be checked for an "
+            "address on the NAS or its local network and isn't sent. Nothing was created.",
+            retryable=False,
+            param="uri",
+            suggestion=(
+                "Check the link: write it as scheme://host/path (or a magnet link). A "
+                "wrapped thunder://, flashget:// or qqdl:// link can be passed as the URL "
+                "it wraps."
+            ),
+        )
     error_response(
         ErrorCode.INVALID_PARAMETER,
-        f"Create download refused: {which} {what}. Download Station fetches each source "
-        "from the NAS, so a source on the NAS itself or its local network isn't sent. "
+        f"Create download refused: {which} {e.what}. Download Station fetches each URI "
+        "from the NAS, so a URI on the NAS itself or its local network isn't sent. "
         "Nothing was created.",
         retryable=False,
         param="uri",

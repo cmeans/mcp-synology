@@ -116,9 +116,45 @@ REFUSED: list[tuple[str, str]] = [
     # What can't be read is refused, not guessed at.
     ("thunder://!!!not-base64!!!", "can't be read"),
     ("thunder://" + base64.b64encode(b"\xff\xfe").decode(), "can't be read"),
-    ("http:///no-host", "no host"),
+    ("http:///no-host", "no domain"),  # read as http://no-host, as curl does
+    ("http://", "no host"),
     ("http://[::1/", "no host"),
     ("file:///etc/passwd", "no host"),
+    # Pre-QA r1 on #648: what curl and WHATWG parsers read as `scheme://host`.
+    ("http:/127.0.0.1:5000/", "loopback"),
+    ("http:127.0.0.1:5000/", "loopback"),
+    ("ftp:/127.0.0.1/", "loopback"),
+    ("http:\\\\127.0.0.1\\", "loopback"),
+    ("HTTPS:\\/127.0.0.1/", "loopback"),
+    (_thunder("http:/127.0.0.1:5000/"), "wraps a URL that names a loopback"),
+    # A URI DSM might split on whitespace.
+    ("https://example.com/x\nhttp://127.0.0.1:5000/", "loopback"),
+    ("https://example.com/x http://127.0.0.1:5000/", "loopback"),
+    ("https://example.com/x\thttp://localhost/", "only a local network answers"),
+    # More magnet forms.
+    ("magnet:?xt=urn:btih:abc&tr.x=udp://127.0.0.1:1", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr.=udp://127.0.0.1:1", "tracker, seed or peer"),
+    ("magnet:xt=urn:btih:abc&tr=udp://127.0.0.1:1", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc;tr=udp://127.0.0.1:1", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&TR=udp://127.0.0.1:1", "tracker, seed or peer"),
+    # Every URL inside an ed2k link.
+    ("ed2k://|serverlist|http://127.0.0.1:5000/server.met|/", "loopback"),
+    ("ed2k://|nodeslist|http://10.0.0.1/nodes.dat|/", "local or private"),
+    # More local names.
+    ("http://localhost.localdomain/", "only a local network answers"),
+    ("http://router.lan/", "only a local network answers"),
+    ("http://nas.home/", "only a local network answers"),
+    ("http://x.corp/", "only a local network answers"),
+    ("http://x.private/", "only a local network answers"),
+    ("http://x.intranet/", "only a local network answers"),
+    ("http://a.ｌｏｃａｌ/", "only a local network answers"),
+    # IPv6 forms that carry or are a local address.
+    ("http://[::127.0.0.1]/", "loopback"),
+    ("http://[2001:0:4136:e378:8000:63bf:80ff:fffe]/", "loopback"),
+    ("http://[fec0::1]/", "local or private"),
+    ("magnet:?xt=urn:btih:abc&x.pe=[fd00::1]:6881", "tracker, seed or peer"),
+    # A percent-encoded wrapped body.
+    ("thunder://" + _b64("AAhttp://127.0.0.1/ZZ").replace("=", "%3D"), "wraps a URL"),
 ]
 
 ALLOWED: list[str] = [
@@ -139,6 +175,11 @@ ALLOWED: list[str] = [
     "data:text/plain,hi",
     # A local-looking name only inside a public URL's path or query.
     "https://example.org/localhost/127.0.0.1?next=http://10.0.0.1/",
+    "https:/example.org/a.iso",
+    "https://example.org/my file.iso",
+    "magnet:?xt=urn:btih:abc&dn=Movie: Part 1",
+    "ed2k://|file|Movie: Part 1.mkv|100|0123456789abcdef0123456789abcdef|/",
+    "http://[2001:db8:85a3::8a2e:370:7334]/".replace("2001:db8", "2a00:1450"),
 ]
 
 
@@ -151,7 +192,10 @@ def test_a_local_source_is_refused(uri: str, phrase: str) -> None:
     assert error["param"] == "uri"
     assert error["retryable"] is False
     assert phrase in error["message"]
-    assert "allow_local_addresses" in error["suggestion"]
+    if "can't be checked" in error["message"]:
+        assert "scheme://host" in error["suggestion"]
+    else:
+        assert "allow_local_addresses" in error["suggestion"]
 
 
 @pytest.mark.parametrize("uri", ALLOWED)
@@ -202,8 +246,30 @@ def test_the_refusal_names_the_uri_by_position_and_never_quotes_it() -> None:
 
 
 def test_a_single_uri_is_the_uri() -> None:
-    with pytest.raises(ToolError, match="The URI names a loopback"):
+    with pytest.raises(ToolError, match="refused: the URI names a loopback"):
         refuse_local_sources(["http://127.0.0.1/"], nas_host=None, allow_local_addresses=False)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    ["http://", "http://[::1/", "thunder://!!!not-base64!!!", "magnet:?xt=a&tr=http://[x"],
+)
+def test_an_unreadable_uri_is_refused_as_one_that_cant_be_checked(uri: str) -> None:
+    """The setting would skip every check, so it isn't offered for a link that's unreadable."""
+    with pytest.raises(ToolError) as exc:
+        refuse_local_sources([uri], nas_host=None, allow_local_addresses=False)
+    error = json.loads(str(exc.value))["error"]
+    assert "can't be checked" in error["message"]
+    assert "allow_local_addresses" not in error["suggestion"]
+    assert "scheme://host" in error["suggestion"]
+
+
+def test_a_local_address_is_refused_as_one() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_local_sources(["http://127.0.0.1/"], nas_host=None, allow_local_addresses=False)
+    message = json.loads(str(exc.value))["error"]["message"]
+    assert "can't be checked" not in message
+    assert "a URI on the NAS itself or its local network isn't sent" in message
 
 
 def test_deeply_nested_wraps_are_refused() -> None:
