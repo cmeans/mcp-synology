@@ -348,14 +348,17 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
     if len(pieces) > 1:
         for piece in pieces:
             _check_uri(piece, nas, depth)
+    if stripped.startswith(("//", "\\\\")) or stripped.startswith("/\\"):
+        # Scheme-relative (`//127.0.0.1:5000/x`, `\\h`, `///h`): checked as `http://`,
+        # before a port's `:` could be read as the end of a scheme (QA r2 on #766).
+        _check_uri("http://" + stripped.replace("\\", "/").lstrip("/"), nas, depth + 1)
+        return
     scheme, sep, rest = stripped.partition(":")
     scheme = scheme.lower()
     if not sep:
         if "%" in stripped and unquote(stripped) != stripped:
             # `thunder%3A%2F%2F…`: a percent-encoded link is checked as it decodes.
             _check_uri(unquote(stripped), nas, depth + 1)
-        elif stripped.startswith("//"):  # scheme-relative: checked as http://
-            _check_uri("http:" + stripped, nas, depth + 1)
         return  # no scheme: DSM refuses it (1901)
     if scheme == "magnet":
         # With or without the `?`, `&` or `;` between parameters.

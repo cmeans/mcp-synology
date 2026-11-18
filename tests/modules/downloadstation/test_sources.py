@@ -216,6 +216,13 @@ REFUSED: list[tuple[str, str]] = [
     ("127.0.0.1:5000/x", "loopback"),
     ("localhost:5000", "only a local network answers"),
     ("//127.0.0.1/x", "loopback"),
+    # QA r2 on #766: scheme-relative with a port, whose `:` read as a scheme's end.
+    ("//127.0.0.1:5000/x", "loopback"),
+    ("//localhost:6969", "only a local network answers"),
+    ("//[::1]:5000/", "loopback"),
+    ("\\\\127.0.0.1:5000/", "loopback"),
+    ("///127.0.0.1:5000/", "loopback"),
+    ("//user@127.0.0.1:5000/", "loopback"),
     ("http://a\ue000.example/", "can't be read"),
     ("ed2k://|server|[::1]|4661|/", "loopback"),
     ("magnet:?xt=urn:btih:abc&x.pe=10.0.0.1", "peer that names an address on a local"),
