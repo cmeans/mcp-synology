@@ -805,12 +805,12 @@ class TestRename:
         with pytest.raises(ToolError) as exc_info:
             await rename(mock_client, path="/video/a", new_name="a")
         error = json.loads(str(exc_info.value))["error"]
-        # Not called taken by another item: that's `_rename_taken`'s refusal.
+        # Never `already_exists` for its own name (#188): that help says to delete the
+        # existing target, the item itself (pre-QA r1 on #752, which made a cause's code
+        # the envelope's).
+        assert error["code"] == "filestation_error"
+        assert error["help_url"].endswith("#filestation_error")
         assert "Rename doesn't replace" not in error["message"]
-        assert "Pick another name" not in error.get("suggestion", "")
-        # DSM's cause, 414, is named, and since #752 the envelope code is the cause's.
-        assert "(DSM error 414)" in error["message"]
-        assert error["code"] == "already_exists"
 
     @respx.mock
     @pytest.mark.parametrize(

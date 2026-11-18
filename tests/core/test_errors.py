@@ -242,11 +242,12 @@ class TestFileStationCause:
     @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
     @pytest.mark.parametrize(
         "cause",
-        sorted(c for c in FILESTATION_ERROR_CODES if c < 900),
+        sorted(c for c in FILESTATION_ERROR_CODES if c < 500),
     )
     def test_the_envelope_code_is_the_causes(self, wrapper: int, cause: int) -> None:
         """#752: a 416 inside a 1100 is `disk_full`, as a bare 416 is, with its help link;
-        the DSM code and the Python type stay the wrapper's, which callers test."""
+        the DSM code and the Python type stay the wrapper's, which callers test. Causes are
+        the codes `filestation_cause` takes (below 500; 599 and 600 aren't causes)."""
         wrapped = error_from_code(wrapper, "SYNO.FileStation.CopyMove", [{"code": cause}])
         bare = error_from_code(cause, "SYNO.FileStation.CopyMove")
         plain = error_from_code(wrapper, "SYNO.FileStation.CopyMove")
