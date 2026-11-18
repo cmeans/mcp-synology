@@ -260,7 +260,7 @@ class TestCreateFolderPartWay:
             await create_folder(mock_client, paths=["/video/p/x"], force_parent=force_parent)
         error = json.loads(str(exc_info.value))["error"]
         if force_parent:
-            assert error["code"] == "filestation_error", error
+            assert error["code"] == "not_found", error  # the cause's code since #752
             assert error["message"].endswith("No such file or directory (DSM error 408)"), error
             return
         assert error["code"] == "not_found", error
@@ -804,7 +804,13 @@ class TestRename:
         )
         with pytest.raises(ToolError) as exc_info:
             await rename(mock_client, path="/video/a", new_name="a")
-        assert json.loads(str(exc_info.value))["error"]["code"] != "already_exists"
+        error = json.loads(str(exc_info.value))["error"]
+        # Never `already_exists` for its own name (#188): that help says to delete the
+        # existing target, the item itself (pre-QA r1 on #752, which made a cause's code
+        # the envelope's).
+        assert error["code"] == "filestation_error"
+        assert error["help_url"].endswith("#filestation_error")
+        assert "Rename doesn't replace" not in error["message"]
 
     @respx.mock
     @pytest.mark.parametrize(

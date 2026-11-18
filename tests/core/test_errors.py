@@ -1,5 +1,6 @@
 """Tests for core/errors.py — exception hierarchy and error_from_code factory."""
 
+import json
 import re
 
 import pytest
@@ -187,7 +188,7 @@ class TestFileStationRetryableAgreesWithItsAdvice:
 class TestFileStationCause:
     """#726, #749: a wrapper code's cause in DSM's ``errors`` (CreateFolder 1100 and Rename
     1200 with 414 inside, vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1) is named, and the error keeps the
-    wrapper's code and type."""
+    wrapper's DSM code and Python type; since #752 its envelope code is the cause's."""
 
     @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
     def test_a_wrapper_names_its_cause(self, wrapper: int) -> None:
@@ -237,6 +238,47 @@ class TestFileStationCause:
         assert error.suggestion is not None
         says_retry = re.search(r"(?:^|\. )(?:wait and )?retry\b", error.suggestion, re.I)
         assert bool(says_retry) is error.retryable, (wrapper, cause, error.suggestion)
+
+    @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
+    @pytest.mark.parametrize(
+        "cause",
+        sorted(c for c in FILESTATION_ERROR_CODES if c < 500),
+    )
+    def test_the_envelope_code_is_the_causes(self, wrapper: int, cause: int) -> None:
+        """#752: a 416 inside a 1100 is `disk_full`, as a bare 416 is, with its help link;
+        the DSM code and the Python type stay the wrapper's, which callers test. Causes are
+        the codes `filestation_cause` takes (below 500; 599 and 600 aren't causes)."""
+        wrapped = error_from_code(wrapper, "SYNO.FileStation.CopyMove", [{"code": cause}])
+        bare = error_from_code(cause, "SYNO.FileStation.CopyMove")
+        plain = error_from_code(wrapper, "SYNO.FileStation.CopyMove")
+        assert wrapped.error_code == bare.error_code, (wrapper, cause)
+        assert (wrapped.code, type(wrapped)) == (wrapper, type(plain))
+        assert plain.error_code == "filestation_error"
+
+    @pytest.mark.parametrize(
+        ("cause", "code"),
+        [
+            (407, "permission_denied"),
+            (408, "not_found"),
+            (414, "already_exists"),
+            (415, "disk_full"),
+            (416, "disk_full"),
+            (418, "invalid_parameter"),
+        ],
+    )
+    def test_the_envelope_names_the_causes_code_and_help(self, cause: int, code: str) -> None:
+        """#752, through the reply: `code` and `help_url` follow the cause."""
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        from mcp_synology.core.formatting import synology_error_response
+
+        error = error_from_code(1100, "SYNO.FileStation.CreateFolder", [{"code": cause}])
+        with pytest.raises(ToolError) as exc_info:
+            synology_error_response("Create folder", error)
+        envelope = json.loads(str(exc_info.value))["error"]
+        assert envelope["code"] == code
+        assert envelope["help_url"].endswith(f"#{code}")
+        assert f"(DSM error {cause})" in envelope["message"]
 
     def test_errors_for_log_names_codes_and_paths(self) -> None:
         """QA r1 on #751: the DEBUG line read only Photos' name and reason."""

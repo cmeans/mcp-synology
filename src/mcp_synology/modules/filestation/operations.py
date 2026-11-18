@@ -438,6 +438,11 @@ async def rename(
     except SynologyError as e:
         if e.code == 1200:
             await _explain_rename_1200(client, normalized, path, new_name, e.cause)
+            if e.cause == 414 and e.error_code == ErrorCode.ALREADY_EXISTS:
+                # Its own name, or a share root: never called taken (#188). The cause's
+                # `already_exists` (#752) would send a model to its help, which says to
+                # delete the existing target: here, the item itself (pre-QA r1 on #752).
+                e.error_code = ErrorCode.FILESTATION_ERROR
         synology_error_response("Rename", e)
 
     files = data.get("files", [])
