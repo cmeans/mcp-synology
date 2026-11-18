@@ -93,6 +93,11 @@ code — fix the underlying credential or 2FA state before re-running.
 **The account authenticated but DSM rejected the operation (DSM error 105, or File
 Station's 407, "Operation not permitted").**
 
+From File Station, this can also arrive inside a wrapper code (900, 1000, 1001,
+1002, 1100 or 1200) whose reply named the cause: the message then holds two DSM
+codes, `(DSM error 1100): … (DSM error 407)`, and the second, the cause, is
+what this section covers (#752).
+
 `search_files` and `get_dir_size` also refuse a folder up front, without asking DSM to
 do anything (and `list_files` after List answers 408 for one), when `getinfo` (asked with `additional=["perm"]`) gives a 105 or 407 entry
 for it or reports `acl.read: false`: a folder an ACL or POSIX mode denies, which DSM would otherwise answer with 600,
@@ -213,6 +218,11 @@ _Paths and files_
 **The path could not be resolved on the NAS, a local file in upload/download
 does not exist, or a Download Station task ID matched no task.**
 
+From File Station, this can also arrive inside a wrapper code (900, 1000, 1001,
+1002, 1100 or 1200) whose reply named the cause: the message then holds two DSM
+codes, `(DSM error 1100): … (DSM error 408)`, and the second, the cause, is
+what this section covers (#752).
+
 Common causes:
 
 - Typo in the share name. Case doesn't matter to the File Station tools: they send a share name as `list_shares` lists it (`/Home` goes to DSM as `/home`). Only if DSM won't list shares does the name go as given, and then the user home service takes only `/home` in lowercase.
@@ -258,6 +268,11 @@ Fix:
 
 **A file with the target name already exists at the destination.**
 
+From File Station, this can also arrive inside a wrapper code (900, 1000, 1001,
+1002, 1100 or 1200) whose reply named the cause: the message then holds two DSM
+codes, `(DSM error 1100): … (DSM error 414)`, and the second, the cause, is
+what this section covers (#752).
+
 This fires for upload, download, rename, create_folder, copy, and move when the
 destination is occupied and the caller did not opt in to overwriting (or, for
 `create_folder`, asked for a new folder with `force_parent=false`, or a file is
@@ -281,6 +296,11 @@ Fix:
 
 **The input contains a value mcp-synology or DSM rejects before sending the
 operation.**
+
+From File Station, this can also arrive inside a wrapper code (900, 1000, 1001,
+1002, 1100 or 1200) whose reply named the cause: the message then holds two DSM
+codes, `(DSM error 1100): … (DSM error 418)`, and the second, the cause, is
+what this section covers (#752).
 
 Common causes:
 
@@ -439,6 +459,11 @@ _Storage and resources_
 ## disk_full
 
 **No space available on the destination volume, or the user's quota is exhausted.**
+
+From File Station, this can also arrive inside a wrapper code (900, 1000, 1001,
+1002, 1100 or 1200) whose reply named the cause: the message then holds two DSM
+codes, `(DSM error 1100): … (DSM error 416)`, and the second, the cause, is
+what this section covers (#752).
 
 Maps to DSM error 416 (volume full) and 415 (quota exceeded). For
 `download_file`, this also covers local ENOSPC.
