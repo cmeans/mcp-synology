@@ -40,6 +40,7 @@ from mcp_synology.modules.downloadstation.helpers import (
     task_error_detail,
     task_size_unknown,
 )
+from mcp_synology.modules.downloadstation.sources import refuse_local_sources
 
 logger = logging.getLogger(__name__)
 
@@ -711,6 +712,8 @@ async def create_download(
     username: str | None = None,
     password: str | None = None,
     local_roots: list[Path] | None = None,
+    nas_host: str | None = None,
+    allow_local_addresses: bool = False,
 ) -> str:
     """Create one or more download tasks.
 
@@ -728,6 +731,11 @@ async def create_download(
     ``local_roots`` (the allowed local folders, #257); both are checked before the file
     is read or its existence checked. ``local_roots`` of ``None`` is unconfined (direct
     callers); the tool always passes them.
+
+    Every URI goes through ``sources.refuse_local_sources`` before any DSM request (#648):
+    one naming the NAS (``nas_host``) or its local network is refused unless
+    ``allow_local_addresses`` (the module setting) is on. Direct callers get the
+    refusal too unless they pass it.
     """
     if uri is None and torrent_file_path is None:
         error_response(
@@ -827,6 +835,7 @@ async def create_download(
             retryable=False,
             param="uri",
         )
+    refuse_local_sources(uris, nas_host=nas_host, allow_local_addresses=allow_local_addresses)
 
     destination, note = await _resolve_destination(client, destination)
 

@@ -158,7 +158,9 @@ class TestDownloadStation:
     ) -> None:
         client = ds_client
         for child in ("foo ", " foo", "a b"):
-            out = await create_download(client, uri=_magnet(), destination=f"{folders}/{child}")
+            out = await create_download(
+                client, allow_local_addresses=True, uri=_magnet(), destination=f"{folders}/{child}"
+            )
             ids = re.findall(r"\bdbid_\d+\b", out)
             try:
                 assert ids, out
@@ -177,6 +179,7 @@ class TestDownloadStation:
             before = set(await _task_ids(client))
             await create_download(
                 client,
+                allow_local_addresses=True,
                 uri=f"http://example.invalid/{uuid.uuid4().hex}.bin",
                 destination=f"{folders}/{child}",
                 username="u",
@@ -199,7 +202,9 @@ class TestDownloadStation:
         finally:
             await _delete_tasks(client, ids)
         with pytest.raises(ToolError) as exc:
-            await create_download(client, uri=_magnet(), destination=f"{folders}/foo\x00x")
+            await create_download(
+                client, allow_local_addresses=True, uri=_magnet(), destination=f"{folders}/foo\x00x"
+            )
         assert _error(exc)["code"] == "invalid_parameter"
 
     async def test_edit_and_config_reach_a_spaced_folder_exactly(

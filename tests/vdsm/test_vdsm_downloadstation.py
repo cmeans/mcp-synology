@@ -361,7 +361,9 @@ class TestVdsmDownloadStationTasks:
 
         client, _, _, _ = _unpack(nas_client)
 
-        created = await create_download(client, uri=_FAKE_MAGNET, destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=_FAKE_MAGNET, destination="writable"
+        )
         ids = _ids_in(created)
         assert len(ids) == 1, f"create_download should return the new task id:\n{created}"
         task_id = ids[0]
@@ -397,7 +399,11 @@ class TestVdsmDownloadStationTasks:
 
         client, _, _, _ = _unpack(nas_client)
         ids = [
-            _ids_in(await create_download(client, uri=_magnet(i), destination="writable"))[0]
+            _ids_in(
+                await create_download(
+                    client, allow_local_addresses=True, uri=_magnet(i), destination="writable"
+                )
+            )[0]
             for i in range(3)
         ]
 
@@ -419,7 +425,9 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         for i, delay in enumerate([1.5, 2.0] * 4):
             task_id = _ids_in(
-                await create_download(client, uri=_magnet(500 + i), destination="writable")
+                await create_download(
+                    client, allow_local_addresses=True, uri=_magnet(500 + i), destination="writable"
+                )
             )[0]
             await asyncio.sleep(delay)
             reply = await pause_download(client, task_ids=[task_id])
@@ -447,7 +455,10 @@ class TestVdsmDownloadStationTasks:
             ids = [
                 _ids_in(
                     await create_download(
-                        client, uri=_magnet(600 + round_number * 10 + i), destination="writable"
+                        client,
+                        allow_local_addresses=True,
+                        uri=_magnet(600 + round_number * 10 + i),
+                        destination="writable",
                     )
                 )[0]
                 for i in range(3)
@@ -472,18 +483,25 @@ class TestVdsmDownloadStationTasks:
 
         client, _, _, _ = _unpack(nas_client)
         finished = _ids_in(
-            await create_download(client, uri=_local_source, destination="writable")
+            await create_download(
+                client, allow_local_addresses=True, uri=_local_source, destination="writable"
+            )
         )[0]
         await _wait_for(client, finished, lambda t: t["status"] == "finished", timeout=120)
         failed = _ids_in(
             await create_download(
-                client, uri="http://127.0.0.1:5000/mcp-synology-missing.iso", destination="writable"
+                client,
+                allow_local_addresses=True,
+                uri="http://127.0.0.1:5000/mcp-synology-missing.iso",
+                destination="writable",
             )
         )[0]
         await _wait_for(client, failed, lambda t: t["status"] == "error", timeout=60)
-        running = _ids_in(await create_download(client, uri=_magnet(620), destination="writable"))[
-            0
-        ]
+        running = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=_magnet(620), destination="writable"
+            )
+        )[0]
         data = await client.request(
             "SYNO.DownloadStation.Task",
             "getinfo",
@@ -506,7 +524,11 @@ class TestVdsmDownloadStationTasks:
 
         client, _, _, _ = _unpack(nas_client)
         ids = [
-            _ids_in(await create_download(client, uri=_magnet(i), destination="writable"))[0]
+            _ids_in(
+                await create_download(
+                    client, allow_local_addresses=True, uri=_magnet(i), destination="writable"
+                )
+            )[0]
             for i in range(3)
         ]
         await pause_download(client, task_ids=[ids[-1]])
@@ -530,9 +552,11 @@ class TestVdsmDownloadStationTasks:
         )
 
         client, _, _, _ = _unpack(nas_client)
-        task_id = _ids_in(await create_download(client, uri=_FAKE_MAGNET, destination="/writable"))[
-            0
-        ]
+        task_id = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=_FAKE_MAGNET, destination="/writable"
+            )
+        )[0]
         assert "writable" in await get_download_info(client, task_id=task_id)
         assert "ok" in await edit_download(client, task_ids=[task_id], destination="/testshare/")
         assert "testshare" in await get_download_info(client, task_id=task_id)
@@ -556,7 +580,12 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         folder = f"mcp296-{os.urandom(3).hex()}/season 1"
         with pytest.raises(ToolError) as exc:
-            await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
+            await create_download(
+                client,
+                allow_local_addresses=True,
+                uri=_FAKE_MAGNET,
+                destination=f"writable/{folder}",
+            )
         error = _error(exc.value)
         # DSM's 403 "Destination doesn't exist" is not_found on the destination (#334).
         assert error["code"] == "not_found", error
@@ -566,7 +595,12 @@ class TestVdsmDownloadStationTasks:
         try:
             await create_folder(client, paths=[f"/writable/{folder}"])
             task_id = _ids_in(
-                await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
+                await create_download(
+                    client,
+                    allow_local_addresses=True,
+                    uri=_FAKE_MAGNET,
+                    destination=f"writable/{folder}",
+                )
             )[0]
             assert folder in await get_download_info(client, task_id=task_id)
         finally:
@@ -578,7 +612,11 @@ class TestVdsmDownloadStationTasks:
 
         client, _, _, _ = _unpack(nas_client)
         missing = "http://127.0.0.1:5000/mcp-synology-missing.iso"
-        task_id = _ids_in(await create_download(client, uri=missing, destination="writable"))[0]
+        task_id = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=missing, destination="writable"
+            )
+        )[0]
         await _wait_for(client, task_id, lambda t: t["status"] == "error", timeout=60)
         assert "error (broken_link)" in await list_downloads(client, status_filter="error")
 
@@ -593,7 +631,9 @@ class TestVdsmDownloadStationTasks:
         trackers = "".join(tracker.format(i) for i in range(250))
         long_magnet = "magnet:?xt=urn:btih:" + "c" * 40 + "&dn=long-magnet" + trackers
         assert len(long_magnet) > 10_000
-        created = await create_download(client, uri=long_magnet, destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=long_magnet, destination="writable"
+        )
         assert len(_ids_in(created)) == 1, created
 
     async def test_create_keeps_commas_inside_a_uri(
@@ -606,12 +646,19 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         url = "http://127.0.0.1:5000/mcp-synology,comma.iso"
         magnet = _magnet(397) + ",%20The"
-        created = await create_download(client, uri=f"{url},{magnet}", destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=f"{url},{magnet}", destination="writable"
+        )
         assert len(_ids_in(created)) == 2, created
 
         v1_url = "http://127.0.0.1:5000/mcp-synology,v1.iso"
         await create_download(
-            client, uri=v1_url, destination="writable", username="u", password="p"
+            client,
+            allow_local_addresses=True,
+            uri=v1_url,
+            destination="writable",
+            username="u",
+            password="p",
         )
 
         data = await client.request(
@@ -632,7 +679,10 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         torrent = _synthetic_torrent(tmp_path)
         created = await create_download(
-            client, torrent_file_path=str(torrent), destination="writable"
+            client,
+            allow_local_addresses=True,
+            torrent_file_path=str(torrent),
+            destination="writable",
         )
         ids = _ids_in(created)
         assert len(ids) == 1, created
@@ -650,7 +700,11 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         passkey = "Zq7Lm2Xc9Vb4Nn8Kk1Jj6Hh3Gg5Ff0Dd"  # synthetic
         url = f"http://127.0.0.1:5000/download/123/{passkey}.torrent"
-        task_id = _ids_in(await create_download(client, uri=url, destination="writable"))[0]
+        task_id = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=url, destination="writable"
+            )
+        )[0]
 
         raw = await _task(client, task_id)
         assert passkey in raw["title"], f"DSM no longer titles HTTP tasks from the URL: {raw}"
@@ -669,10 +723,16 @@ class TestVdsmDownloadStationTasks:
 
         client, _, _, _ = _unpack(nas_client)
         finished = _ids_in(
-            await create_download(client, uri=_local_source, destination="writable")
+            await create_download(
+                client, allow_local_addresses=True, uri=_local_source, destination="writable"
+            )
         )[0]
         await _wait_for(client, finished, lambda t: t["status"] == "finished")
-        pending = _ids_in(await create_download(client, uri=_magnet(7), destination="writable"))[0]
+        pending = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=_magnet(7), destination="writable"
+            )
+        )[0]
 
         assert _ids_in(await list_downloads(client)) == [finished, pending]  # queue order
         latest = await list_downloads(client, sort_by="completed", limit=1)
@@ -687,7 +747,9 @@ class TestVdsmDownloadStationTasks:
         from mcp_synology.modules.downloadstation.tasks import create_download, delete_download
 
         client, _, _, _ = _unpack(nas_client)
-        created = await create_download(client, uri=_local_source, destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=_local_source, destination="writable"
+        )
         task_id = _ids_in(created)[0]
         task = await _wait_for(client, task_id, lambda t: t["status"] == "finished")
 
@@ -706,7 +768,9 @@ class TestVdsmDownloadStationTasks:
         from mcp_synology.modules.downloadstation.tasks import create_download, delete_download
 
         client, _, _, _ = _unpack(nas_client)
-        created = await create_download(client, uri=_local_source, destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=_local_source, destination="writable"
+        )
         task_id = _ids_in(created)[0]
         await _wait_for(client, task_id, lambda t: t["status"] == "finished")
 
@@ -733,7 +797,9 @@ class TestVdsmDownloadStationTasks:
         from mcp_synology.modules.downloadstation.tasks import create_download, delete_download
 
         client, _, _, _ = _unpack(nas_client)
-        created = await create_download(client, uri=_local_source, destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=_local_source, destination="writable"
+        )
         task_id = _ids_in(created)[0]
         task = await _wait_for(client, task_id, lambda t: _downloaded(t) > 0)
         assert task["status"] != "finished", f"throttle did not hold the task partial: {task}"
@@ -763,7 +829,9 @@ class TestVdsmDownloadStationTasks:
         name = _unsized_server.rsplit("/", 1)[1]
         await _remove_from_writable(client, name)
         try:
-            created = await create_download(client, uri=_unsized_server, destination="writable")
+            created = await create_download(
+                client, allow_local_addresses=True, uri=_unsized_server, destination="writable"
+            )
             task_id = _ids_in(created)[0]
             task = await _wait_for(client, task_id, lambda t: _downloaded(t) > 0)
             assert task["status"] not in ("finishing", "finished"), task
@@ -945,7 +1013,9 @@ class TestVdsmDownloadStationNonAdmin:
 
         user, _, _, _ = _unpack(nas_client)
         admin, _, _, _ = _unpack(admin_client)
-        admin_task = _ids_in(await create_download(admin, uri=_FAKE_MAGNET))[0]
+        admin_task = _ids_in(
+            await create_download(admin, allow_local_addresses=True, uri=_FAKE_MAGNET)
+        )[0]
         try:
             assert admin_task not in await list_downloads(user)
             assert admin_task in await list_downloads(admin)
@@ -967,11 +1037,19 @@ class TestVdsmDownloadStationNonAdmin:
         user, _, _, _ = _unpack(nas_client)
         admin, _, _, _ = _unpack(admin_client)
         admin_tasks = [
-            _ids_in(await create_download(admin, uri=_magnet(i), destination="writable"))[0]
+            _ids_in(
+                await create_download(
+                    admin, allow_local_addresses=True, uri=_magnet(i), destination="writable"
+                )
+            )[0]
             for i in range(2)
         ]
         try:
-            mine = _ids_in(await create_download(user, uri=_magnet(9), destination="writable"))
+            mine = _ids_in(
+                await create_download(
+                    user, allow_local_addresses=True, uri=_magnet(9), destination="writable"
+                )
+            )
             # DSM itself: DS2's total is scoped to the caller, like v1's list.
             ds2 = "SYNO.DownloadStation2.Task"
             page = {"offset": "0", "limit": "1"}
@@ -1010,7 +1088,11 @@ class TestVdsmDownloadStationNonAdmin:
         user, _, _, _ = _unpack(nas_client)
         admin, _, _, _ = _unpack(admin_client)
         magnet = "magnet:?xt=urn:btih:" + "e" * 40 + "&dn=admins-task"
-        theirs = _ids_in(await create_download(admin, uri=magnet, destination="writable"))[0]
+        theirs = _ids_in(
+            await create_download(
+                admin, allow_local_addresses=True, uri=magnet, destination="writable"
+            )
+        )[0]
         try:
             for result in (
                 await resume_download(user, task_ids=[theirs]),
@@ -1041,9 +1123,17 @@ class TestVdsmDownloadStationNonAdmin:
         from mcp_synology.modules.downloadstation.tasks import create_download, pause_download
 
         client, _, _, _ = _unpack(nas_client)
-        finished = _ids_in(await create_download(client, uri=_local_source, destination="writable"))
+        finished = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=_local_source, destination="writable"
+            )
+        )
         await _wait_for(client, finished[0], lambda t: t["status"] == "finished")
-        paused = _ids_in(await create_download(client, uri=_magnet(8), destination="writable"))
+        paused = _ids_in(
+            await create_download(
+                client, allow_local_addresses=True, uri=_magnet(8), destination="writable"
+            )
+        )
         await pause_download(client, task_ids=paused)
         await _wait_for(client, paused[0], lambda t: t["status"] == "paused", timeout=30)
 
@@ -1063,7 +1153,7 @@ class TestVdsmDownloadStationNonAdmin:
         from mcp_synology.modules.downloadstation.tasks import create_download
 
         client, _, _, _ = _unpack(nas_client)
-        created = await create_download(client, uri=_local_source)
+        created = await create_download(client, allow_local_addresses=True, uri=_local_source)
         task_id = _ids_in(created)[0]
         assert "won't start" not in created
         await _wait_for(client, task_id, lambda t: t["status"] == "finished")
@@ -1084,7 +1174,7 @@ class TestVdsmDownloadStationUnconfiguredUser:
 
         client, _, _, _ = _unpack(fresh_client)
         with pytest.raises(ToolError) as exc:
-            await create_download(client, uri=_FAKE_MAGNET)
+            await create_download(client, allow_local_addresses=True, uri=_FAKE_MAGNET)
         error = _error(exc.value)
         assert error["code"] == "invalid_parameter"
         assert "set_download_config" in error["suggestion"]
@@ -1098,7 +1188,9 @@ class TestVdsmDownloadStationUnconfiguredUser:
         from mcp_synology.modules.downloadstation.tasks import create_download
 
         client, _, _, _ = _unpack(fresh_client)
-        created = await create_download(client, uri=_local_source, destination="writable")
+        created = await create_download(
+            client, allow_local_addresses=True, uri=_local_source, destination="writable"
+        )
         task_ids = _ids_in(created)
         try:
             assert "won't start" in created

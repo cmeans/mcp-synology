@@ -2200,7 +2200,9 @@ class TestInstructionComments:
 # description too, not only in a reply.
 # +248 by #708: a DOWNLOAD STATION section says what a quoted destination folder or .torrent
 # file name means, sent with Download Station's WRITE tools.
-PAYLOAD_BUDGET_CHARS = 62_497
+# +167 by #648: create_download says the NAS fetches each source and refuses local ones unless
+# allow_local_addresses is set, and is annotated openWorldHint.
+PAYLOAD_BUDGET_CHARS = 62_664
 
 
 class TestPayloadBudget:

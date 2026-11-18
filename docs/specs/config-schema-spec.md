@@ -168,6 +168,7 @@ modules:
   #     # top-level allowed_local_paths (same default rule as File Station's).
   #     allowed_local_paths:
   #       - ~/Torrents
+  #     allow_local_addresses: false  # let create_download send sources on your LAN (#648)
 
   # photos:
   #   enabled: true
@@ -279,6 +280,7 @@ Each key is a module name (`system`, `filestation`, `photos`, `downloadstation`,
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `allowed_local_paths` | `list[str]` | No | the user's Downloads folder (unless the top-level `allowed_local_paths` is set) | Local folders `create_download` may read a `torrent_file_path` from, added to the top-level list when that's set (#257). Same entry rules and checks as File Station's. Only `.torrent` and `.nzb` files are read. |
+| `allow_local_addresses` | `bool` | No | `false` | Let `create_download` send sources on the NAS itself or its local network (#648). Off, a source naming a loopback, private, link-local, CGNAT, multicast or IPv6 unique-local address, `localhost`, a `.local`, `.internal` or `.home.arpa` name, a dotless name or the NAS's own `connection.host` is refused with `invalid_parameter` before any NAS request, inside magnet links and wrapped `thunder://`-style links too. The Download Station spec has the rules. |
 
 ### `modules.photos.settings` Object
 

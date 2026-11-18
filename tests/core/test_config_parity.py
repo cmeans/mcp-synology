@@ -109,6 +109,11 @@ BAD_CONFIGS: dict[str, tuple[str, str]] = {
         f"{GOOD_HEAD}modules: {{photos: {{settings: {{allowed_local_paths: /tmp}}}}}}\n",
         "modules.photos.settings.allowed_local_paths",
     ),
+    # #648: a security switch takes only true or false.
+    "downloadstation_allow_local_not_a_boolean": (
+        f"{GOOD_HEAD}modules: {{downloadstation: {{settings: {{allow_local_addresses: 1}}}}}}\n",
+        "modules.downloadstation.settings.allow_local_addresses",
+    ),
     "downloadstation_relative": (
         f"{GOOD_HEAD}modules: {{downloadstation: {{settings: {{allowed_local_paths: [rel]}}}}}}\n",
         "modules.downloadstation.settings.allowed_local_paths",

@@ -75,4 +75,13 @@ DOWNLOADSTATION_ERROR_CODES: dict[int, tuple[str, str]] = {
         "File doesn't exist",
         "A referenced file (typically a .torrent or .nzb path on the NAS) does not exist.",
     ),
+    # Task.create's answer for a URI Download Station won't take: no scheme, or one it
+    # doesn't fetch (`file:`, `gopher:`, `ldap:`, `smb:`, `data:`); seen on DSM 7.1,
+    # 7.2.2, 7.3.2 and 7.4.1 (#648 probe).
+    1901: (
+        "Unsupported source URI",
+        "Download Station takes HTTP, HTTPS, FTP, SFTP, magnet and ed2k links (and "
+        "thunder://, flashget:// and qqdl:// links), each written with its scheme. Check "
+        "the link, or pass a .torrent or .nzb file as `torrent_file_path`.",
+    ),
 }

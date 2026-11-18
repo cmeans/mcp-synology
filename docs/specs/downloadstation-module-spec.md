@@ -351,8 +351,10 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 **DSM API:** `SYNO.DownloadStation2.Task` / `create` v2 (form POST for URIs, multipart for files); v1 `SYNO.DownloadStation.Task` / `create` (form POST) as the fallback and for credentials
 
 **Tool description (LLM-facing):**
-> Create one or more download tasks, from URIs or from a local .torrent / .nzb file. `destination`
-> must be an existing folder, share-relative (DS doesn't create folders; make a new one first with
+> Create one or more download tasks, from URIs or from a local .torrent / .nzb file. The NAS
+> fetches each source, so one on the NAS or its local network (magnet trackers and wrapped links
+> too) is refused unless the config sets `allow_local_addresses`. `destination` must be an existing
+> folder, share-relative (DS doesn't create folders; make a new one first with
 > File Station's `create_folder` when File Station write is enabled, or ask the user to create it in
 > DSM). Omit it to use your default destination (a non-manager who has none must set it first with
 > `set_download_config`, because DS won't start their tasks until then). Returns the new task IDs
@@ -372,6 +374,16 @@ Create tasks from URIs, or from a local .torrent / .nzb file.
 **Response shape:** `Created 2 download task(s): dbid_4011, dbid_4012.`, or, when DSM returns no IDs: `Created download task(s) for 2 URI(s); DSM did not return task IDs — use list_downloads to find them.`, followed by any destination note.
 
 **Design notes:**
+- **Sources on the NAS or its local network are refused (#648),** before any DSM request, by `downloadstation/sources.py` `refuse_local_sources`, unless the module setting `allow_local_addresses` is on. Download Station fetches each source from the NAS itself: a vdsm probe (DSM 7.1, 7.2.2, 7.3.2 and 7.4.1, `mcptest` and admin) found it fetches every loopback spelling into the caller's share (`http://127.0.0.1:5000`, `localhost`, `[::1]`, `2130706433`, `0x7f000001`, `127.1`, `0.0.0.0`, `https://127.0.0.1:5001`, and a `thunder://` link wrapping `127.0.0.1`: each `finished`, DSM's login page), and accepts `169.254.169.254` and `ftp://` / `sftp://` to loopback. So a source written by text the model read (a prompt injection) could make the NAS fetch its own admin interface, its LAN or a cloud metadata address. Refused, as OWASP's SSRF cheat sheet advises and as GitLab (outbound requests to the local network blocked by default) and Nextcloud (`allow_local_remote_servers`, default false) do:
+  - an IP address that isn't globally routable (loopback, private, link-local, CGNAT `100.64/10`, unspecified, reserved, multicast, IPv6 unique-local), in any spelling an `inet_aton`-style parser takes (`127.1`, `0x7f.1`, `0177.0.0.1`, `2130706433`, a percent-encoded digit), and an IPv4 address carried in an IPv6 one (mapped, compatible, 6to4, Teredo, NAT64);
+  - `localhost`, `*.localhost`, `*.local`, `*.internal`, `*.home.arpa` and any name with no dot (only a local network answers them);
+  - the NAS's own `connection.host`, case and a trailing dot ignored;
+  - the same inside a magnet link (`tr`, `ws`, `xs`, `as`, `x.pe`, also with a `.N` suffix), an ed2k link's `server` and `sources`, and a `thunder://`, `flashget://` or `qqdl://` link's base64 URL, which Download Station unwraps (nested up to 4 deep);
+  - a `//` URI with no host this can read, and a wrapped link that doesn't decode: refused, not guessed at. With a `\` in the authority, both readings (RFC 3986's and WHATWG's, where `\` ends it) are checked.
+  - Scheme-less text and schemes Download Station doesn't take are left to DSM, which answers **1901** (`file:`, `gopher:`, `ldap:`, `smb:`, `data:`, scheme-less text; all four DSM versions), now reported as "Unsupported source URI" with the schemes it takes. `file:///…` has a `//` and no host, so it's refused here first.
+  - The refusal never quotes the URI or its host (`uri` is exempt from #604's argument check, so it's never echoed): it names the URI by position (`URI 2 of 3`) and the kind of address, and the suggestion names the setting.
+  - **Not covered:** a public name whose DNS answers with an internal address (this machine's resolver may differ from the NAS's, so it isn't resolved here), and a public server that redirects to an internal one. Only the NAS's firewall covers those; the README says so.
+  - The tool is annotated `openWorldHint: true`. The vdsm Download Station tests use `http://127.0.0.1:5000/...` sources, so they pass `allow_local_addresses=True`.
 - **Path choice:**
   - URIs without credentials go to **DS2** v2, which returns the new task IDs.
   - If DS2 is absent, or answers 102/103/104, the request falls back to **v1**. Other DS2 errors are reported, not retried.

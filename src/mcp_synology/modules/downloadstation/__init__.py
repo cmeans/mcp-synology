@@ -13,7 +13,7 @@ resume/edit, set_download_config, set_schedule. BT search + RSS are planned.
 from typing import TYPE_CHECKING, Annotated
 
 from mcp.types import ToolAnnotations
-from pydantic import Field, field_validator
+from pydantic import Field, StrictBool, field_validator
 
 from mcp_synology.core.local_paths import (
     allowed_local_roots,
@@ -40,6 +40,11 @@ _ANNO_DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 _ANNO_DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
     read_only_hint=False, destructive_hint=True, idempotent_hint=True
 )
+# create_download makes the NAS fetch from the sources it's given, outside this server
+# (#648).
+_ANNO_OPEN_WORLD = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, open_world_hint=True
+)
 
 
 class DownloadStationSettings(ModuleSettings):
@@ -48,6 +53,11 @@ class DownloadStationSettings(ModuleSettings):
     # Local folders create_download may read torrent files from, added to the top-level
     # allowed_local_paths (#257). Unset with no top-level list: the Downloads folder.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
+    # Let create_download send sources on the NAS itself or its local network (loopback,
+    # private and link-local addresses, `.local` and dotless names); refused by default,
+    # since the NAS fetches them (#648).
+    # Strict: a security switch is only ever `true` or `false`, never `1` or `"yes"`.
+    allow_local_addresses: StrictBool = False
 
     @field_validator("allowed_local_paths")
     @classmethod
@@ -132,7 +142,9 @@ MODULE_INFO = ModuleInfo(
             name="create_download",
             description=(
                 "Create one or more download tasks, from URIs or from a local .torrent / .nzb "
-                "file. `destination` must be an "
+                "file. The NAS fetches each source, so one on the NAS or its local network "
+                "(magnet trackers and wrapped links too) is refused unless the config sets "
+                "`allow_local_addresses`. `destination` must be an "
                 "existing folder, share-relative (DS doesn't create folders; make a new one "
                 "first with File Station's `create_folder` when File Station write is enabled, "
                 "or ask the user to create it in "
@@ -144,6 +156,7 @@ MODULE_INFO = ModuleInfo(
                 "lists are supported."
             ),
             permission_tier=PermissionTier.WRITE,
+            annotations=_ANNO_OPEN_WORLD,
         ),
         ToolInfo(
             name="delete_download",
@@ -407,6 +420,8 @@ def register(ctx: "RegisterContext") -> None:
                 username=username,
                 password=password,
                 local_roots=local_roots,
+                nas_host=ctx.nas_host,
+                allow_local_addresses=settings.allow_local_addresses,
             )
 
     if "delete_download" in ctx.allowed_tools:
