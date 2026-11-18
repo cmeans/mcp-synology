@@ -9,7 +9,9 @@ name: PR Label Recheck
 # after merge. GitHub can delay a scheduled run.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Every 15 minutes, off the hour (:07, :22, :37, :52): GitHub says the start of every hour
+    # is a high-load time when queued jobs may be dropped, and advises another minute (#763).
+    - cron: "7-59/15 * * * *"
   workflow_dispatch:
 
 # No token permissions by default; the job asks only for what it uses (#203).
