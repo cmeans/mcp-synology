@@ -244,7 +244,7 @@ def _normalized_host(host: str) -> str:
     """
     host = unquote(host)
     if any(unicodedata.category(c) == "Cc" for c in host):
-        raise _cant_read("holds a control character, so its host can't be read")
+        raise _cant_read("holds a control character in its host")
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
     if ":" in host:  # IPv6: no labels to prepare
@@ -319,13 +319,17 @@ def _unwrap(scheme: str, body: str) -> str:
     try:
         padded = body + "=" * (-len(body) % 4)
         decoded = base64.b64decode(padded.replace("-", "+").replace("_", "/"), validate=True)
-        text = decoded.decode("utf-8")
-    except (binascii.Error, ValueError, UnicodeDecodeError) as e:
+        # Only the host is read, and it's ASCII or UTF-8: a GBK path (common in thunder
+        # links) is replaced, not refused (pre-QA r5 on #766).
+        text = decoded.decode("utf-8", errors="replace")
+    except (binascii.Error, ValueError) as e:
         raise _cant_read("is a wrapped link whose URL can't be read") from e
     if scheme == "thunder" and text.startswith("AA") and text.endswith("ZZ"):
         text = text[2:-2]
     elif scheme == "flashget" and text.startswith(_FLASHGET_MARK) and text.endswith(_FLASHGET_MARK):
         text = text[len(_FLASHGET_MARK) : -len(_FLASHGET_MARK)]
+    if not _HAS_SCHEME.match(text.strip()):  # empty, markers only, or no URL in it
+        raise _cant_read("is a wrapped link with no URL in it")
     return text
 
 
@@ -333,6 +337,11 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
     if depth > _MAX_DEPTH:
         raise _cant_read("wraps links too deeply to read")
     stripped = uri.strip()
+    # A NUL or other control character can end a host where DSM reads it and not here
+    # (`http://127.0.0.1<NUL>@example.com/`), at any level: a wrapped link's URL, a
+    # tracker (pre-QA r5 on #766). Tab, line feed and carriage return are split on below.
+    if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in stripped):
+        raise _cant_read("holds a control character")
     # Each whitespace-separated piece too, at every level (a wrapped link's URL, a magnet's
     # tracker), in case a client splits a URI there. DSM 7.4.1 doesn't (QA r1 on #766).
     pieces = stripped.split()
@@ -345,6 +354,8 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
         if "%" in stripped and unquote(stripped) != stripped:
             # `thunder%3A%2F%2F…`: a percent-encoded link is checked as it decodes.
             _check_uri(unquote(stripped), nas, depth + 1)
+        elif stripped.startswith("//"):  # scheme-relative: checked as http://
+            _check_uri("http:" + stripped, nas, depth + 1)
         return  # no scheme: DSM refuses it (1901)
     if scheme == "magnet":
         # With or without the `?`, `&` or `;` between parameters.
@@ -406,6 +417,9 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
     elif rest.startswith(("//", "\\")):
         # WHATWG's reading first: RFC 3986 finds no host in `ws:\\h`.
         readings = [stripped.replace("\\", "/"), stripped]
+    elif _HOST_PORT.match(stripped):  # `127.0.0.1:5000/x`, `localhost:5000`
+        _host_port(stripped.split("/", 1)[0], nas)
+        return
     else:
         return  # `mailto:`-style: no host to fetch; DSM refuses what it can't use
     for reading in dict.fromkeys(readings):
@@ -439,15 +453,16 @@ def refuse_local_sources(
         return
     nas = nas_identity(nas_host)
     for index, uri in enumerate(uris, start=1):
-        # A NUL or other control character can end a host where DSM reads it and not
-        # here (`http://127.0.0.1<NUL>.example.com/`). Tab, line feed and carriage return
-        # are kept: they're split on below, each piece checked.
-        if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in uri):
-            _refuse(index, len(uris), _cant_read("holds a control character"))
         try:
             _check_uri(uri, nas)
         except _RefusedError as e:
             _refuse(index, len(uris), e)
+
+
+_TRACKER_HINT = (
+    " Or, when the user wants the download itself, send the magnet without that tracker, "
+    "seed or peer."
+)
 
 
 def _refuse(index: int, total: int, e: _RefusedError) -> NoReturn:
@@ -472,5 +487,6 @@ def _refuse(index: int, total: int, e: _RefusedError) -> NoReturn:
         "Nothing was created.",
         retryable=False,
         param="uri",
-        suggestion=_SETTING_HINT,
+        suggestion=_SETTING_HINT
+        + (_TRACKER_HINT if e.what.startswith("has a tracker, seed or peer") else ""),
     )

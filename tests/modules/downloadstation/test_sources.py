@@ -115,7 +115,7 @@ REFUSED: list[tuple[str, str]] = [
     ),
     # What can't be read is refused, not guessed at.
     ("thunder://!!!not-base64!!!", "can't be read"),
-    ("thunder://" + base64.b64encode(b"\xff\xfe").decode(), "can't be read"),
+    ("thunder://" + base64.b64encode(b"\xff\xfe").decode(), "no URL in it"),
     ("http:///no-host", "no domain"),  # read as http://no-host, as curl does
     ("http://", "no host"),
     ("http://[::1/", "no host"),
@@ -205,6 +205,20 @@ REFUSED: list[tuple[str, str]] = [
     ("magnet:?xt=a&tr=http://example.com/%20http://127.0.0.1/", "tracker, seed or peer"),
     ("thunder://", "no URL in it"),
     ("qqdl://", "no URL in it"),
+    # Pre-QA r5 on #766: control characters at every level, empty decodes, schemeless
+    # top-level forms, and branches the docstring promises.
+    (_thunder("http://127.0.0.1\x00@example.com/"), "wraps a URL that holds a control"),
+    (_qqdl("http://127.0.0.1\x01@example.com/"), "wraps a URL that holds a control"),
+    ("magnet:?xt=a&tr=http://127.0.0.1%00@example.com/", "seed or peer that holds a control"),
+    ("thunder://QUFaWg==", "no URL in it"),
+    ("flashget://" + _b64("[FLASHGET][FLASHGET]"), "no URL in it"),
+    ("qqdl://IA==", "no URL in it"),
+    ("127.0.0.1:5000/x", "loopback"),
+    ("localhost:5000", "only a local network answers"),
+    ("//127.0.0.1/x", "loopback"),
+    ("http://a\ue000.example/", "can't be read"),
+    ("ed2k://|server|[::1]|4661|/", "loopback"),
+    ("magnet:?xt=urn:btih:abc&x.pe=10.0.0.1", "peer that names an address on a local"),
     # A percent-encoded wrapped body.
     ("thunder://" + _b64("AAhttp://127.0.0.1:5/ZZ").replace("=", "%3D"), "wraps a URL"),
 ]
@@ -237,6 +251,7 @@ ALLOWED: list[str] = [
     "magnet:?xt=urn:btih:abc&tr=udp:/tracker.example.org:6969",
     "magnet:?xt=urn:btih:abc&tr=tracker.example.org:6969/announce",
     "magnet:?xt=urn:btih:abc&xs=urn:sha1:abc",
+    "thunder://" + base64.b64encode("AAhttp://example.com/中文.mp4ZZ".encode("gbk")).decode(),
     "magnet:?xt=urn:btih:abc&dht=router.example.org:6881",
     "magnet:?xt=urn:btih:abc&tr=//tracker.example.org/announce",
     "https://example.org/a\tb",
@@ -359,6 +374,33 @@ def test_the_nas_name_in_squared_letters_is_the_nas() -> None:
             nas_host="nas.example.org",
             allow_local_addresses=False,
         )
+
+
+def test_a_control_character_in_a_host_is_named_once() -> None:
+    with pytest.raises(ToolError) as exc:
+        refuse_local_sources(
+            ["ed2k://|file|a|1|h|/|sources,127.0.0.1%00x.example.com:4662|/"],
+            nas_host=None,
+            allow_local_addresses=False,
+        )
+    message = json.loads(str(exc.value))["error"]["message"]
+    assert "holds a control character" in message
+    assert message.count(", so ") == 1
+
+
+def test_a_local_tracker_says_the_magnet_works_without_it() -> None:
+    """Pre-QA r5 on #766: the setting skips every check; dropping one tracker doesn't."""
+    with pytest.raises(ToolError) as exc:
+        refuse_local_sources(
+            ["magnet:?xt=urn:btih:abc&tr=udp://tracker.example.org:1337&tr=udp://tracker.lan:1"],
+            nas_host=None,
+            allow_local_addresses=False,
+        )
+    suggestion = json.loads(str(exc.value))["error"]["suggestion"]
+    assert "send the magnet without that tracker, seed or peer" in suggestion
+    with pytest.raises(ToolError) as exc:
+        refuse_local_sources(["http://10.0.0.1/"], nas_host=None, allow_local_addresses=False)
+    assert "without that tracker" not in json.loads(str(exc.value))["error"]["suggestion"]
 
 
 def test_a_long_ed2k_link_is_checked_in_linear_time() -> None:
