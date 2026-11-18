@@ -298,6 +298,13 @@ Common causes:
 - A path is empty, all whitespace, or has no share component.
 - A File Station path, a `restore_from_recycle_bin` item, or a Download Station
   destination has a `.` or `..` part (`/video/../photo`, `video/./x`).
+- `create_download` was given a URI on the NAS itself or its local network: "Create download
+  refused: URI 2 of 3 names a loopback address (the NAS itself). … isn't sent." (a private or
+  link-local address, a local name, the NAS's own host, also in a magnet tracker or a wrapped
+  `thunder://` link; #648). If the user means to download from their own network, turn on
+  `allow_local_addresses` in the downloadstation module's settings. A URI it can't read
+  (no host, a wrapped link that doesn't decode, a control character) is refused as one that
+  "can't be checked": fix the link.
 - `copy_files`, `move_files` or `restore_from_recycle_bin` with `overwrite=true` where two
   sources would land at one destination with the same name, or names that match ignoring case, or
   one would land in a folder holding another: one could replace the other (for folders, items of

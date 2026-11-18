@@ -22,8 +22,9 @@ addresses by default the same way):
   `*.localdomain`;
 - the NAS's own host from the config (`connection.host`), by that name or address;
 - the same inside a magnet link (its trackers, web seeds, sources and peers: `tr`, `ws`,
-  `xs`, `as`, `x.pe` and libtorrent's `dht` node, each with any `.` suffix), an ed2k link's servers, sources and
-  every URL in it, and a `thunder://`, `flashget://` or `qqdl://` link's wrapped URL;
+  `xs`, `as`, `x.pe` and libtorrent's `dht` node, each with any `.` suffix), an ed2k
+  link's servers, sources and every URL in it, and a `thunder://`, `flashget://` or
+  `qqdl://` link's wrapped URL;
 - a fetching scheme (`http`, `https`, `ftp`, `ftps`, `sftp`) written with one slash, none
   or backslashes (`http:/127.0.0.1`, `http:\\127.0.0.1`), read as curl and WHATWG
   parsers read it, as `scheme://`;
@@ -193,7 +194,13 @@ def _embedded_v4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
     if ip.teredo is not None:
         return ip.teredo[1]
     packed = ip.packed
-    if packed[:12] == bytes(12) or packed[:12] == b"\x00\x64\xff\x9b" + bytes(8):
+    # IPv4-compatible `::/96`, NAT64 `64:ff9b::/96` and IPv4-translated `::ffff:0:0/96`
+    # (RFC 2765, SIIT), which Python counts as global.
+    if packed[:12] in (
+        bytes(12),
+        b"\x00\x64\xff\x9b" + bytes(8),
+        bytes(8) + b"\xff\xff\x00\x00",
+    ):
         return ipaddress.IPv4Address(packed[12:])
     return None
 

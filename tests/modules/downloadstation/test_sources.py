@@ -150,6 +150,7 @@ REFUSED: list[tuple[str, str]] = [
     ("http://a.ｌｏｃａｌ/", "only a local network answers"),
     # IPv6 forms that carry or are a local address.
     ("http://[::127.0.0.1]/", "loopback"),
+    ("http://[::ffff:0:7f00:1]/", "loopback"),
     ("http://[2001:0:4136:e378:8000:63bf:80ff:fffe]/", "loopback"),
     ("http://[fec0::1]/", "local or private"),
     ("magnet:?xt=urn:btih:abc&x.pe=[fd00::1]:6881", "peer that names an address on a local"),
