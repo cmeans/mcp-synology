@@ -30,11 +30,11 @@ addresses by default the same way):
   parsers read it, as `scheme://`;
 - each whitespace-separated piece of a URI, in case DSM splits on it, and a tracker or
   seed written `udp:/host`, `udp:host`, `//host`, a bare host or a schemeless `host:port`;
-- a URI holding a control character other than a tab, line feed or carriage return (a
-  NUL can end a host where DSM reads it), and a host name IDNA can't prepare: refused as
-  unreadable. Host names are compared as IDNA reads them (today's NFKC and case folding,
-  then nameprep, which drops invisible characters such as U+200B; the ideographic,
-  fullwidth and halfwidth full stops read as `.`);
+- a URI holding a control character other than a tab, line feed or carriage return, at
+  any level (a NUL can end a host where DSM reads it), and a host name IDNA can't
+  prepare: refused as unreadable. Host names are compared as IDNA reads them (today's
+  NFKC and case folding, then nameprep, which drops invisible characters such as U+200B;
+  the ideographic, fullwidth and halfwidth full stops read as `.`);
 - a URI with no host this can read, or a wrapped link that doesn't decode: refused as
   one that can't be checked, rather than guessed at.
 
