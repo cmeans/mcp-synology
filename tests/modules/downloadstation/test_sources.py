@@ -168,6 +168,8 @@ REFUSED: list[tuple[str, str]] = [
     ("http://127.0.0.1\x7f.example.com/", "control character"),
     ("http://127.0.0.1\x00@example.com/", "control character"),
     ("magnet:?xt=a&tr=http://127.0.0.1\x00.example.com/", "control character"),
+    # Another scheme's authority after backslashes.
+    ("ws:\\\\127.0.0.1/", "loopback"),
     # Tracker spellings a BitTorrent client may read.
     ("magnet:?xt=urn:btih:abc&tr=udp:/127.0.0.1:6969", "tracker, seed or peer"),
     ("magnet:?xt=urn:btih:abc&tr=udp:127.0.0.1:6969", "tracker, seed or peer"),
