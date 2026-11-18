@@ -752,6 +752,45 @@ def test_the_recheck_runs_on_a_schedule_with_only_what_it_needs() -> None:
     assert "pr-labels-recheck.sh" in job["steps"][-1]["run"]
 
 
+def _cron_minutes(field: str) -> set[int]:
+    """The minutes a cron minute field fires at: lists, `*`, `a-b` and `/step`."""
+    minutes: set[int] = set()
+    for part in field.split(","):
+        base, _, step = part.partition("/")
+        if base == "*":
+            low, high = 0, 59
+        elif "-" in base:
+            low, high = (int(n) for n in base.split("-"))
+        else:
+            low = int(base)
+            high = 59 if step else low
+        minutes.update(range(low, high + 1, int(step or 1)))
+    return minutes
+
+
+@pytest.mark.parametrize(
+    ("field", "minutes"),
+    [
+        ("*/15", {0, 15, 30, 45}),
+        ("7-59/15", {7, 22, 37, 52}),
+        ("07", {7}),
+        ("30,0", {0, 30}),
+        ("15-59/15,0", {0, 15, 30, 45}),
+        ("45/15", {45}),
+        ("17", {17}),
+    ],
+)
+def test_cron_minutes_reads_the_field(field: str, minutes: set[int]) -> None:
+    assert _cron_minutes(field) == minutes
+
+
+def test_no_schedule_runs_at_the_top_of_the_hour() -> None:
+    """#763: GitHub may drop queued jobs at the start of the hour, its busiest time."""
+    for name, workflow in _workflows().items():
+        for entry in (workflow.get(True) or {}).get("schedule") or []:
+            assert 0 not in _cron_minutes(entry["cron"].split()[0]), (name, entry["cron"])
+
+
 def test_the_checks_are_read_in_one_place() -> None:
     """Two copies of this logic had to be kept in sync by hand, and a third was coming (#549)."""
     for name in ("pr-labels.yml", "pr-labels-ci.yml", "pr-labels-recheck.yml"):
@@ -1506,7 +1545,8 @@ def test_a_time_it_cant_read_ends_the_run_red(github: _FakeGitHub) -> None:
 
 
 def test_the_schedule_is_every_15_minutes() -> None:
-    assert _workflows()["pr-labels-recheck.yml"][True]["schedule"] == [{"cron": "*/15 * * * *"}]
+    """Off the hour since #763 (:07, :22, :37, :52)."""
+    assert _workflows()["pr-labels-recheck.yml"][True]["schedule"] == [{"cron": "7-59/15 * * * *"}]
 
 
 @pytest.mark.parametrize("label", ["Ready for QA Signoff", "QA Active", "QA Approved", "QA Failed"])
