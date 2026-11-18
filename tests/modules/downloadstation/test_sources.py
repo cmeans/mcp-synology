@@ -177,6 +177,26 @@ REFUSED: list[tuple[str, str]] = [
     ("magnet:?xt=urn:btih:abc&tr=127.0.0.1:6969", "tracker, seed or peer"),
     ("magnet:?xt=urn:btih:abc&xs=127.0.0.1:80/x.torrent", "tracker, seed or peer"),
     ("magnet:?xt=urn:btih:abc&tr=localhost:6969/announce", "tracker, seed or peer"),
+    # Pre-QA r3 on #648: characters newer than nameprep's Unicode 3.2 (squared letters;
+    # curl with libidn2 resolved the second to a.localhost, 127.0.0.1).
+    ("http://a.\U0001f13b\U0001f13e\U0001f132\U0001f130\U0001f13b/", "only a local network"),
+    (
+        "http://a.\U0001f13b\U0001f13e\U0001f132\U0001f130\U0001f13b\U0001f137\U0001f13e"
+        "\U0001f142\U0001f143:9/",
+        "only a local network",
+    ),
+    # Controls Python counts as whitespace.
+    ("http://example.com/a\x1fb", "control character"),
+    ("http://example.com/a\x0bb", "control character"),
+    ("http://example.com/a\x85b", "control character"),
+    # More tracker and node forms.
+    ("magnet:?xt=urn:btih:abc&tr=[::1]:6969", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr=//127.0.0.1:6969/announce", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&ws=//127.0.0.1/x", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr=127.0.0.1", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&dht=127.0.0.1:6881", "tracker, seed or peer"),
+    # A percent-encoded ed2k link.
+    ("ed2k://%7Cserver%7C127.0.0.1%7C4661%7C/", "loopback"),
     # A percent-encoded wrapped body.
     ("thunder://" + _b64("AAhttp://127.0.0.1:5/ZZ").replace("=", "%3D"), "wraps a URL"),
 ]
@@ -209,6 +229,9 @@ ALLOWED: list[str] = [
     "magnet:?xt=urn:btih:abc&tr=udp:/tracker.example.org:6969",
     "magnet:?xt=urn:btih:abc&tr=tracker.example.org:6969/announce",
     "magnet:?xt=urn:btih:abc&xs=urn:sha1:abc",
+    "magnet:?xt=urn:btih:abc&dht=router.example.org:6881",
+    "magnet:?xt=urn:btih:abc&tr=//tracker.example.org/announce",
+    "https://example.org/a\tb",
 ]
 
 
@@ -307,6 +330,17 @@ def test_the_nas_name_with_an_idna_dot_is_the_nas() -> None:
         refuse_local_sources(
             ["https://nas\u3002example.org\u3002:5001/"],
             nas_host=nas_host,
+            allow_local_addresses=False,
+        )
+
+
+def test_the_nas_name_in_squared_letters_is_the_nas() -> None:
+    """Pre-QA r3 on #648: UTS #46 reads U+1F130.. as letters; nameprep alone didn't."""
+    squared = "".join(chr(0x1F130 + ord(c) - ord("a")) for c in "nas")
+    with pytest.raises(ToolError, match="the NAS itself"):
+        refuse_local_sources(
+            [f"https://{squared}.example.org/"],
+            nas_host="nas.example.org",
             allow_local_addresses=False,
         )
 

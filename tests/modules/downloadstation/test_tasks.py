@@ -677,7 +677,8 @@ class TestCreateDownloadUri:
     async def test_long_uri_list_is_sent_in_body_not_query(self, mock_client: DsmClient) -> None:
         """#123 bug 14: a GET URL past ~8 KB gets HTTP 414 from DSM."""
         _has_default()
-        long_magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=" + "x" * 12_000
+        # A public tracker: a dotless one (`&tr=xxx…`) is refused as local since #648.
+        long_magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&tr=udp://t.example.org/" + "x" * 12_000
         route = post_route(TASK2, "create", version=2).respond(
             json=ok({"list_id": [], "task_id": ["dbid_9"]})
         )

@@ -447,9 +447,7 @@ class TestVdsmDownloadStationTasks:
             ids = [
                 _ids_in(
                     await create_download(
-                        client,
-                        uri=_magnet(600 + round_number * 10 + i),
-                        destination="writable",
+                        client, uri=_magnet(600 + round_number * 10 + i), destination="writable"
                     )
                 )[0]
                 for i in range(3)
@@ -563,11 +561,7 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         folder = f"mcp296-{os.urandom(3).hex()}/season 1"
         with pytest.raises(ToolError) as exc:
-            await create_download(
-                client,
-                uri=_FAKE_MAGNET,
-                destination=f"writable/{folder}",
-            )
+            await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
         error = _error(exc.value)
         # DSM's 403 "Destination doesn't exist" is not_found on the destination (#334).
         assert error["code"] == "not_found", error
@@ -577,11 +571,7 @@ class TestVdsmDownloadStationTasks:
         try:
             await create_folder(client, paths=[f"/writable/{folder}"])
             task_id = _ids_in(
-                await create_download(
-                    client,
-                    uri=_FAKE_MAGNET,
-                    destination=f"writable/{folder}",
-                )
+                await create_download(client, uri=_FAKE_MAGNET, destination=f"writable/{folder}")
             )[0]
             assert folder in await get_download_info(client, task_id=task_id)
         finally:
@@ -658,9 +648,7 @@ class TestVdsmDownloadStationTasks:
         client, _, _, _ = _unpack(nas_client)
         torrent = _synthetic_torrent(tmp_path)
         created = await create_download(
-            client,
-            torrent_file_path=str(torrent),
-            destination="writable",
+            client, torrent_file_path=str(torrent), destination="writable"
         )
         ids = _ids_in(created)
         assert len(ids) == 1, created

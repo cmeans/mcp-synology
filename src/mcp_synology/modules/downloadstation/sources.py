@@ -29,10 +29,11 @@ addresses by default the same way):
   parsers read it, as `scheme://`;
 - each whitespace-separated piece of a URI, in case DSM splits on it, and a tracker or
   seed written `udp:/host`, `udp:host` or a schemeless `host:port`;
-- a URI holding a control character (a NUL can end a host where DSM reads it), and a
-  host name IDNA can't prepare: refused as unreadable. Host names are compared as IDNA
-  reads them (nameprep: NFKC, case folding, invisible characters such as U+200B dropped;
-  the ideographic, fullwidth and halfwidth full stops read as `.`);
+- a URI holding a control character other than a tab, line feed or carriage return (a
+  NUL can end a host where DSM reads it), and a host name IDNA can't prepare: refused as
+  unreadable. Host names are compared as IDNA reads them (today's NFKC and case folding,
+  then nameprep, which drops invisible characters such as U+200B; the ideographic,
+  fullwidth and halfwidth full stops read as `.`);
 - a URI with no host this can read, or a wrapped link that doesn't decode: refused as
   one that can't be checked, rather than guessed at.
 
@@ -84,7 +85,10 @@ _FETCH_SCHEMES = frozenset({"http", "https", "ftp", "ftps", "sftp"})
 
 # Magnet parameters naming a server the NAS would contact (BEP 9, BEP 19 and the magnet
 # URI scheme's `xs`/`as`/`x.pe`), each also with any `.` suffix (`tr.1`, `tr.x`).
-_MAGNET_SOURCE_KEYS = frozenset({"tr", "ws", "xs", "as", "x.pe"})
+_MAGNET_SOURCE_KEYS = frozenset({"tr", "ws", "xs", "as", "x.pe", "dht"})
+# Of those, the ones that hold a `host:port`, not a URL (`dht` is libtorrent's DHT node).
+_MAGNET_PEER_KEYS = frozenset({"x.pe", "dht"})
+_HAS_SCHEME = re.compile(r"(?i)[a-z][a-z0-9+.-]*:")
 
 _WRAPPED = ("thunder", "flashget", "qqdl")
 _FLASHGET_MARK = "[FLASHGET]"
@@ -238,6 +242,10 @@ def _normalized_host(host: str) -> str:
         host = host[1:-1]
     if ":" in host:  # IPv6: no labels to prepare
         return unicodedata.normalize("NFKC", host).lower().split("%", 1)[0]
+    # Today's NFKC and case folding first: nameprep's tables are Unicode 3.2's, so it
+    # leaves later characters (`🄻🄾🄲🄰🄻`, squared letters) as they are, where UTS #46
+    # and libidn2 read `local`.
+    host = unicodedata.normalize("NFKC", host).casefold()
     try:
         labels = [encodings.idna.nameprep(label) for label in _IDNA_DOTS.split(host)]
     except UnicodeError as e:
@@ -319,14 +327,16 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
             if base is None or not value:
                 continue
             try:
-                if base == "x.pe":
+                if base in _MAGNET_PEER_KEYS:
                     _host_port(value, nas)
                 else:
                     _check_uri(value, nas, depth + 1)
                     # As a BitTorrent client may read it: `udp:/h`, `udp:h`, or `h:6969`.
                     if m := _SOURCE_SCHEME.match(value):
                         _check_uri("http://" + value[m.end() :], nas, depth + 1)
-                    elif _HOST_PORT.match(value):
+                    elif not _HAS_SCHEME.match(value):  # `127.0.0.1`, `//h`, `[::1]:6969`
+                        _check_uri("http://" + value.lstrip("/\\"), nas, depth + 1)
+                    elif _HOST_PORT.match(value):  # `localhost:6969` reads as a scheme
                         _host_port(value.split("/", 1)[0], nas)
             except _RefusedError as e:
                 raise _RefusedError(
@@ -343,6 +353,8 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
             raise _RefusedError(f"wraps a URL that {e.what}", unreadable=e.unreadable) from e
         return
     if scheme == "ed2k":
+        if "%" in rest and unquote(rest) != rest:  # `ed2k://%7Cserver%7C…`
+            _check_uri("ed2k:" + unquote(rest), nas, depth + 1)
         for host in _ED2K_SERVER.findall(rest):
             _check_host(host, nas)
         for group in _ED2K_SOURCES.findall(rest):
@@ -396,9 +408,10 @@ def refuse_local_sources(
         return
     nas = nas_identity(nas_host)
     for index, uri in enumerate(uris, start=1):
-        # A NUL or other control character (not the whitespace split on below) can end a
-        # host where DSM reads it and not here: `http://127.0.0.1<NUL>.example.com/`.
-        if any(unicodedata.category(c) == "Cc" and not c.isspace() for c in uri):
+        # A NUL or other control character can end a host where DSM reads it and not
+        # here (`http://127.0.0.1<NUL>.example.com/`). Tab, line feed and carriage return
+        # are kept: they're split on below, each piece checked.
+        if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in uri):
             _refuse(index, len(uris), _cant_read("holds a control character"))
         # The whole URI, then each whitespace-separated piece of it, in case DSM splits a
         # URI on a newline or space as its own paste box does.
