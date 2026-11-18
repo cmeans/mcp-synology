@@ -186,7 +186,7 @@ def _ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
 
 
 def _embedded_v4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
-    """The IPv4 address an IPv6 one carries: mapped, compatible, 6to4, Teredo, NAT64."""
+    """The IPv4 address an IPv6 one carries: mapped, compatible, translated, 6to4, Teredo, NAT64."""
     if ip.ipv4_mapped is not None:
         return ip.ipv4_mapped
     if ip.sixtofour is not None:
