@@ -223,6 +223,13 @@ REFUSED: list[tuple[str, str]] = [
     ("\\\\127.0.0.1:5000/", "loopback"),
     ("///127.0.0.1:5000/", "loopback"),
     ("//user@127.0.0.1:5000/", "loopback"),
+    # Pre-QA r6 on #766: both readings of a `\\` in a scheme-relative URI, and `\\/`.
+    ("//example.com\\@127.0.0.1/", "loopback"),
+    ("//example.com\\@127.0.0.1:80/", "loopback"),
+    ("//evil.example\\@localhost/", "only a local network answers"),
+    ("\\/127.0.0.1:5000/", "loopback"),
+    ("\\/127.0.0.1/", "loopback"),
+    ("x //example.com\\@127.0.0.1/", "loopback"),
     ("http://a\ue000.example/", "can't be read"),
     ("ed2k://|server|[::1]|4661|/", "loopback"),
     ("magnet:?xt=urn:btih:abc&x.pe=10.0.0.1", "peer that names an address on a local"),
@@ -408,6 +415,17 @@ def test_a_local_tracker_says_the_magnet_works_without_it() -> None:
     with pytest.raises(ToolError) as exc:
         refuse_local_sources(["http://10.0.0.1/"], nas_host=None, allow_local_addresses=False)
     assert "without that tracker" not in json.loads(str(exc.value))["error"]["suggestion"]
+
+
+@pytest.mark.parametrize("prefix", ["//", "\\\\", "/\\", "\\/", "///"])
+@pytest.mark.parametrize(
+    "rest", ["127.0.0.1:5000/x", "127.0.0.1/x", "example.com\\@127.0.0.1/", "[::1]:5000/"]
+)
+def test_a_scheme_relative_uri_reads_the_same_everywhere(prefix: str, rest: str) -> None:
+    """Pre-QA r6 on #766: the top level, a tracker and a wrapped link read it one way."""
+    for uri in (prefix + rest, f"magnet:?xt=a&tr={prefix}{rest}", _qqdl(prefix + rest)):
+        with pytest.raises(ToolError, match="loopback"):
+            refuse_local_sources([uri], nas_host=None, allow_local_addresses=False)
 
 
 def test_a_long_ed2k_link_is_checked_in_linear_time() -> None:

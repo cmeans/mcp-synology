@@ -328,9 +328,26 @@ def _unwrap(scheme: str, body: str) -> str:
         text = text[2:-2]
     elif scheme == "flashget" and text.startswith(_FLASHGET_MARK) and text.endswith(_FLASHGET_MARK):
         text = text[len(_FLASHGET_MARK) : -len(_FLASHGET_MARK)]
-    if not _HAS_SCHEME.match(text.strip()):  # empty, markers only, or no URL in it
+    inner = text.strip()
+    if not (_HAS_SCHEME.match(inner) or _scheme_relative(inner)):  # empty, or no URL in it
         raise _cant_read("is a wrapped link with no URL in it")
     return text
+
+
+def _scheme_relative(text: str) -> bool:
+    """Whether ``text`` starts with two of `/` and `\\` in any order (`//h`, `\\\\h`, `/\\h`,
+    `\\/h`): a host follows, read as ``_as_http`` reads it."""
+    return len(text) > 1 and text[0] in "/\\" and text[1] in "/\\"
+
+
+def _as_http(text: str) -> str:
+    """``text`` (a host, or a scheme-relative `//h`, `\\\\h` or `\\/h`) as an `http:` URI.
+
+    The one way a URI without a scheme is read (pre-QA r6 on #766): the fetch-scheme branch
+    of ``_check_uri`` then takes off the slashes and backslashes and checks both readings
+    of a `\\` (RFC 3986's and WHATWG's), as it does for `http:\\\\h`.
+    """
+    return "http:" + text
 
 
 def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None:
@@ -348,10 +365,10 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
     if len(pieces) > 1:
         for piece in pieces:
             _check_uri(piece, nas, depth)
-    if stripped.startswith(("//", "\\\\")) or stripped.startswith("/\\"):
-        # Scheme-relative (`//127.0.0.1:5000/x`, `\\h`, `///h`): checked as `http://`,
-        # before a port's `:` could be read as the end of a scheme (QA r2 on #766).
-        _check_uri("http://" + stripped.replace("\\", "/").lstrip("/"), nas, depth + 1)
+    if _scheme_relative(stripped):
+        # Scheme-relative (`//127.0.0.1:5000/x`, `\\h`, `\/h`, `///h`), checked before a
+        # port's `:` could be read as the end of a scheme (QA r2 on #766).
+        _check_uri(_as_http(stripped), nas, depth + 1)
         return
     scheme, sep, rest = stripped.partition(":")
     scheme = scheme.lower()
@@ -378,9 +395,9 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
                     _check_uri(value, nas, depth + 1)
                     # As a BitTorrent client may read it: `udp:/h`, `udp:h`, or `h:6969`.
                     if m := _SOURCE_SCHEME.match(value):
-                        _check_uri("http://" + value[m.end() :], nas, depth + 1)
+                        _check_uri(_as_http(value[m.end() :]), nas, depth + 1)
                     elif not _HAS_SCHEME.match(value):  # `127.0.0.1`, `//h`, `[::1]:6969`
-                        _check_uri("http://" + value.lstrip("/\\"), nas, depth + 1)
+                        _check_uri(_as_http(value), nas, depth + 1)
                     elif _HOST_PORT.match(value):  # `localhost:6969` reads as a scheme
                         _host_port(value.split("/", 1)[0], nas)
             except _RefusedError as e:
