@@ -361,7 +361,8 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
             f"{scheme}://" + rest.replace("\\", "/").lstrip("/"),
         ]
     elif rest.startswith(("//", "\\")):
-        readings = [stripped, stripped.replace("\\", "/")]
+        # WHATWG's reading first: RFC 3986 finds no host in `ws:\\h`.
+        readings = [stripped.replace("\\", "/"), stripped]
     else:
         return  # `mailto:`-style: no host to fetch; DSM refuses what it can't use
     for reading in dict.fromkeys(readings):
