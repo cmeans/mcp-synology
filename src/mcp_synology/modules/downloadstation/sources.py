@@ -27,7 +27,12 @@ addresses by default the same way):
 - a fetching scheme (`http`, `https`, `ftp`, `ftps`, `sftp`) written with one slash, none
   or backslashes (`http:/127.0.0.1`, `http:\\127.0.0.1`), read as curl and WHATWG
   parsers read it, as `scheme://`;
-- each whitespace-separated piece of a URI, in case DSM splits on it;
+- each whitespace-separated piece of a URI, in case DSM splits on it, and a tracker or
+  seed written `udp:/host`, `udp:host` or a schemeless `host:port`;
+- a URI holding a control character (a NUL can end a host where DSM reads it), and a
+  host name IDNA can't prepare: refused as unreadable. Host names are compared as IDNA
+  reads them (nameprep: NFKC, case folding, invisible characters such as U+200B dropped;
+  the ideographic, fullwidth and halfwidth full stops read as `.`);
 - a URI with no host this can read, or a wrapped link that doesn't decode: refused as
   one that can't be checked, rather than guessed at.
 
@@ -46,6 +51,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import encodings.idna
 import ipaddress
 import re
 import unicodedata
@@ -87,7 +93,17 @@ _FLASHGET_MARK = "[FLASHGET]"
 _ED2K_SERVER = re.compile(r"\|server\|([^|]*)\|", re.IGNORECASE)
 _ED2K_SOURCES = re.compile(r"\|sources,([^|]*)", re.IGNORECASE)
 # Any URL inside an ed2k link (`|serverlist|<url>|`, `|nodeslist|<url>|`).
-_ED2K_URL = re.compile(r"[a-z][a-z0-9+.-]*:[^|]*", re.IGNORECASE)
+# Anchored at a scheme's start, so a long run of letters is scanned once (linear).
+_ED2K_URL = re.compile(r"(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:[^|]*", re.IGNORECASE)
+
+# The dots IDNA (UTS #46, RFC 3490) reads as `.`: full stop, ideographic, fullwidth and
+# halfwidth ideographic full stops.
+_IDNA_DOTS = re.compile("[.\u3002\uff0e\uff61]")
+
+# A tracker or seed's scheme inside a magnet link, read by a BitTorrent client with one
+# slash, none or backslashes too, and a schemeless `host:port`.
+_SOURCE_SCHEME = re.compile(r"(?i)(?:udp|https?|wss?|ftps?|sftp):[/\\]*")
+_HOST_PORT = re.compile(r"[^:/?#\s]+:\d+(?:[/?#]|$)")
 
 # A deprecated IPv6 site-local range (RFC 3879) that Python counts as global.
 _SITE_LOCAL = ipaddress.IPv6Network("fec0::/10")
@@ -209,13 +225,24 @@ def _own_kind(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
 
 
 def _normalized_host(host: str) -> str:
-    """``host`` as a resolver would compare it: percent-decoded, NFKC, lowercase, no
-    brackets, IPv6 zone or trailing dots."""
-    host = unicodedata.normalize("NFKC", unquote(host)).lower()
+    """``host`` as an IDNA resolver would compare it: percent-decoded, each label through
+    IDNA's nameprep (NFKC, case folding, invisible characters such as U+200B and the soft
+    hyphen dropped), every IDNA dot (`。`) a `.`, no brackets, IPv6 zone or trailing dots.
+
+    A label nameprep refuses, or a control character, can't be checked (``_cant_read``).
+    """
+    host = unquote(host)
+    if any(unicodedata.category(c) == "Cc" for c in host):
+        raise _cant_read("holds a control character, so its host can't be read")
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
-    host = host.split("%", 1)[0] if ":" in host else host
-    return host.rstrip(".")
+    if ":" in host:  # IPv6: no labels to prepare
+        return unicodedata.normalize("NFKC", host).lower().split("%", 1)[0]
+    try:
+        labels = [encodings.idna.nameprep(label) for label in _IDNA_DOTS.split(host)]
+    except UnicodeError as e:
+        raise _cant_read("has a host name that can't be read") from e
+    return ".".join(labels).lower().rstrip(".")
 
 
 def _check_host(host: str, nas: tuple[str, object] | None) -> None:
@@ -296,6 +323,11 @@ def _check_uri(uri: str, nas: tuple[str, object] | None, depth: int = 0) -> None
                     _host_port(value, nas)
                 else:
                     _check_uri(value, nas, depth + 1)
+                    # As a BitTorrent client may read it: `udp:/h`, `udp:h`, or `h:6969`.
+                    if m := _SOURCE_SCHEME.match(value):
+                        _check_uri("http://" + value[m.end() :], nas, depth + 1)
+                    elif _HOST_PORT.match(value):
+                        _host_port(value.split("/", 1)[0], nas)
             except _RefusedError as e:
                 raise _RefusedError(
                     f"has a tracker, seed or peer that {e.what}", unreadable=e.unreadable
@@ -344,7 +376,10 @@ def nas_identity(nas_host: str | None) -> tuple[str, object] | None:
     """The NAS's own host, as the check compares it: its name, and its address if it is one."""
     if not nas_host:
         return None
-    name = _normalized_host(nas_host)
+    try:
+        name = _normalized_host(nas_host)
+    except _RefusedError:  # config validation refuses such a host; compare it as written
+        name = nas_host.lower()
     return name, _ip(name)
 
 
@@ -360,6 +395,10 @@ def refuse_local_sources(
         return
     nas = nas_identity(nas_host)
     for index, uri in enumerate(uris, start=1):
+        # A NUL or other control character (not the whitespace split on below) can end a
+        # host where DSM reads it and not here: `http://127.0.0.1<NUL>.example.com/`.
+        if any(unicodedata.category(c) == "Cc" and not c.isspace() for c in uri):
+            _refuse(index, len(uris), _cant_read("holds a control character"))
         # The whole URI, then each whitespace-separated piece of it, in case DSM splits a
         # URI on a newline or space as its own paste box does.
         pieces = uri.split()

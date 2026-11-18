@@ -153,6 +153,28 @@ REFUSED: list[tuple[str, str]] = [
     ("http://[2001:0:4136:e378:8000:63bf:80ff:fffe]/", "loopback"),
     ("http://[fec0::1]/", "local or private"),
     ("magnet:?xt=urn:btih:abc&x.pe=[fd00::1]:6881", "peer that names an address on a local"),
+    # Pre-QA r2 on #648: IDNA dots and characters nameprep drops (curl with libidn2
+    # connected to 127.0.0.1 for the first three).
+    ("http://127.0.0\u30021/", "loopback"),
+    ("http://127.0.0.1\u200b/", "loopback"),
+    ("http://127.0.0.1\xad/", "loopback"),
+    ("http://foo.local\u3002/", "only a local network answers"),
+    ("http://nas.lan\uff61/", "only a local network answers"),
+    ("http://localhost\uff0e/", "only a local network answers"),
+    # Control characters, which can end a host where DSM reads it.
+    ("http://127.0.0.1\x00.example.com/", "control character"),
+    ("http://127.0.0.1%00.example.com/", "control character"),
+    ("http://localhost\x01.example.com/", "control character"),
+    ("http://127.0.0.1\x7f.example.com/", "control character"),
+    ("http://127.0.0.1\x00@example.com/", "control character"),
+    ("magnet:?xt=a&tr=http://127.0.0.1\x00.example.com/", "control character"),
+    # Tracker spellings a BitTorrent client may read.
+    ("magnet:?xt=urn:btih:abc&tr=udp:/127.0.0.1:6969", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr=udp:127.0.0.1:6969", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr=udp:\\\\127.0.0.1:6969", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr=127.0.0.1:6969", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&xs=127.0.0.1:80/x.torrent", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&tr=localhost:6969/announce", "tracker, seed or peer"),
     # A percent-encoded wrapped body.
     ("thunder://" + _b64("AAhttp://127.0.0.1:5/ZZ").replace("=", "%3D"), "wraps a URL"),
 ]
@@ -180,6 +202,11 @@ ALLOWED: list[str] = [
     "magnet:?xt=urn:btih:abc&dn=Movie: Part 1",
     "ed2k://|file|Movie: Part 1.mkv|100|0123456789abcdef0123456789abcdef|/",
     "http://[2001:db8:85a3::8a2e:370:7334]/".replace("2001:db8", "2a00:1450"),
+    "http://bücher.example/a.iso",
+    "http://example\u3002org/a.iso",
+    "magnet:?xt=urn:btih:abc&tr=udp:/tracker.example.org:6969",
+    "magnet:?xt=urn:btih:abc&tr=tracker.example.org:6969/announce",
+    "magnet:?xt=urn:btih:abc&xs=urn:sha1:abc",
 ]
 
 
@@ -270,6 +297,27 @@ def test_a_local_address_is_refused_as_one() -> None:
     message = json.loads(str(exc.value))["error"]["message"]
     assert "can't be checked" not in message
     assert "a URI on the NAS itself or its local network isn't sent" in message
+
+
+def test_the_nas_name_with_an_idna_dot_is_the_nas() -> None:
+    nas_host = "nas.example.org"
+    with pytest.raises(ToolError, match="the NAS itself"):
+        refuse_local_sources(
+            ["https://nas\u3002example.org\u3002:5001/"],
+            nas_host=nas_host,
+            allow_local_addresses=False,
+        )
+
+
+def test_a_long_ed2k_link_is_checked_in_linear_time() -> None:
+    """Pre-QA r2 on #648: an unanchored URL pattern took 24.6 s on 80,000 letters, and the
+    check runs on the server's event loop."""
+    import time
+
+    uri = "ed2k://|file|" + "a" * 200_000 + "|1|0123456789abcdef0123456789abcdef|/"
+    start = time.perf_counter()
+    refuse_local_sources([uri], nas_host=None, allow_local_addresses=False)
+    assert time.perf_counter() - start < 1.0
 
 
 def test_deeply_nested_wraps_are_refused() -> None:
