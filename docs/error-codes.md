@@ -725,11 +725,12 @@ like 402 "System too busy" and 900 "Failed to delete" land here). The
 envelope includes the DSM numeric code in the message text, so you can look
 it up directly. For 900, 1000, 1001, 1002, 1100 and 1200, when DSM's reply to the
 request names the real cause, the message adds it (#749), in the form
-`<wrapper>: <cause> (DSM error <cause code>)`. The causes captured so far (1100
-and 1200 with 414 inside, 1100 with 408 inside) each become a more specific
-code in `create_folder` and `rename`, so a `filestation_error` with a cause is
-one not captured yet; a copy, move or delete task's own status isn't read for
-one either (#750).
+`<wrapper>: <cause> (DSM error <cause code>)`, and the envelope's `code` (and
+help link) is the cause's (#752): a 416 inside a 1100 is `disk_full`, a 407
+`permission_denied`, a 408 `not_found`, a 414 `already_exists`, a 418
+`invalid_parameter`. So a `filestation_error` with a cause in its message is one
+whose cause has no more specific code either (a 401, say). A copy, move or delete
+task's own status isn't read for a cause (#750).
 
 Fix:
 

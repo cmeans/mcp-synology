@@ -188,7 +188,7 @@ class TestFileStationRetryableAgreesWithItsAdvice:
 class TestFileStationCause:
     """#726, #749: a wrapper code's cause in DSM's ``errors`` (CreateFolder 1100 and Rename
     1200 with 414 inside, vdsm 7.1, 7.2.2, 7.3.2 and 7.4.1) is named, and the error keeps the
-    wrapper's code and type."""
+    wrapper's DSM code and Python type; since #752 its envelope code is the cause's."""
 
     @pytest.mark.parametrize("wrapper", [900, 1000, 1001, 1002, 1100, 1200])
     def test_a_wrapper_names_its_cause(self, wrapper: int) -> None:
