@@ -53,7 +53,7 @@ class DownloadStationSettings(ModuleSettings):
     # Local folders create_download may read torrent files from, added to the top-level
     # allowed_local_paths (#257). Unset with no top-level list: the Downloads folder.
     allowed_local_paths: list[str] | None = Field(default=None, min_length=1)
-    # Let create_download send sources on the NAS itself or its local network (loopback,
+    # Let create_download send URIs on the NAS itself or its local network (loopback,
     # private and link-local addresses, `.local` and dotless names); refused by default,
     # since the NAS fetches them (#648).
     # Strict: a security switch is only ever `true` or `false`, never `1` or `"yes"`.
@@ -142,7 +142,7 @@ MODULE_INFO = ModuleInfo(
             name="create_download",
             description=(
                 "Create one or more download tasks, from URIs or from a local .torrent / .nzb "
-                "file. The NAS fetches each source, so one on the NAS or its local network "
+                "file. The NAS fetches each URI, so one on the NAS or its local network "
                 "(magnet trackers and wrapped links too) is refused unless the config sets "
                 "`allow_local_addresses`. `destination` must be an "
                 "existing folder, share-relative (DS doesn't create folders; make a new one "

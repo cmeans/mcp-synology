@@ -152,9 +152,9 @@ REFUSED: list[tuple[str, str]] = [
     ("http://[::127.0.0.1]/", "loopback"),
     ("http://[2001:0:4136:e378:8000:63bf:80ff:fffe]/", "loopback"),
     ("http://[fec0::1]/", "local or private"),
-    ("magnet:?xt=urn:btih:abc&x.pe=[fd00::1]:6881", "tracker, seed or peer"),
+    ("magnet:?xt=urn:btih:abc&x.pe=[fd00::1]:6881", "peer that names an address on a local"),
     # A percent-encoded wrapped body.
-    ("thunder://" + _b64("AAhttp://127.0.0.1/ZZ").replace("=", "%3D"), "wraps a URL"),
+    ("thunder://" + _b64("AAhttp://127.0.0.1:5/ZZ").replace("=", "%3D"), "wraps a URL"),
 ]
 
 ALLOWED: list[str] = [
