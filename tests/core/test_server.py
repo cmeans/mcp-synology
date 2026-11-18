@@ -56,6 +56,25 @@ def _reply(result: Any) -> str:
 
 
 class TestCreateServer:
+    async def test_the_configs_nas_host_reaches_create_download(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pre-QA r5 on #766: `connection.host` goes through RegisterContext to the check."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from mcp_synology.server import SharedClientManager
+
+        monkeypatch.setattr(SharedClientManager, "get_client", AsyncMock(return_value=MagicMock()))
+        config = make_test_config(
+            connection={"host": "nas.example.org", "port": 5000},
+            modules={"downloadstation": {"enabled": True, "permission": "write"}},
+        )
+        server = create_server(config)
+        with pytest.raises(ToolError, match="the URI names the NAS itself"):
+            await server.call_tool(
+                "create_download", {"uri": "https://NAS.example.org:5001/webapi/entry.cgi"}
+            )
+
     def test_server_creation(self) -> None:
         config = make_test_config()
         server = create_server(config)
@@ -2200,7 +2219,9 @@ class TestInstructionComments:
 # description too, not only in a reply.
 # +248 by #708: a DOWNLOAD STATION section says what a quoted destination folder or .torrent
 # file name means, sent with Download Station's WRITE tools.
-PAYLOAD_BUDGET_CHARS = 62_497
+# +167 by #648: create_download says the NAS fetches each source and refuses local ones unless
+# allow_local_addresses is set, and is annotated openWorldHint.
+PAYLOAD_BUDGET_CHARS = 62_664
 
 
 class TestPayloadBudget:

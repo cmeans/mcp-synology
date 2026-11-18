@@ -354,6 +354,7 @@ modules:
       allowed_local_paths:  # folders create_download may read .torrent/.nzb files from
         - ~/Downloads       # the default; list it to keep it when adding others
         - ~/Torrents
+      allow_local_addresses: false   # the default: see below
 ```
 
 **Settings:**
@@ -361,6 +362,7 @@ modules:
 | Setting | Default | Accepted | What it does |
 |---|---|---|---|
 | `allowed_local_paths` | your Downloads folder | local folders | Local folders `create_download`'s `torrent_file_path` may read `.torrent` and `.nzb` files from. Magnet links and URLs aren't affected. See [Local paths](#local-paths). |
+| `allow_local_addresses` | `false` | `true`, `false` | Let `create_download` send URIs on the NAS itself or its local network. The NAS fetches each URI, so by default one naming a loopback, private, link-local or CGNAT address, `localhost`, a `.local`, `.lan`, `.home`, `.internal` or `.home.arpa` name (and the other private names RFC 6762 lists), a name with no dot, or the NAS's own host name or address from the config is refused, in magnet trackers and `thunder://`-style links too. Turn it on only to download from servers on your own network. Not caught: a public name that resolves to an internal address, a server that redirects to one, and the trackers inside a `.torrent` file. |
 
 **Accounts.** An administrator (a Download Station manager) can use every tool. Any other account needs the Download Station application privilege (**Control Panel → User & Group → [account] → Edit → Applications**), and **must set a default destination once** before Download Station will start its tasks: `set_download_config(default_destination="<share>")` (a WRITE tool, so `permission: write`), or in Download Station's own settings in DSM. More below.
 

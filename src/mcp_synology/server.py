@@ -1773,6 +1773,7 @@ def create_server(config: AppConfig) -> MCPServer:
             settings=settings.get(mod_name),
             display_name=config.display_name,
             allowed_local_paths=config.allowed_local_paths,
+            nas_host=config.connection.host if config.connection else None,
         )
         module.register(ctx)
 

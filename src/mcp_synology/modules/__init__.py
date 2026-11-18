@@ -136,6 +136,9 @@ class RegisterContext:
     settings: BaseModel | None = None
     # The top-level allowed_local_paths, shared by every module (#257).
     allowed_local_paths: list[str] | None = None
+    # The NAS's host from the config (`connection.host`): create_download refuses
+    # sources naming it (#648).
+    nas_host: str | None = None
 
     def settings_as(self, schema: type[_Settings]) -> _Settings:
         """This module's validated settings, or its defaults when none were given."""

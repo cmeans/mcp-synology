@@ -20,6 +20,7 @@ def _make_ctx(
     allowed: set[str] | None = None,
     settings: dict | None = None,
     shared_paths: list[str] | None = None,
+    nas_host: str | None = None,
 ) -> tuple[MCPServer, MagicMock, RegisterContext]:
     server = MCPServer("test-ds")
     manager = MagicMock()
@@ -36,6 +37,7 @@ def _make_ctx(
         settings=DownloadStationSettings(**settings) if settings else None,
         display_name="test-nas",
         allowed_local_paths=shared_paths,
+        nas_host=nas_host,
     )
     return server, manager, ctx
 
@@ -230,6 +232,37 @@ class TestDownloadstationPhase2ToolInvocation:
             (tmp_path / "shared").resolve(),
             (tmp_path / "own").resolve(),
         ]
+
+    @pytest.mark.parametrize(
+        ("settings", "allowed"), [(None, False), ({"allow_local_addresses": True}, True)]
+    )
+    async def test_create_download_passes_the_nas_host_and_the_setting(
+        self, monkeypatch, settings, allowed
+    ) -> None:
+        """#648: the NAS's host from the config and allow_local_addresses reach the check."""
+        server, _manager, ctx = _make_ctx(settings=settings, nas_host="nas.example.org")
+        mock = self._capture_call(
+            monkeypatch, "mcp_synology.modules.downloadstation.tasks.create_download"
+        )
+        register(ctx)
+        await server._tool_manager._tools["create_download"].fn(uri="https://example.org/a")
+        assert mock.await_args.kwargs["nas_host"] == "nas.example.org"
+        assert mock.await_args.kwargs["allow_local_addresses"] is allowed
+
+    async def test_create_download_is_open_world(self) -> None:
+        """#648: the NAS fetches from outside this server, so clients are told."""
+        server, _, ctx = _make_ctx()
+        register(ctx)
+        tool = next(t for t in await server.list_tools() if t.name == "create_download")
+        assert tool.annotations is not None
+        assert tool.annotations.open_world_hint is True
+        assert tool.annotations.destructive_hint is False
+
+    def test_allow_local_addresses_refuses_a_non_boolean(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="allow_local_addresses"):
+            DownloadStationSettings(allow_local_addresses=1)  # type: ignore[arg-type]
 
     def test_relative_allowed_local_paths_rejected(self) -> None:
         from pydantic import ValidationError
