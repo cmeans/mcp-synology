@@ -22,13 +22,13 @@ addresses by default the same way):
   `*.localdomain`;
 - the NAS's own host from the config (`connection.host`), by that name or address;
 - the same inside a magnet link (its trackers, web seeds, sources and peers: `tr`, `ws`,
-  `xs`, `as`, `x.pe`, each with any `.` suffix), an ed2k link's servers, sources and
+  `xs`, `as`, `x.pe` and libtorrent's `dht` node, each with any `.` suffix), an ed2k link's servers, sources and
   every URL in it, and a `thunder://`, `flashget://` or `qqdl://` link's wrapped URL;
 - a fetching scheme (`http`, `https`, `ftp`, `ftps`, `sftp`) written with one slash, none
   or backslashes (`http:/127.0.0.1`, `http:\\127.0.0.1`), read as curl and WHATWG
   parsers read it, as `scheme://`;
 - each whitespace-separated piece of a URI, in case DSM splits on it, and a tracker or
-  seed written `udp:/host`, `udp:host` or a schemeless `host:port`;
+  seed written `udp:/host`, `udp:host`, `//host`, a bare host or a schemeless `host:port`;
 - a URI holding a control character other than a tab, line feed or carriage return (a
   NUL can end a host where DSM reads it), and a host name IDNA can't prepare: refused as
   unreadable. Host names are compared as IDNA reads them (today's NFKC and case folding,
