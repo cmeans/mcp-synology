@@ -1447,3 +1447,53 @@ async def test_a_start_that_never_reached_dsm_says_it_wasnt_started(
         assert body["retryable"] is False
         assert "partly done" not in body["suggestion"]
         assert f"check {item}" not in body["suggestion"]
+
+
+def _alone(tool: Tool, client: DsmClient, records: TaskRecords) -> Awaitable[str]:
+    """The same tool on its first path only."""
+    src = tool.sources[0]
+    if tool.kind == "delete":
+        return operations.delete_files(client, paths=[src], timeout=WAIT, records=records)  # type: ignore[list-item]
+    if tool.kind in ("copy", "move"):
+        call = operations.copy_files if tool.kind == "copy" else operations.move_files
+        return call(client, paths=[src], dest_folder=tool.dests[0], timeout=WAIT, records=records)  # type: ignore[list-item,arg-type]
+    name = src.removeprefix("/s/#recycle/")
+    if tool.name == "restore_flat":
+        return operations.restore_from_recycle_bin(
+            client,
+            share="/s",
+            paths=[f"#recycle/{name}"],
+            dest_folder="/s/dst",
+            timeout=WAIT,
+            records=records,  # type: ignore[arg-type]
+        )
+    return operations.restore_from_recycle_bin(
+        client,
+        share="/s",
+        paths=[f"#recycle/{name}"],
+        timeout=WAIT,
+        records=records,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_a_single_start_that_never_reached_dsm_is_retryable(
+    mock_client: DsmClient, clock: FakeClock, respx_mock: respx.Router, tool: Tool
+) -> None:
+    """#665 alone: the cause says it wasn't started, with no list repeating the one path
+    (pre-QA r1), and the call is retryable as it is."""
+    src = tool.sources[0]
+    scripts = {src: PathScript(gone_after=tool.kind == "delete")}
+    scripts[src].start = httpx.ConnectError("refused")
+    FakeDsm(scripts).mount(respx_mock)
+    with pytest.raises(ToolError) as refused:
+        await _alone(tool, mock_client, TaskRecords())
+    body = json.loads(str(refused.value))["error"]
+    title = "Delete" if tool.kind == "delete" else tool.kind.capitalize()
+    assert body["message"] == (
+        f"{title} files failed: DSM couldn't be reached for {src} (ConnectError: refused); "
+        "it wasn't started."
+    )
+    assert body["retryable"] is True
+    assert (body["param"], body["value"]) == ("paths", src)
+    assert body["suggestion"] == "Check that the NAS is reachable, then try again."

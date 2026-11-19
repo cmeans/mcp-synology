@@ -658,9 +658,10 @@ HTTP error status, or the answer wasn't a DSM reply at all.**
 
 The connection case (the message starts "Can't reach the NAS at …") means no
 DSM answer arrived at all: the connection was refused or the host couldn't be
-resolved or routed to. See **Can't reach the NAS?** under Fix. In a multi-path
-copy, move or restore, a start the connection dropped is listed under
-[`timeout`](#timeout), with what was done and what wasn't started. If the
+resolved or routed to. See **Can't reach the NAS?** under Fix. In a delete, copy, move or
+restore, a start the connection dropped is listed under [`timeout`](#timeout),
+with what was done and what wasn't started; a start whose connection couldn't be
+opened says it wasn't started (#665, also under `timeout`). If the
 message starts "The NAS at … accepted the connection but dropped it" instead,
 the NAS answered and then closed the connection: it's reachable but busy or
 restarting, so retry shortly (#254).
