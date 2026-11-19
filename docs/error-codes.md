@@ -591,8 +591,8 @@ Common causes:
   this one may have started, what DSM skipped and what wasn't started, so check
   before running it again; it isn't retryable, alone too. When the start's connection
   couldn't be opened (`ConnectError`, `ConnectTimeout`), it never reached DSM: "DSM
-  couldn't be reached for <path> (…); it wasn't started", with that path listed under
-  `Not started`, retryable when nothing before it was done (#665).
+  couldn't be reached for <path> (…); it wasn't started", retryable when nothing before
+  it was done; with other paths, it's listed under `Not started` (#665).
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped, or after a
   stop DSM refused, that it wasn't accepted; for the
