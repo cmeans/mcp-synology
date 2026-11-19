@@ -6571,15 +6571,22 @@ async def test_a_restores_hand_off_leads_with_the_skip_mark(
     assert reply.startswith("[!] Restored 1 of 3 item(s) from /s recycle bin so far; 1 with skips ")
 
 
-def _fails_on(source: str, *, skipped: str, answer: dict[str, Any] | None) -> Any:
-    """`skipped` is skipped; `source`'s task reports ``answer``, or its start gets none if None."""
+def _fails_on(
+    source: str,
+    *,
+    skipped: str,
+    answer: dict[str, Any] | None,
+    start_error: Exception | None = None,
+) -> Any:
+    """`skipped` is skipped; `source`'s task reports ``answer``, or if None its start raises
+    ``start_error`` (by default no answer: sent, then the connection dropped)."""
     base = _dsm_for_each(skipped=(skipped,))
     started: list[str] = []
 
     def side_effect(request: httpx.Request) -> httpx.Response:
         params = dict(request.url.params)
         if params.get("path") == source and params.get("method") == "start" and answer is None:
-            raise httpx.ConnectError("")
+            raise start_error or httpx.RemoteProtocolError("")
         method = params.get("method")
         if method == "start":
             started.append(params["path"])
@@ -6611,6 +6618,25 @@ async def test_a_failure_warns_about_a_skip_named_like_the_failing_source(
     with pytest.raises(ToolError) as failed:
         await move_files(mock_client, paths=["/s/a", "/x/a"], dest_folder="/d")
     assert "Don't retry /s/a" in json.loads(str(failed.value))["error"]["message"]
+
+
+@respx.mock
+async def test_a_start_never_sent_doesnt_warn_its_skip_may_be_this_calls(
+    mock_client: DsmClient, no_poll_wait: None
+) -> None:
+    """QA r1 on #770: a start that never reached DSM put nothing at the destination, so a skip
+    named like it gets the ordinary overwrite caution, not "may be what this call put there"."""
+    respx.get(f"{BASE_URL}/webapi/entry.cgi").mock(
+        side_effect=_fails_on(
+            "/x/a", skipped="/s/a", answer=None, start_error=httpx.ConnectError("refused")
+        )
+    )
+    with pytest.raises(ToolError) as failed:
+        await move_files(mock_client, paths=["/s/a", "/x/a"], dest_folder="/d")
+    message = json.loads(str(failed.value))["error"]["message"]
+    assert "it wasn't started" in message
+    assert "/s/a" in message
+    assert "may be what this call put there" not in message
 
 
 @respx.mock

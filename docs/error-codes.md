@@ -648,7 +648,9 @@ Otherwise:
    root cause. Blind retry on an overloaded NAS makes the situation worse.
    The exceptions are marked `retryable=false`, because DSM may already have
    started the work: a `create_download` timeout, and the start of a copy, move,
-   restore or delete, one path or several (#452).
+   restore or delete, one path or several (#452), unless its connection couldn't be
+   opened: that start never reached DSM, so it's retryable when nothing before it was
+   done (#665).
 
 ## unavailable
 

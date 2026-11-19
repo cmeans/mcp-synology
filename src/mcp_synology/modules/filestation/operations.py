@@ -1607,7 +1607,8 @@ class CopyMoveAdapter:
             self.skipped,
             dest_of=self.went,
             dest=self.dest,
-            failing=outcome.item.source,
+            # A start that never reached DSM put nothing anywhere (QA r1 on #770).
+            failing=None if outcome.state == "not_sent" else outcome.item.source,
         )
 
     def check_clause(self, item: Item) -> str:

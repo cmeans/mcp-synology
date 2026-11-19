@@ -368,8 +368,9 @@ async def _run_item(
         return ItemOutcome(item, "failed", error=e)
     except httpx.TransportError as e:
         # Only the start can raise one here: the checks before it read DSM's task list as a
-        # guard and go on without it (running_task). Writes never reuse a connection (#222), so
-        # one that couldn't be opened sent nothing: the item wasn't started (#665).
+        # guard and go on without it (running_task, tasks_for_landing_check). Writes never
+        # reuse a connection (#222), so one that couldn't be opened sent nothing: the item
+        # wasn't started (#665).
         if never_sent(e):
             return ItemOutcome(item, "not_sent", error=e)
         # The start got no answer (a status with none hands the item off in poll_task): it
