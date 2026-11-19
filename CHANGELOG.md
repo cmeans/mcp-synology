@@ -6,7 +6,9 @@
 
 ## 0.12.0 (2026-11-19)
 
-**Security release:** a prompt-injected agent could make the NAS fetch addresses on its own network. Download Station fetches each source from the NAS, and `create_download` sent any URI, so a source naming the NAS itself (`127.0.0.1`, `localhost` and their other spellings), its local network or a cloud metadata service reached it (#766; closes #648). 0.12.0 refuses those sources; a user who downloads from their own network turns on `allow_local_addresses` in the `downloadstation` module's settings. It also masks credentials that could reach Download Station replies and DEBUG logs in some URLs (a password holding `/` or `#`, `thunder://`-style links), and every reply, error, log record and CLI line now passes through one redaction point (#680, #681). Anyone who uses the Download Station module should upgrade.
+**Security release:** a prompt-injected agent could make the NAS fetch addresses on its own network. Download Station fetches each source from the NAS, and `create_download` sent any URI, so a source naming the NAS itself (`127.0.0.1`, `localhost` and their other spellings), its local network or a cloud metadata service reached it (#766; closes #648). 0.12.0 refuses those sources (what it can't catch, such as a public name that resolves to a local address, is in #766's entry below; a `.torrent` file's trackers are #765); a user who downloads from their own network turns on `allow_local_addresses` in the `downloadstation` module's settings. It also masks credentials that could reach Download Station replies and DEBUG logs in some URLs (a password holding `/` or `#`, `thunder://`-style links), and every reply, error, log record and line the CLI prints itself now passes through one redaction point (#680, #681). Anyone who uses the Download Station module should upgrade.
+
+**Upgrading from 0.11.x:** `create_download` now refuses a source on the NAS itself or on a local or private network, with an error that names the setting. If you download from your own network on purpose, set `allow_local_addresses: true` in `modules.downloadstation.settings` (README, Download Station).
 
 ### Added
 
