@@ -586,10 +586,13 @@ Common causes:
   Other tools name the DSM call, e.g. "DSM didn't answer
   SYNO.FileStation.List/list_share in time" (an `unavailable` error, "The
   connection to DSM failed during …", if the connection dropped).
-- A path's start in a multi-path `copy_files`, `move_files` or
-  `restore_from_recycle_bin` got no answer: the message says what was done, that
+- A path's start in a `delete_files`, `copy_files`, `move_files` or
+  `restore_from_recycle_bin` call got no answer: the message says what was done, that
   this one may have started, what DSM skipped and what wasn't started, so check
-  before running it again. (Alone, it's the usual timeout or connection error.)
+  before running it again; it isn't retryable, alone too. When the start's connection
+  couldn't be opened (`ConnectError`, `ConnectTimeout`), it never reached DSM: "DSM
+  couldn't be reached for <path> (…); it wasn't started", with that path listed under
+  `Not started`, retryable when nothing before it was done (#665).
 - `file_task` didn't get an answer to its status or stop request for a
   handle. For the status read, the message says nothing was stopped, or after a
   stop DSM refused, that it wasn't accepted; for the

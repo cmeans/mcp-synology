@@ -173,6 +173,25 @@ def _created_entries(data: Any, p: str) -> list[dict[str, Any]]:
     ]
 
 
+def _not_sent_error(operation: str, outcome: ItemOutcome) -> NoReturn:
+    """The cause for a batch item whose start never reached DSM (#665): its connection couldn't
+    be opened, and writes never reuse one (#222), so nothing of it started. Worded as
+    file_task's reads and Photos' tasks say it (#660). Retryable by its own flag;
+    `failure_error` clears that once an earlier item was done."""
+    e = outcome.error
+    assert isinstance(e, httpx.TransportError)
+    p = outcome.item.source
+    error_response(
+        ErrorCode.TIMEOUT if isinstance(e, httpx.TimeoutException) else ErrorCode.UNAVAILABLE,
+        f"{operation} failed: DSM couldn't be reached for {shown_beside(p, ' (')} "
+        f"({describe_transport_error(e)}); it wasn't started.",
+        retryable=True,
+        param="paths",
+        value=p,
+        suggestion="Check that the NAS is reachable, then try again.",
+    )
+
+
 def _no_answer_error(
     e: httpx.TransportError | DsmHttpError | DsmReplyError,
     p: str,
@@ -1554,6 +1573,8 @@ class CopyMoveAdapter:
     def cause(self, outcome: ItemOutcome) -> NoReturn:
         operation, p = self.operation, outcome.item.source
         e = outcome.error
+        if outcome.state == "not_sent":
+            _not_sent_error(f"{operation} files", outcome)
         if outcome.state == "may_have_started":
             assert isinstance(e, httpx.TransportError)
             # The start got no answer: it may have started, so it isn't retryable even when
@@ -1828,6 +1849,8 @@ class DeleteAdapter:
     def cause(self, outcome: ItemOutcome) -> NoReturn:
         p = outcome.item.source
         e = outcome.error
+        if outcome.state == "not_sent":
+            _not_sent_error("Delete files", outcome)
         if outcome.state == "may_have_started":
             assert isinstance(e, httpx.TransportError)
             # The start got no answer (a status with none hands the item off in poll_task): it

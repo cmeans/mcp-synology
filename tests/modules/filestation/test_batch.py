@@ -31,6 +31,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from mcp_synology.core.display import shown
 from mcp_synology.core.errors import DsmReplyError, RequestTooLongError
+from mcp_synology.core.formatting import path_list
 from mcp_synology.modules.filestation import batch, operations, tasks
 from mcp_synology.modules.filestation.batch import BATCH_TOOLS, BatchOutcome
 from mcp_synology.modules.filestation.tasks import TaskRecords, parse_handle
@@ -155,8 +156,22 @@ SCENARIOS: dict[str, tuple[Callable[[Tool, int, PathScript], None], str]] = {
     "finishes": (lambda t, i, s: None, "done"),
     "start_dsm_error": (lambda t, i, s: setattr(s, "start", 400), "failed"),
     "start_no_answer": (
-        lambda t, i, s: setattr(s, "start", httpx.ConnectTimeout("no answer")),
+        lambda t, i, s: setattr(s, "start", httpx.ReadTimeout("no answer")),
         "may_have_started",
+    ),
+    "start_connection_lost": (
+        lambda t, i, s: setattr(s, "start", httpx.RemoteProtocolError("disconnected")),
+        "may_have_started",
+    ),
+    # The start's connection was never opened, so the start never reached DSM (#665): the item
+    # wasn't started, and nothing of it needs checking.
+    "start_not_sent": (
+        lambda t, i, s: setattr(s, "start", httpx.ConnectError("refused")),
+        "not_sent",
+    ),
+    "start_connect_timeout": (
+        lambda t, i, s: setattr(s, "start", httpx.ConnectTimeout("no connection")),
+        "not_sent",
     ),
     "finished_with_error": (
         lambda t, i, s: setattr(
@@ -470,6 +485,18 @@ async def test_matrix(
         rest = [x.source for x in outcome.not_started()]
         if rest and not all(shown(p) in text for p in rest):
             broken.add("names_not_started")
+    if last is not None and last.state == "not_sent":
+        # Never sent (#665): the reply says the item wasn't started, lists it with the rest,
+        # never says it may have started or asks for a check of it, and the call is
+        # retryable exactly when nothing before it was done.
+        assert error is not None
+        listed = error["message"].split("Not started", 1)[-1]
+        if "Not started" not in error["message"] or shown(last.item.source) not in listed:
+            broken.add("names_not_sent")
+        if "may have" in text or "partly done" in text:
+            broken.add("says_it_may_have_run")
+        if bool(error.get("retryable")) != (at == 0):
+            broken.add("retryable")
     # From the scenario, not the runner's own flag: the item's task started (or may have).
     ran = outcome.items[0].state == "done" or (
         last is not None and (scenario in _STARTED or last.state == "may_have_started")
@@ -1369,3 +1396,54 @@ async def test_the_out_of_time_line_quotes_a_comma_name(
     assert text.rstrip().splitlines()[-1] == f"Not started: {comma!r}. Run it in another call.", (
         text
     )
+
+
+_PAST = {"delete": "deleted", "copy": "copied", "move": "moved", "restore": "restored"}
+
+
+@pytest.mark.parametrize(
+    "error", [httpx.ConnectError("refused"), httpx.ConnectTimeout("")], ids=["refused", "timeout"]
+)
+@pytest.mark.parametrize("position", ["first", "middle"])
+@pytest.mark.parametrize("tool", TOOLS, ids=[t.name for t in TOOLS])
+async def test_a_start_that_never_reached_dsm_says_it_wasnt_started(
+    mock_client: DsmClient,
+    clock: FakeClock,
+    respx_mock: respx.Router,
+    tool: Tool,
+    position: str,
+    error: httpx.TransportError,
+) -> None:
+    """#665 (test cases from #668, by Muhtasim Munif Fahim): a start whose connection couldn't
+    be opened never reached DSM, so its item wasn't started. The reply says so and lists it
+    with the rest, asks for no check of it, and is retryable when nothing before it was done.
+    The starts after it aren't sent."""
+    at = POSITIONS[position]
+    scripts = {src: PathScript(gone_after=tool.kind == "delete") for src in tool.sources}
+    scripts[tool.sources[at]].start = error
+    dsm = FakeDsm(scripts)
+    dsm.mount(respx_mock)
+    with pytest.raises(ToolError) as refused:
+        await tool.call(mock_client, TaskRecords())
+    body = json.loads(str(refused.value))["error"]
+    item = tool.sources[at]
+    title = "Delete" if tool.kind == "delete" else tool.kind.capitalize()
+    why = "ConnectError: refused" if isinstance(error, httpx.ConnectError) else "ConnectTimeout"
+    assert body["code"] == (
+        "timeout" if isinstance(error, httpx.TimeoutException) else "unavailable"
+    )
+    assert body["message"].startswith(
+        f"{title} files failed: DSM couldn't be reached for {item} ({why}); it wasn't started."
+    ), body["message"]
+    assert "may have" not in body["message"]
+    assert (body["param"], body["value"]) == ("paths", item)
+    assert path_list("Not started", list(tool.sources[at:])) in body["message"], body["message"]
+    assert len(dsm.starts()) == at + 1
+    if at == 0:
+        assert body["retryable"] is True
+        assert body["suggestion"] == "Check that the NAS is reachable, then try again."
+    else:
+        assert f"Already {_PAST[tool.kind]} before this failure" in body["message"]
+        assert body["retryable"] is False
+        assert "partly done" not in body["suggestion"]
+        assert f"check {item}" not in body["suggestion"]

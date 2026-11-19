@@ -4785,8 +4785,9 @@ def _unanswered_start(calls: list[dict[str, str]], at: str, error: Exception | N
 @respx.mock
 @pytest.mark.parametrize(
     ("error", "code"),
-    [(httpx.ReadTimeout(""), "timeout"), (httpx.ConnectError(""), "unavailable")],
-    ids=["timeout", "connection"],
+    # A connection lost after the start went (not one never opened: that sent nothing, #665).
+    [(httpx.ReadTimeout(""), "timeout"), (httpx.RemoteProtocolError(""), "unavailable")],
+    ids=["timeout", "connection lost"],
 )
 async def test_an_unanswered_start_partway_says_what_happened(
     mock_client: DsmClient, no_poll_wait: None, error: Exception, code: str
@@ -8329,7 +8330,8 @@ class TestSourcesDsmWontShow:
             if method == "start":
                 starts.append(p["path"])
                 if len(starts) == 2:
-                    raise httpx.ConnectError("down")
+                    # Sent, then the connection dropped: it may have started (#665).
+                    raise httpx.RemoteProtocolError("down")
                 return httpx.Response(200, json={"success": True, "data": {"taskid": "t"}})
             if method == "status":
                 data = {"finished": True, "processed_size": 1}
