@@ -40,7 +40,7 @@ from mcp_synology.core.display import escaped_repr, shown
 from mcp_synology.core.errors import SynologyError
 from mcp_synology.core.formatting import ends_in_list, path_list, rewrapped_error, sentence, then
 from mcp_synology.modules.filestation import tasks as _tasks
-from mcp_synology.modules.filestation.helpers import dsm_str
+from mcp_synology.modules.filestation.helpers import dsm_str, never_sent
 from mcp_synology.modules.filestation.tasks import (
     STOP_WAIT,
     Handle,
@@ -130,7 +130,7 @@ class Item:
     group: int = 0
 
 
-ItemState = Literal["done", "failed", "may_have_started", "handed_off", "not_started"]
+ItemState = Literal["done", "failed", "may_have_started", "not_sent", "handed_off", "not_started"]
 
 
 @dataclass
@@ -142,6 +142,8 @@ class ItemOutcome:
     read's DSM error, ``stop`` says how the stop sent for its task ended; unless DSM confirmed
     it, the task may still run, so it has a ``handoff`` (its handle) and a record (#497).
     ``may_have_started``: the start got no answer (``error``, a transport error).
+    ``not_sent``: the start's connection was never opened (``error``, a transport error that
+    `never_sent` names), so the start never reached DSM and nothing of the item started (#665).
     ``handed_off``: left running with ``handoff``; ``running`` is the task DSM listed when one
     was already running, so none was started.
     """
@@ -161,8 +163,9 @@ class ItemOutcome:
 @dataclass
 class BatchOutcome:
     """One outcome per item, in order: the ones that ran, then at most one that ended the batch
-    early (failed, may have started, handed off), then the ones not started. ``out_of_time``:
-    the call's wait was over before the next item, so the rest weren't started (#496)."""
+    early (failed, may have started, never sent, handed off), then the ones not started.
+    ``out_of_time``: the call's wait was over before the next item, so the rest weren't started
+    (#496)."""
 
     items: list[ItemOutcome] = field(default_factory=list)
     out_of_time: float | None = None
@@ -364,6 +367,12 @@ async def _run_item(
     except ToolError as e:
         return ItemOutcome(item, "failed", error=e)
     except httpx.TransportError as e:
+        # Only the start can raise one here: the checks before it read DSM's task list as a
+        # guard and go on without it (running_task, tasks_for_landing_check). Writes never
+        # reuse a connection (#222), so one that couldn't be opened sent nothing: the item
+        # wasn't started (#665).
+        if never_sent(e):
+            return ItemOutcome(item, "not_sent", error=e)
         # The start got no answer (a status with none hands the item off in poll_task): it
         # may have started.
         return ItemOutcome(item, "may_have_started", error=e)
@@ -643,7 +652,11 @@ def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcom
     done = adapter.progress_text(outcome)
     rest = [x.source for x in batch.not_started()]
     refused = _refused_path(error)
-    if refused is not None and refused != item.source and refused in rest:
+    if outcome.state == "not_sent" and (done or rest):
+        # It never reached DSM (#665): it wasn't started, as the ones after it weren't. Alone,
+        # its cause already says so (pre-QA r1).
+        rest = [item.source, *rest]
+    elif refused is not None and refused != item.source and refused in rest:
         # A refusal of a later item, checked before this one's start (a landing clash, #587):
         # that's the item it names; this one wasn't started either.
         rest = [item.source, *(r for r in rest if r != refused)]
@@ -651,7 +664,11 @@ def failure_error(adapter: TaskAdapter, outcome: ItemOutcome, batch: BatchOutcom
     # Its own task ran or may have (a start with no answer): it may be partly done. A refusal
     # of ours (a ToolError before its start) did nothing to it, so there's nothing to check.
     ran = outcome.started or outcome.state == "may_have_started"
-    ours = isinstance(outcome.error, ToolError) and not outcome.started
+    # Nothing of the item can be done, so there's nothing of it to check: a refusal of ours (a
+    # ToolError before its start), or a start that never reached DSM (#665).
+    ours = (
+        isinstance(outcome.error, ToolError) and not outcome.started
+    ) or outcome.state == "not_sent"
     check = None if ours else adapter.check_clause(item)
     if done or rest:
         error = _with_progress(error, item.source, done, adapter.retry_advice(), check)
