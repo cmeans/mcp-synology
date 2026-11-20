@@ -158,6 +158,36 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
     return matches
 
 
+def _device_token_is_for(config: AppConfig, kr_user: str | None, username: str | None) -> bool:
+    """A keyring device token is its account's trust, as `setup` treats it when the username
+    changes (#454), so it goes only with that account's username (#581): taken exactly, as `setup`
+    compares them. A username from a variable or the config file for another account logs in
+    without it, as an account with no token would. An entry with a token but no username isn't
+    known to be this account's (`setup` always writes both), so its token stays out too.
+    Exact, not case-insensitive: if DSM tells `Admin` from `admin`, they're two accounts, and
+    either way a token left out costs only a code prompt, while one sent goes to whoever it names.
+    This warns once per config: credentials are resolved again for each call while a refused login
+    is remembered.
+    """
+    if not username or username == kr_user:
+        return True
+    if not config._device_token_user_warned:
+        config._device_token_user_warned = True
+        why = (
+            "it's for another account than the username this login uses"
+            if kr_user
+            else "it names no account, so it isn't known to be this username's"
+        )
+        logger.warning(
+            "Not sending the device token in keyring entry %r: %s. To store this account's own, "
+            "run %s as this account.",
+            config.instance_id or "default",
+            why,
+            _setup_command(config),
+        )
+    return False
+
+
 def _host_variables() -> list[str]:
     """The variables that stop a first use from recording the host, set for this server. The port
     is one (#562): it chooses which NAS behind a name gets the password."""
@@ -389,7 +419,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
     Order: env vars -> config file -> keyring.
     Explicit sources (env, config) override the implicit default (keyring). A username or password
     from the keyring must be for this config's host, or this raises; a device token that isn't
-    is left out (#536).
+    is left out (#536), and so is one that isn't for this login's username (#581).
     Returns: (username, password, device_id or None)
     """
     import os
@@ -468,6 +498,8 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
                 and password
                 and not _device_token_may_be_sent(config, service)
             ):
+                kr_device = None
+            if kr_device and not device_id and not _device_token_is_for(config, kr_user, username):
                 kr_device = None
             if kr_user and not username:
                 username = kr_user

@@ -426,6 +426,7 @@ class AppConfig(BaseModel, extra="forbid"):
     # Credentials are resolved for each call while a refused login is remembered.
     _device_token_warned: bool = PrivateAttr(default=False)
     _device_token_read_warned: bool = PrivateAttr(default=False)
+    _device_token_user_warned: bool = PrivateAttr(default=False)
     # The host and port a keyring entry with no record takes once DSM accepts its password
     # (#536, #562).
     _host_to_record: str | None = PrivateAttr(default=None)
