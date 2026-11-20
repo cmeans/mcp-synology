@@ -164,6 +164,8 @@ def _device_token_is_for(config: AppConfig, kr_user: str | None, username: str |
     compares them. A username from a variable or the config file for another account logs in
     without it, as an account with no token would. An entry with a token but no username isn't
     known to be this account's (`setup` always writes both), so its token stays out too.
+    Exact, not case-insensitive: if DSM tells `Admin` from `admin`, they're two accounts, and
+    either way a token left out costs only a code prompt, while one sent goes to whoever it names.
     This warns once per config: credentials are resolved again for each call while a refused login
     is remembered.
     """
@@ -171,12 +173,16 @@ def _device_token_is_for(config: AppConfig, kr_user: str | None, username: str |
         return True
     if not config._device_token_user_warned:
         config._device_token_user_warned = True
-        whose = "another account" if kr_user else "an account it doesn't name"
+        why = (
+            "it's for another account than the username this login uses"
+            if kr_user
+            else "it names no account, so it isn't known to be this username's"
+        )
         logger.warning(
-            "Not sending the device token in keyring entry %r: it's for %s, not the username this "
-            "login uses. To store this account's own, run %s as this account.",
+            "Not sending the device token in keyring entry %r: %s. To store this account's own, "
+            "run %s as this account.",
             config.instance_id or "default",
-            whose,
+            why,
             _setup_command(config),
         )
     return False
@@ -413,7 +419,7 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
     Order: env vars -> config file -> keyring.
     Explicit sources (env, config) override the implicit default (keyring). A username or password
     from the keyring must be for this config's host, or this raises; a device token that isn't
-    is left out (#536).
+    is left out (#536), and so is one that isn't for this login's username (#581).
     Returns: (username, password, device_id or None)
     """
     import os

@@ -613,7 +613,11 @@ class TestCredentialPriority:
         assert password == "env_pass"
         assert device_id == "kr_device"
 
-    @pytest.mark.parametrize("kr_user", ["admin", None, "Env_user"], ids=["other", "none", "case"])
+    @pytest.mark.parametrize(
+        "kr_user",
+        ["admin", None, "Env_user", "env_user ", " env_user"],
+        ids=["other", "none", "case", "trailing space", "leading space"],
+    )
     def test_device_id_from_keyring_not_sent_for_another_username(
         self, kr_user: str | None
     ) -> None:

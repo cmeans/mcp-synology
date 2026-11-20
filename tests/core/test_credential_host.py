@@ -1159,7 +1159,13 @@ class TestADeviceTokenAlone:
                 assert resolve_credentials(config) == ("u", "p", None)
         warnings = [m for m in caplog.messages if "Not sending the device token" in m]
         assert len(warnings) == 1
-        assert "not the username this login uses" in warnings[0]
+        # A token-only entry's account isn't known, so it isn't called another's.
+        expected = (
+            "it's for another account than the username this login uses"
+            if kr_user
+            else "it names no account, so it isn't known to be this username's"
+        )
+        assert expected in warnings[0]
         assert "mcp-synology setup --config" in warnings[0]
         # Names neither account, nor the token.
         assert "admin" not in warnings[0]
