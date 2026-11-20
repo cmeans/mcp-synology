@@ -631,24 +631,28 @@ class TestCredentialPriority:
         ):
             assert auth._resolve_credentials() == ("env_user", "env_pass", None)
 
-    def test_device_id_from_env_is_sent_with_any_username(self) -> None:
-        """#581 gates only the keyring's token: one given explicitly is the caller's choice."""
+    def test_device_id_from_env_is_sent_with_any_username(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """#581 gates only the keyring's token: one given explicitly is the caller's choice, and
+        no warning says a token was left out. The password comes from the keyring, so it's read."""
         config = _make_config()
         auth = AuthManager(config, _make_client())
         env = {
             **_clean_env(),
             "SYNOLOGY_USERNAME": "env_user",
-            "SYNOLOGY_PASSWORD": "env_pass",
             "SYNOLOGY_DEVICE_ID": "env_device",
         }
         with (
+            caplog.at_level("WARNING"),
             patch.dict(os.environ, env, clear=True),
             patch(
                 "mcp_synology.core.auth.kr",
-                _keyring_with(username="admin", device_id="kr_device"),
+                _keyring_with(username="admin", password="kr_pass", device_id="kr_device"),
             ),
         ):
-            assert auth._resolve_credentials() == ("env_user", "env_pass", "env_device")
+            assert auth._resolve_credentials() == ("env_user", "kr_pass", "env_device")
+        assert not any("Not sending the device token" in m for m in caplog.messages)
 
     def test_keyring_password_with_another_username_sends_no_token(self) -> None:
         """#581: the issue's other route, a username from a variable with the keyring's
