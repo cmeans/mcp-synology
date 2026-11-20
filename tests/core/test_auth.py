@@ -593,7 +593,8 @@ class TestCredentialPriority:
         assert password == "kr_pass"
 
     def test_device_id_from_keyring_when_not_in_env(self) -> None:
-        """Device ID from keyring is used even when creds come from env."""
+        """Device ID from keyring is used even when creds come from env, for the keyring's own
+        username (#581)."""
         config = _make_config()
         client = _make_client()
         auth = AuthManager(config, client)
@@ -603,7 +604,7 @@ class TestCredentialPriority:
             patch.dict(os.environ, env, clear=True),
             patch(
                 "mcp_synology.core.auth.kr",
-                _keyring_with(device_id="kr_device"),
+                _keyring_with(username="env_user", device_id="kr_device"),
             ),
         ):
             username, password, device_id = auth._resolve_credentials()
@@ -611,6 +612,58 @@ class TestCredentialPriority:
         assert username == "env_user"
         assert password == "env_pass"
         assert device_id == "kr_device"
+
+    @pytest.mark.parametrize("kr_user", ["admin", None, "Env_user"], ids=["other", "none", "case"])
+    def test_device_id_from_keyring_not_sent_for_another_username(
+        self, kr_user: str | None
+    ) -> None:
+        """#581: the token is the keyring account's trust. Usernames are compared exactly, as
+        `setup` compares them."""
+        config = _make_config()
+        auth = AuthManager(config, _make_client())
+        env = {**_clean_env(), "SYNOLOGY_USERNAME": "env_user", "SYNOLOGY_PASSWORD": "env_pass"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                _keyring_with(username=kr_user, device_id="kr_device"),
+            ),
+        ):
+            assert auth._resolve_credentials() == ("env_user", "env_pass", None)
+
+    def test_device_id_from_env_is_sent_with_any_username(self) -> None:
+        """#581 gates only the keyring's token: one given explicitly is the caller's choice."""
+        config = _make_config()
+        auth = AuthManager(config, _make_client())
+        env = {
+            **_clean_env(),
+            "SYNOLOGY_USERNAME": "env_user",
+            "SYNOLOGY_PASSWORD": "env_pass",
+            "SYNOLOGY_DEVICE_ID": "env_device",
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                _keyring_with(username="admin", device_id="kr_device"),
+            ),
+        ):
+            assert auth._resolve_credentials() == ("env_user", "env_pass", "env_device")
+
+    def test_keyring_password_with_another_username_sends_no_token(self) -> None:
+        """#581: the issue's other route, a username from a variable with the keyring's
+        password."""
+        config = _make_config()
+        auth = AuthManager(config, _make_client())
+        env = {**_clean_env(), "SYNOLOGY_USERNAME": "someone-else"}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "mcp_synology.core.auth.kr",
+                _keyring_with(username="admin", password="pw", device_id="kr_device"),
+            ),
+        ):
+            assert auth._resolve_credentials() == ("someone-else", "pw", None)
 
 
 class TestDbusAutoDetect:

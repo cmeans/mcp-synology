@@ -158,6 +158,30 @@ def _device_token_may_be_sent(config: AppConfig, service: str) -> bool:
     return matches
 
 
+def _device_token_is_for(config: AppConfig, kr_user: str | None, username: str | None) -> bool:
+    """A keyring device token is its account's trust, as `setup` treats it when the username
+    changes (#454), so it goes only with that account's username (#581): taken exactly, as `setup`
+    compares them. A username from a variable or the config file for another account logs in
+    without it, as an account with no token would. An entry with a token but no username isn't
+    known to be this account's (`setup` always writes both), so its token stays out too.
+    This warns once per config: credentials are resolved again for each call while a refused login
+    is remembered.
+    """
+    if not username or username == kr_user:
+        return True
+    if not config._device_token_user_warned:
+        config._device_token_user_warned = True
+        whose = "another account" if kr_user else "an account it doesn't name"
+        logger.warning(
+            "Not sending the device token in keyring entry %r: it's for %s, not the username this "
+            "login uses. To store this account's own, run %s as this account.",
+            config.instance_id or "default",
+            whose,
+            _setup_command(config),
+        )
+    return False
+
+
 def _host_variables() -> list[str]:
     """The variables that stop a first use from recording the host, set for this server. The port
     is one (#562): it chooses which NAS behind a name gets the password."""
@@ -468,6 +492,8 @@ def resolve_credentials(config: AppConfig) -> tuple[str, str, str | None]:
                 and password
                 and not _device_token_may_be_sent(config, service)
             ):
+                kr_device = None
+            if kr_device and not device_id and not _device_token_is_for(config, kr_user, username):
                 kr_device = None
             if kr_user and not username:
                 username = kr_user

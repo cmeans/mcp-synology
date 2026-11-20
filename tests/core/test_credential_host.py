@@ -1094,6 +1094,8 @@ class TestADeviceTokenAlone:
     @staticmethod
     def _token(store: MemoryKeyring, host: str | None) -> None:
         store.values[("mcp-synology/nas", "device_id")] = "token"
+        # The env's username: a token goes only with its own account's (#581).
+        store.values[("mcp-synology/nas", "username")] = "u"
         if host:
             store.values[("mcp-synology/nas", "host")] = f"{host}:5000"
 
@@ -1134,6 +1136,35 @@ class TestADeviceTokenAlone:
         self._creds_from_env(monkeypatch)
         assert resolve_credentials(load_config(_file(tmp_path, "nas.home"))) == ("u", "p", None)
         assert ("mcp-synology/nas", "host") not in store.values
+
+    @pytest.mark.parametrize("kr_user", ["admin", None], ids=["another's", "none"])
+    def test_for_another_account_its_left_out_with_one_warning(
+        self,
+        store: MemoryKeyring,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        kr_user: str | None,
+    ) -> None:
+        """#581: the keyring's token went out with another account's username."""
+        self._token(store, "nas.home")
+        if kr_user is None:
+            del store.values[("mcp-synology/nas", "username")]
+        else:
+            store.values[("mcp-synology/nas", "username")] = kr_user
+        self._creds_from_env(monkeypatch)
+        config = load_config(_file(tmp_path, "nas.home"))
+        with caplog.at_level("WARNING"):
+            for _ in range(3):
+                assert resolve_credentials(config) == ("u", "p", None)
+        warnings = [m for m in caplog.messages if "Not sending the device token" in m]
+        assert len(warnings) == 1
+        assert "not the username this login uses" in warnings[0]
+        assert "mcp-synology setup --config" in warnings[0]
+        # Names neither account, nor the token.
+        assert "admin" not in warnings[0]
+        assert "'u'" not in warnings[0]
+        assert "token'" not in warnings[0]
 
     def test_another_spelling_of_the_host_still_gets_the_token(
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1269,6 +1300,7 @@ class TestADeviceTokenAlone:
         self, store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._token(store, None)
+        del store.values[("mcp-synology/nas", "username")]  # a token alone
         monkeypatch.setenv("SYNOLOGY_PASSWORD", "p")
         with pytest.raises(AuthenticationError, match="No credentials"):
             resolve_credentials(load_config(_file(tmp_path, "nas.home")))
