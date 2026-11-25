@@ -4,6 +4,20 @@
 
 <!-- towncrier release notes start -->
 
+## 0.12.1 (2026-11-25)
+
+**Security release:** for installs older than 0.12.0. This release includes 0.12.0's security fix: `create_download` refuses sources on the NAS itself, its local network or a cloud metadata service, which a prompt-injected agent could otherwise make the NAS fetch (#766; see [0.12.0's notes](https://github.com/cmeans/mcp-synology/releases/tag/v0.12.0)). Anyone on 0.11.x or older should upgrade. Nothing new for 0.12.0 users beyond the fixes listed here.
+
+### Changed
+
+- **Bump python group: pydantic 2.14.3→2.14.4, regex 2026.11.9→2026.11.19, ruff 0.17.5→0.17.6, types-regex 2026.11.9.20261110→2026.11.19.20261119, playwright 1.65.1→1.65.2** (#778)
+- **Bump github-actions group: actions/create-github-app-token 3.3.0→3.4.0, astral-sh/setup-uv 10.3.3→10.4.0** (#777)
+
+### Fixed
+
+- **Installs no longer get PyYAML 6.0.4** (#780): PyYAML 6.0.4 reverses which map wins in a `<<: [*a, *b]` merge (yaml/pyyaml#953, not yet fixed upstream), so on an install that had it, a config merging a list of maps loaded other values than the YAML spec gives, and following the advice of the error for two `<<` keys changed which values loaded. mcp-synology now requires `pyyaml>=6.0.1,!=6.0.4`; upgrading mcp-synology replaces 6.0.4 with an earlier release, and a fixed later release is taken — closes #779
+- **A keyring device token goes only with its own account's username** (#776): a username for another account, from `SYNOLOGY_USERNAME` or the config file, was sent with the keyring account's 2FA device token. Now the keyring's token is sent only when the entry's username is the one the login uses, compared exactly; otherwise the login goes without it, with a warning saying to run `setup` as that account. An entry holding a token but no username keeps it out too. A `device_id` set in the environment or the config file is sent as before — closes #581
+
 ## 0.12.0 (2026-11-19)
 
 **Security release:** a prompt-injected agent could make the NAS fetch addresses on its own network. Download Station fetches each source from the NAS, and `create_download` sent any URI, so a source naming the NAS itself (`127.0.0.1`, `localhost` and their other spellings), its local network or a cloud metadata service reached it (#766; closes #648). 0.12.0 refuses those sources (what it can't catch, such as a public name that resolves to a local address, is in #766's entry below; a `.torrent` file's trackers are #765); a user who downloads from their own network turns on `allow_local_addresses` in the `downloadstation` module's settings. It also masks credentials that could reach Download Station replies and DEBUG logs in some URLs (a password holding `/` or `#`, `thunder://`-style links), and every reply, error, log record and line the CLI prints itself now passes through one redaction point (#680, #681). Anyone who uses the Download Station module should upgrade.
