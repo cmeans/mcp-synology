@@ -29,7 +29,10 @@ classifiers = [
 dependencies = [
     "mcp>=2.3,<3",
     "httpx>=0.28",
-    "pyyaml>=6.0.1",
+    # 6.0.4 reverses which map wins in a `<<: [*a, *b]` merge, so a config loads other values
+    # (yaml/pyyaml#953; mcp-synology #779). `!=`, not `<`: a fixed 6.0.5 is taken, and CI's newest-dependency
+    # run (TestDuplicateKeys) catches a 6.0.5 that still has it.
+    "pyyaml>=6.0.1,!=6.0.4",
     "keyring>=25.0",
     "pydantic>=2.14.2",
     "click>=8.2.1",
