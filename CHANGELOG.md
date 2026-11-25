@@ -6,7 +6,7 @@
 
 ## 0.12.1 (2026-11-25)
 
-**Security release:** for installs older than 0.12.0. This release includes 0.12.0's security fix: `create_download` refuses sources on the NAS itself, its local network or a cloud metadata service, which a prompt-injected agent could otherwise make the NAS fetch (#766; see [0.12.0's notes](https://github.com/cmeans/mcp-synology/releases/tag/v0.12.0)). Anyone on 0.11.x or older should upgrade. Nothing new for 0.12.0 users beyond the fixes listed here.
+**Security release:** for installs older than 0.12.0. 0.12.1 itself keeps installs off PyYAML 6.0.4, which loads configs that merge maps with `<<: [...]` with the wrong values (#780), and sends a keyring device token only with its own account's username (#776); neither is a security fix. It also carries 0.12.0's security fix: `create_download` refuses sources on the NAS itself, its local network or a cloud metadata service, which a prompt-injected agent could otherwise make the NAS fetch (#766; see [0.12.0's notes](https://github.com/cmeans/mcp-synology/releases/tag/v0.12.0)). Anyone on 0.11.x or older should upgrade; on 0.12.0, upgrade for the fixes below.
 
 ### Changed
 
